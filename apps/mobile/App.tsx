@@ -28,7 +28,7 @@ import {
 } from './hooks/lunchTimeHorarioApi';
 import { useAuth } from './contexts/AuthContext';
 import { createVehicle, updateVehicle, deleteVehicle, deleteVehicleAttachment } from './hooks/vehiclesFunctions';
-import { getFile, deleteFile } from './hooks/fileStorage';
+import { getFile, deleteFile, hydrateSignatureRef, deleteSignatureLocalRef, persistSignatureRef, reconcileSignatureFieldAfterSync } from './hooks/fileStorage';
 import {
   patchVehicleVisitasLocalCreateWithServerId,
   stripVehicleVisitasAttachmentForRow,
@@ -220,8 +220,6 @@ import {
   deleteJobManualLocalFileRefsFromJson,
   hydrateJobManualCreateRequestData,
   hydrateJobManualSignFiles,
-  hydrateJobManualSignatureRef,
-  deleteJobManualSignatureLocalRef,
 } from './hooks/jobManualsQueueUtils';
 import StaffEvaluationsScreen from './screens/StaffEvaluationsScreen';
 import BitacoraVehiculosDetenidosScreen from './screens/BitacoraVehiculosDetenidosScreen';
@@ -254,6 +252,200 @@ import {
   HIERARCHY_UPDATE_OVERLAY_HIDE_EVENT,
   HIERARCHY_UPDATE_OVERLAY_SHOW_EVENT,
 } from './hooks/backgroundMainStructureDownload';
+
+/**
+ * `participantes` (agenda minuta) es un JSON-string con `firma` por elemento, guardado como
+ * referencia local a expo-files en `evaluations_actions`. Antes de sincronizar, se hidrata cada
+ * referencia a un data URI real (el servidor no conoce el formato de archivo local).
+ */
+async function hydrateAgendaMinutaParticipantesJson(json: any): Promise<any> {
+  if (typeof json !== 'string') return json;
+  let parsed: any[];
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return json;
+  }
+  if (!Array.isArray(parsed)) return json;
+  const hydrated = await Promise.all(
+    parsed.map(async (p: any) => {
+      if (!p || typeof p !== 'object' || !p.firma) return p;
+      const h = await hydrateSignatureRef(p.firma);
+      return { ...p, firma: h ?? null };
+    })
+  );
+  return JSON.stringify(hydrated);
+}
+
+/**
+ * Tras sincronizar agenda minuta: reconcilia `participantes[].firma` contra lo que el servidor
+ * devolvió (`serverParticipantesJson`), en vez de solo borrar los archivos locales previos
+ * (`previousParticipantesJson`) sin reemplazarlos — así el cache nunca queda apuntando a un
+ * archivo ya eliminado. Empareja por `id_local`, igual que el equivalente en
+ * `PhysicalMinuteAgendaScreen.tsx`.
+ */
+async function localizeAgendaMinutaParticipantesJsonAfterSync(
+  serverParticipantesJson: any,
+  previousParticipantesJson: any
+): Promise<any> {
+  let serverParticipantes: any[];
+  try {
+    serverParticipantes =
+      typeof serverParticipantesJson === 'string' ? JSON.parse(serverParticipantesJson) : serverParticipantesJson;
+  } catch {
+    return previousParticipantesJson;
+  }
+  if (!Array.isArray(serverParticipantes)) return previousParticipantesJson;
+
+  let previousParticipantes: any[] = [];
+  try {
+    const prevParsed =
+      typeof previousParticipantesJson === 'string' ? JSON.parse(previousParticipantesJson) : previousParticipantesJson;
+    if (Array.isArray(prevParsed)) previousParticipantes = prevParsed;
+  } catch {
+    /* noop */
+  }
+  const prevById = new Map(previousParticipantes.map((p: any) => [String(p?.id_local ?? ''), p]));
+
+  const reconciled = await Promise.all(
+    serverParticipantes.map(async (p: any) => {
+      if (!p || typeof p !== 'object') return p;
+      const previousRef = prevById.get(String(p.id_local ?? ''))?.firma ?? null;
+      const nextRef = await persistSignatureRef({ value: p.firma, previousRef, prefix: 'agenda_minuta_firma' });
+      return { ...p, firma: nextRef };
+    })
+  );
+  return JSON.stringify(reconciled);
+}
+
+/**
+ * `mant_armas_form` (mantenimiento de equipo, formulario de armas) es un JSON-string con `firma`
+ * guardado como referencia local a expo-files en `articulo_mantenimiento_actions`. Se hidrata a un
+ * data URI real antes de sincronizar.
+ */
+async function hydrateMantArmasFormFirma(json: any): Promise<any> {
+  if (typeof json !== 'string') return json;
+  let parsed: any;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return json;
+  }
+  if (!parsed || typeof parsed !== 'object' || !parsed.firma) return json;
+  const hydrated = await hydrateSignatureRef(parsed.firma);
+  return JSON.stringify({ ...parsed, firma: hydrated ?? null });
+}
+
+/** Referencia local de `mant_armas_form.firma` tras sincronizar con éxito (no hace nada si ya era un data URI). */
+async function deleteMantArmasFormFirmaLocalRef(json: any): Promise<void> {
+  if (typeof json !== 'string') return;
+  try {
+    const parsed = JSON.parse(json);
+    if (parsed?.firma) await deleteSignatureLocalRef(parsed.firma);
+  } catch {
+    /* idempotente */
+  }
+}
+
+/**
+ * Registro de inducción y recorrido: `participantes[].firma`, `firma_supervisor` y `firma_empleado`
+ * se guardan como referencia a expo-files en `evaluations_actions`. Se hidratan a base64/data URI
+ * real antes de sincronizar (nunca se envía el nombre de archivo).
+ */
+async function hydrateInductionTourFirmasForSync(payload: any): Promise<any> {
+  const next = { ...payload };
+  if (next.participantes) {
+    try {
+      const parsed = typeof next.participantes === 'string' ? JSON.parse(next.participantes) : next.participantes;
+      if (Array.isArray(parsed)) {
+        const hydrated = await Promise.all(
+          parsed.map(async (p: any) => {
+            if (!p?.firma) return p;
+            const h = await hydrateSignatureRef(p.firma);
+            return { ...p, firma: h ?? p.firma };
+          })
+        );
+        next.participantes = JSON.stringify(hydrated);
+      }
+    } catch {
+      /* noop */
+    }
+  }
+  if (next.firma_supervisor) {
+    next.firma_supervisor = (await hydrateSignatureRef(next.firma_supervisor)) ?? next.firma_supervisor;
+  }
+  if (next.firma_empleado) {
+    next.firma_empleado = (await hydrateSignatureRef(next.firma_empleado)) ?? next.firma_empleado;
+  }
+  return next;
+}
+
+/**
+ * Tras sincronizar una acción de inducción y recorrido: reconcilia `participantes[].firma`,
+ * `firma_supervisor` y `firma_empleado` del elemento en cache contra la respuesta del servidor
+ * (`serverData`), en vez de conservar ciegamente los valores locales previos al sync
+ * (`previousPayload`). Cada participante del servidor se empareja con el participante local
+ * previo por `cedula || nombre_completo || índice` para poder borrar el archivo expo-files
+ * anterior si la firma cambió. Si el servidor no incluye una clave (`undefined`), se conserva
+ * el valor previo tal cual.
+ */
+async function localizeInductionTourFirmasForCache(
+  serverData: Record<string, unknown> | undefined,
+  previousPayload: any
+): Promise<{ participantes?: any; firma_supervisor?: any; firma_empleado?: any }> {
+  const out: { participantes?: any; firma_supervisor?: any; firma_empleado?: any } = {};
+
+  if (serverData && 'participantes' in serverData) {
+    try {
+      const serverParticipantesRaw = (serverData as any).participantes;
+      const serverParticipantes =
+        typeof serverParticipantesRaw === 'string' ? JSON.parse(serverParticipantesRaw) : serverParticipantesRaw;
+      let previousParticipantes: any[] = [];
+      try {
+        const prevRaw = previousPayload?.participantes;
+        const prevParsed = typeof prevRaw === 'string' ? JSON.parse(prevRaw) : prevRaw;
+        if (Array.isArray(prevParsed)) previousParticipantes = prevParsed;
+      } catch {
+        /* noop */
+      }
+
+      if (Array.isArray(serverParticipantes)) {
+        const findPrevious = (p: any, idx: number) =>
+          previousParticipantes.find((pp) => (p?.cedula && pp?.cedula === p.cedula) || (p?.nombre_completo && pp?.nombre_completo === p.nombre_completo)) ??
+          previousParticipantes[idx];
+
+        const reconciled = await Promise.all(
+          serverParticipantes.map(async (p: any, idx: number) => {
+            const prev = findPrevious(p, idx);
+            const firma = await reconcileSignatureFieldAfterSync(p?.firma, prev?.firma, 'induction_tour_firma');
+            return { ...p, firma };
+          })
+        );
+        out.participantes = JSON.stringify(reconciled);
+      }
+    } catch {
+      /* noop */
+    }
+  }
+
+  if (serverData && 'firma_supervisor' in serverData) {
+    out.firma_supervisor = await reconcileSignatureFieldAfterSync(
+      (serverData as any).firma_supervisor,
+      previousPayload?.firma_supervisor,
+      'induction_tour_firma_supervisor'
+    );
+  }
+
+  if (serverData && 'firma_empleado' in serverData) {
+    out.firma_empleado = await reconcileSignatureFieldAfterSync(
+      (serverData as any).firma_empleado,
+      previousPayload?.firma_empleado,
+      'induction_tour_firma_empleado'
+    );
+  }
+
+  return out;
+}
 
 /** Re-lee la cola en disco y aplica el mismo criterio que .filter, para no reintroducir acciones ya quitadas. */
 async function persistFilteredMantenimientoEquipoActionQueue(
@@ -1014,11 +1206,14 @@ function AppContent() {
     if (!connectivity.ok) {
       return;
     }
-    const manual_signature_cache = await AsyncStorage.getItem('manual_signature_cache');
-    if (manual_signature_cache) {
-      const data = await saveManualSignature({ signature: manual_signature_cache, employeeId: employee.id, refreshAccessToken, logout });
+    const manual_signature_cache_ref = await AsyncStorage.getItem('manual_signature_cache');
+    if (manual_signature_cache_ref) {
+      const signature = await hydrateSignatureRef(manual_signature_cache_ref);
+      if (!signature) return;
+      const data = await saveManualSignature({ signature, employeeId: employee.id, refreshAccessToken, logout });
       if (data.status) {
         console.log('Firma guardada correctamente');
+        await deleteSignatureLocalRef(manual_signature_cache_ref);
       }
     }
   }
@@ -1255,7 +1450,7 @@ function AppContent() {
           const firmaEmpleadoManualRefForSign =
             action.firmaEmpleadoManual ??
             (pendingManualFirmaForSign?.field === 'firma_empleado_manual' ? pendingManualFirmaForSign.value : undefined);
-          const firmaEmpleadoManualForSign = await hydrateJobManualSignatureRef(firmaEmpleadoManualRefForSign);
+          const firmaEmpleadoManualForSign = await hydrateSignatureRef(firmaEmpleadoManualRefForSign);
           const result = await signJobManual({
             id: signManualId,
             firma: action.firma,
@@ -1272,7 +1467,14 @@ function AppContent() {
             const visId =
               Number((result as any).visualizacion_id ?? (result as any).id ?? 0) || Date.now();
             await deleteJobManualLocalFileRefsFromJson(action.files);
-            await deleteJobManualSignatureLocalRef(firmaEmpleadoManualRefForSign);
+            // El endpoint no devuelve la firma guardada: el valor recién hidratado y enviado es la
+            // firma ya sincronizada, así que se persiste como referencia vigente en expo-files
+            // (reemplazando la anterior) en vez de solo borrarla.
+            const reconciledFirmaEmpleadoManualForSign = await persistSignatureRef({
+              value: firmaEmpleadoManualForSign ?? null,
+              previousRef: firmaEmpleadoManualRefForSign ?? null,
+              prefix: 'job_manual_firma_empleado_manual',
+            });
             await removeJobManualActionsFromStorage(
               (a: any) =>
                 (a.type === 'sign' && String(a.id) === signId) ||
@@ -1289,7 +1491,9 @@ function AppContent() {
               const cache = JSON.parse(cacheStr);
               const updatedCache = cache.map((item: any) => {
                 if (String(item.id) === signId) {
-                  const visualizaciones = item.visualizaciones || [];
+                  const visualizaciones = (item.visualizaciones || []).filter(
+                    (v: any) => Number(v.empleado_id) !== Number(employee?.id || 0)
+                  );
                   let filesForVis: any[] = [];
                   try {
                     const parsed = typeof action.files === 'string' ? JSON.parse(action.files) : [];
@@ -1322,9 +1526,7 @@ function AppContent() {
                     created_at: new Date(horaAccion).toISOString(),
                     updated_at: new Date(horaAccion).toISOString(),
                     files: filesForVis,
-                    // El archivo local ya se borró tras subir con éxito: se deja en null hasta que el
-                    // próximo refresco lo traiga del servidor y lo vuelva a guardar en expo-files.
-                    ...(firmaEmpleadoManualRefForSign ? { firma_empleado_manual: null } : {}),
+                    ...(firmaEmpleadoManualRefForSign ? { firma_empleado_manual: reconciledFirmaEmpleadoManualForSign } : {}),
                   };
                   return {
                     ...item,
@@ -1351,7 +1553,7 @@ function AppContent() {
           const pendingManualFirmaForAuto = takePendingVisualizacionFieldUpdate({ id: autoManualId });
           const firmaEmpleadoManualRefForAuto =
             pendingManualFirmaForAuto?.field === 'firma_empleado_manual' ? pendingManualFirmaForAuto.value : undefined;
-          const firmaEmpleadoManualForAuto = await hydrateJobManualSignatureRef(firmaEmpleadoManualRefForAuto);
+          const firmaEmpleadoManualForAuto = await hydrateSignatureRef(firmaEmpleadoManualRefForAuto);
           const result = await signJobManual({
             id: autoManualId,
             firma: action.firma,
@@ -1366,7 +1568,14 @@ function AppContent() {
           if (result.status) {
             const autoId = String(action.id);
             const visId = Number((result as any).visualizacion_id ?? (result as any).id ?? 0) || Date.now();
-            await deleteJobManualSignatureLocalRef(firmaEmpleadoManualRefForAuto);
+            // El endpoint no devuelve la firma guardada: el valor recién hidratado y enviado es la
+            // firma ya sincronizada, así que se persiste como referencia vigente en expo-files
+            // (reemplazando la anterior) en vez de solo borrarla.
+            const reconciledFirmaEmpleadoManualForAuto = await persistSignatureRef({
+              value: firmaEmpleadoManualForAuto ?? null,
+              previousRef: firmaEmpleadoManualRefForAuto ?? null,
+              prefix: 'job_manual_firma_empleado_manual',
+            });
             await removeJobManualActionsFromStorage(
               (a: any) =>
                 (a.type === 'auto_visualizacion' && String(a.id) === autoId) ||
@@ -1396,8 +1605,7 @@ function AppContent() {
                   created_at: new Date(horaAccion).toISOString(),
                   updated_at: new Date(horaAccion).toISOString(),
                   files: [],
-                  // El archivo local ya se borró tras subir con éxito (ver `deleteJobManualSignatureLocalRef`).
-                  ...(firmaEmpleadoManualRefForAuto ? { firma_empleado_manual: null } : {}),
+                  ...(firmaEmpleadoManualRefForAuto ? { firma_empleado_manual: reconciledFirmaEmpleadoManualForAuto } : {}),
                 };
                 return { ...item, currentEmployeeSigned: true, visualizaciones: [...visualizaciones, newVis] };
               });
@@ -1626,8 +1834,10 @@ function AppContent() {
         if (action.type === 'create') {
           console.log('Creando visitante:', action.id);
           const { createVisitor } = await import('@/hooks/visitorsFunctions');
+          const firmaVisitanteRef = action.requestData?.firma_visitante;
+          const hydratedFirmaVisitante = await hydrateSignatureRef(firmaVisitanteRef);
           const result = await createVisitor({
-            requestData: action.requestData,
+            requestData: { ...action.requestData, firma_visitante: hydratedFirmaVisitante ?? null },
             marcaId: action.marcaId,
             refreshAccessToken,
             logout,
@@ -1635,6 +1845,7 @@ function AppContent() {
 
           if (result.status) {
             console.log('Visitante creado correctamente');
+            await deleteSignatureLocalRef(firmaVisitanteRef);
             const r = result as { data?: { id?: number } };
             const serverId = r.data?.id;
             if (serverId != null && action.id != null) {
@@ -1667,8 +1878,10 @@ function AppContent() {
         } else if (action.type === 'update') {
           console.log('Actualizando visitante:', action.id);
           const { updateVisitor } = await import('@/hooks/visitorsFunctions');
+          const firmaVisitanteRefUpdate = action.requestData?.firma_visitante;
+          const hydratedFirmaVisitanteUpdate = await hydrateSignatureRef(firmaVisitanteRefUpdate);
           const result = await updateVisitor({
-            requestData: action.requestData,
+            requestData: { ...action.requestData, firma_visitante: hydratedFirmaVisitanteUpdate ?? null },
             visitorId: action.id,
             refreshAccessToken,
             logout,
@@ -1676,6 +1889,7 @@ function AppContent() {
 
           if (result.status) {
             console.log('Visitante actualizado correctamente');
+            await deleteSignatureLocalRef(firmaVisitanteRefUpdate);
             const m = Number((action as any).requestData?.marca_id);
             const c = Number(
               (action as any).requestData?.sucursal_sync_corpo_id ?? (action as any).requestData?.corpo_id
@@ -2271,9 +2485,16 @@ function AppContent() {
         if (!llaveId || llaveId === 0) continue;
 
         if (action.type === 'create') {
+          // `firma_entrega`/`firma_recibe` se guardan como referencia a expo-files; se hidratan al
+          // data URI real que espera el endpoint (nunca se envía el nombre de archivo).
+          const requestDataMovLlaveCreate = {
+            ...action.requestData,
+            firma_entrega: (await hydrateSignatureRef(action.requestData?.firma_entrega)) ?? action.requestData?.firma_entrega,
+            firma_recibe: (await hydrateSignatureRef(action.requestData?.firma_recibe)) ?? action.requestData?.firma_recibe,
+          };
           const result = await createMovimientoLlave({
             llaveId,
-            requestData: action.requestData,
+            requestData: requestDataMovLlaveCreate,
             refreshAccessToken,
             logout,
           });
@@ -2317,10 +2538,15 @@ function AppContent() {
             console.warn('[sync] movimiento llave create:', result.message);
           }
         } else if (action.type === 'update') {
+          const requestDataMovLlaveUpdate = {
+            ...action.requestData,
+            firma_entrega: (await hydrateSignatureRef(action.requestData?.firma_entrega)) ?? action.requestData?.firma_entrega,
+            firma_recibe: (await hydrateSignatureRef(action.requestData?.firma_recibe)) ?? action.requestData?.firma_recibe,
+          };
           const result = await updateMovimientoLlave({
             llaveId,
             id: action.id,
-            requestData: action.requestData,
+            requestData: requestDataMovLlaveUpdate,
             refreshAccessToken,
             logout,
           });
@@ -2573,9 +2799,16 @@ function AppContent() {
         if (!llaveroId || llaveroId === 0) continue;
 
         if (action.type === 'create') {
+          // `firma_entrega`/`firma_recibe` se guardan como referencia a expo-files; se hidratan al
+          // data URI real que espera el endpoint (nunca se envía el nombre de archivo).
+          const requestDataMovLlaveroCreate = {
+            ...action.requestData,
+            firma_entrega: (await hydrateSignatureRef(action.requestData?.firma_entrega)) ?? action.requestData?.firma_entrega,
+            firma_recibe: (await hydrateSignatureRef(action.requestData?.firma_recibe)) ?? action.requestData?.firma_recibe,
+          };
           const result = await createMovimientoLlavero({
             llaveroId,
-            requestData: action.requestData,
+            requestData: requestDataMovLlaveroCreate,
             refreshAccessToken,
             logout,
           });
@@ -2677,10 +2910,15 @@ function AppContent() {
             console.warn('[sync] movimiento llavero create:', result.message);
           }
         } else if (action.type === 'update') {
+          const requestDataMovLlaveroUpdate = {
+            ...action.requestData,
+            firma_entrega: (await hydrateSignatureRef(action.requestData?.firma_entrega)) ?? action.requestData?.firma_entrega,
+            firma_recibe: (await hydrateSignatureRef(action.requestData?.firma_recibe)) ?? action.requestData?.firma_recibe,
+          };
           const result = await updateMovimientoLlavero({
             llaveroId,
             id: action.id,
-            requestData: action.requestData,
+            requestData: requestDataMovLlaveroUpdate,
             refreshAccessToken,
             logout,
           });
@@ -2925,6 +3163,9 @@ function AppContent() {
 
         console.log('action.requestData', action.requestData);
         const payload: any = { ...(action.requestData ?? {}) };
+        if (payload.mant_armas_form) {
+          payload.mant_armas_form = await hydrateMantArmasFormFirma(payload.mant_armas_form);
+        }
         if (action.type === 'update' && action?.meta?.source && action?.meta?.estructuraId) {
           const estructuraId = Number(action.meta.estructuraId);
           if (Number.isFinite(estructuraId) && estructuraId > 0) {
@@ -2969,6 +3210,7 @@ function AppContent() {
             if (pid != null && Number.isFinite(Number(pid)) && Number(pid) > 0) {
               await clearPuestoArticulosList(Number(pid));
             }
+            await deleteMantArmasFormFirmaLocalRef(action?.requestData?.mant_armas_form);
             await persistFilteredMantenimientoEquipoActionQueue('articulo_mantenimiento_actions', (a: any) => {
               if (isCreate) {
                 return !(a.type === 'create' && a.id_local === action.id_local);
@@ -3010,26 +3252,42 @@ function AppContent() {
         if (!parent?.source || !parent?.estructuraId) continue;
 
         if (action.type === 'create') {
+          const hydratedFirmaEntrega = await hydrateSignatureRef(action.requestData?.firma_entrega);
+          const hydratedFirmaRecibe = await hydrateSignatureRef(action.requestData?.firma_recibe);
           const result = await createMovimientoArticuloMantenimiento({
             parent,
-            requestData: action.requestData,
+            requestData: {
+              ...action.requestData,
+              firma_entrega: hydratedFirmaEntrega ?? null,
+              firma_recibe: hydratedFirmaRecibe ?? null,
+            },
             refreshAccessToken,
             logout,
           });
           if (result.status) {
+            await deleteSignatureLocalRef(action.requestData?.firma_entrega);
+            await deleteSignatureLocalRef(action.requestData?.firma_recibe);
             await persistFilteredMantenimientoEquipoActionQueue('movimientos_articulos_mantenimiento_actions', (a: any) =>
               !(a.id === action.id && a.type === 'create')
             );
           }
         } else if (action.type === 'update') {
+          const hydratedFirmaEntregaUpd = await hydrateSignatureRef(action.requestData?.firma_entrega);
+          const hydratedFirmaRecibeUpd = await hydrateSignatureRef(action.requestData?.firma_recibe);
           const result = await updateMovimientoArticuloMantenimiento({
             parent,
             id: action.id,
-            requestData: action.requestData,
+            requestData: {
+              ...action.requestData,
+              firma_entrega: hydratedFirmaEntregaUpd ?? null,
+              firma_recibe: hydratedFirmaRecibeUpd ?? null,
+            },
             refreshAccessToken,
             logout,
           });
           if (result.status) {
+            await deleteSignatureLocalRef(action.requestData?.firma_entrega);
+            await deleteSignatureLocalRef(action.requestData?.firma_recibe);
             await persistFilteredMantenimientoEquipoActionQueue('movimientos_articulos_mantenimiento_actions', (a: any) =>
               !(a.id === action.id && a.type === 'update')
             );
@@ -3146,8 +3404,14 @@ function AppContent() {
       let success = false;
       try {
         if (action.type === 'create') {
+          // `firma_representante_cliente` se guarda como referencia a expo-files; se hidrata al
+          // data URI real que espera el endpoint (nunca se envía el nombre de archivo).
+          const hydratedFirmaClienteCreate = await hydrateSignatureRef(action.requestData?.firma_representante_cliente);
           const result = await createDocumentoEntregado({
-            requestData: action.requestData,
+            requestData: {
+              ...action.requestData,
+              firma_representante_cliente: hydratedFirmaClienteCreate ?? action.requestData?.firma_representante_cliente ?? null,
+            },
             refreshAccessToken,
             logout,
           });
@@ -3155,6 +3419,13 @@ function AppContent() {
           if (result.status) {
             success = true;
             if (result.id) {
+              // El endpoint no devuelve la firma guardada: el valor recién enviado es la firma ya
+              // sincronizada, así que se persiste como referencia vigente en expo-files.
+              const reconciledFirmaClienteCreate = await persistSignatureRef({
+                value: hydratedFirmaClienteCreate ?? null,
+                previousRef: action.requestData?.firma_representante_cliente ?? null,
+                prefix: 'documento_entregado_firma_cliente',
+              });
               const cacheStr = await AsyncStorage.getItem('documentos_entregados_cache');
               if (cacheStr) {
                 const cache = JSON.parse(cacheStr) as any[];
@@ -3167,7 +3438,11 @@ function AppContent() {
                       getDocEntregadoCorpoId(it) === corpoId
                     )
                 );
-                const row = buildDocumentoEntregadoCacheRowFromRequest(action.requestData, serverId, '');
+                const row = buildDocumentoEntregadoCacheRowFromRequest(
+                  { ...action.requestData, firma_representante_cliente: reconciledFirmaClienteCreate },
+                  serverId,
+                  ''
+                );
                 const next = upsertDocumentoEntregadoInCache(pruned, row);
                 await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
               }
@@ -3175,19 +3450,32 @@ function AppContent() {
           }
         } else if (action.type === 'update') {
           const updateId = Number(action.id);
+          const hydratedFirmaClienteUpdate = await hydrateSignatureRef(action.requestData?.firma_representante_cliente);
           const result = await updateDocumentoEntregado({
             id: updateId,
-            requestData: action.requestData,
+            requestData: {
+              ...action.requestData,
+              firma_representante_cliente: hydratedFirmaClienteUpdate ?? action.requestData?.firma_representante_cliente ?? null,
+            },
             refreshAccessToken,
             logout,
           });
 
           if (result.status) {
             success = true;
+            const reconciledFirmaClienteUpdate = await persistSignatureRef({
+              value: hydratedFirmaClienteUpdate ?? null,
+              previousRef: action.requestData?.firma_representante_cliente ?? null,
+              prefix: 'documento_entregado_firma_cliente',
+            });
             const cacheStr = await AsyncStorage.getItem('documentos_entregados_cache');
             if (cacheStr) {
               const cache = JSON.parse(cacheStr);
-              const row = buildDocumentoEntregadoCacheRowFromRequest(action.requestData, updateId, '');
+              const row = buildDocumentoEntregadoCacheRowFromRequest(
+                { ...action.requestData, firma_representante_cliente: reconciledFirmaClienteUpdate },
+                updateId,
+                ''
+              );
               const next = upsertDocumentoEntregadoInCache(cache, row);
               await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
             }
@@ -3207,6 +3495,10 @@ function AppContent() {
             const cacheStr = await AsyncStorage.getItem('documentos_entregados_cache');
             if (cacheStr) {
               const cache = JSON.parse(cacheStr);
+              const removedDoc = cache.find((it: any) => String(it?.id ?? '') === String(delId));
+              if (removedDoc?.firma_representante_cliente) {
+                await deleteSignatureLocalRef(removedDoc.firma_representante_cliente);
+              }
               const updatedCache = cache.filter(
                 (it: any) => String(it?.id ?? '') !== String(delId)
               );
@@ -3263,6 +3555,10 @@ function AppContent() {
               meta: action.requestData.apreciacion_images_meta,
             });
           }
+          // `firma_solicitante` se guarda como referencia a expo-files; se hidrata al data URI real
+          // que espera el endpoint (nunca se envía el nombre de archivo).
+          payload.firma_solicitante =
+            (await hydrateSignatureRef(payload.firma_solicitante)) ?? payload.firma_solicitante;
           const result = await createApreciacionVulnerabilidad({
             requestData: payload,
             refreshAccessToken,
@@ -3307,6 +3603,8 @@ function AppContent() {
               meta: action.requestData.apreciacion_images_meta,
             });
           }
+          payload.firma_solicitante =
+            (await hydrateSignatureRef(payload.firma_solicitante)) ?? payload.firma_solicitante;
           const result = await updateApreciacionVulnerabilidad({
             id: Number(action.id),
             requestData: payload,
@@ -3345,6 +3643,10 @@ function AppContent() {
             const cacheStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_cache');
             if (cacheStr) {
               const cache = JSON.parse(String(cacheStr));
+              const removedVuln = (Array.isArray(cache) ? cache : []).find((it: any) => Number(it.id) === Number(action.id));
+              if (removedVuln?.firma_solicitante) {
+                await deleteSignatureLocalRef(removedVuln.firma_solicitante);
+              }
               const updatedCache = (Array.isArray(cache) ? cache : []).filter((it: any) => Number(it.id) !== Number(action.id));
               await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(updatedCache));
             }
@@ -3371,9 +3673,13 @@ function AppContent() {
         } else if (action.type === 'update_solicitante_firma') {
           const recordId = Number(action.id);
           if (recordId > 0 && typeof action.firma_solicitante === 'string' && action.firma_solicitante.trim() !== '') {
+            // `action.firma_solicitante` es una referencia local a expo-files; se hidrata al data
+            // URI real que espera el endpoint.
+            const hydratedFirmaQuick =
+              (await hydrateSignatureRef(action.firma_solicitante)) ?? action.firma_solicitante;
             const result = await updateApreciacionVulnerabilidadFirmaSolicitante({
               id: recordId,
-              firma_solicitante: String(action.firma_solicitante),
+              firma_solicitante: String(hydratedFirmaQuick),
               refreshAccessToken,
               logout,
             });
@@ -3382,11 +3688,21 @@ function AppContent() {
                 (a: any) => !(a.type === 'update_solicitante_firma' && Number(a.id) === recordId)
               );
               await saveActions(actions);
+              // El servidor devuelve la fila actualizada: se reconcilia contra la referencia local
+              // ya persistida para que expo-files corresponda al elemento sincronizado.
+              const sr = (result as any).data;
+              const reconciledFirmaQuick = await reconcileSignatureFieldAfterSync(
+                sr && typeof sr === 'object' ? sr.firma_solicitante : undefined,
+                action.firma_solicitante,
+                'apreciacion_vuln_firma_solicitante'
+              );
               const cacheStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_cache');
               if (cacheStr) {
                 const cache = JSON.parse(String(cacheStr));
                 const updatedCache = (Array.isArray(cache) ? cache : []).map((row: any) =>
-                  Number(row.id) === recordId ? { ...row, firma_solicitante: String(action.firma_solicitante) } : row
+                  Number(row.id) === recordId
+                    ? { ...row, firma_solicitante: reconciledFirmaQuick ?? action.firma_solicitante }
+                    : row
                 );
                 await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(updatedCache));
               }
@@ -3454,8 +3770,14 @@ function AppContent() {
           const { createChecklistSupervision } = await import('@/hooks/checklistSupervisionFunctions');
           const planillasToken =
             String(action.planillasToken ?? action.requestData?.planillasToken ?? '').trim() || undefined;
+          // `firma_supervisor` se guarda como referencia a expo-files; se hidrata al base64/data URI
+          // real que espera el endpoint (nunca se envía el nombre de archivo).
+          const hydratedFirmaCreate = await hydrateSignatureRef(action.requestData?.firma_supervisor);
           const result = await createChecklistSupervision({
-            requestData: action.requestData,
+            requestData: {
+              ...action.requestData,
+              firma_supervisor: hydratedFirmaCreate ?? action.requestData?.firma_supervisor ?? null,
+            },
             planillasToken,
             refreshAccessToken,
             logout,
@@ -3463,7 +3785,20 @@ function AppContent() {
 
           if (result.status) {
             const newId = Number((result as any).id ?? (result as any).data?.id ?? 0);
-            const serverPayload = (result as any).data;
+            const serverDataRawCreate = (result as any).data || {};
+            // Si el servidor devolvió la firma (base64), se guarda en expo-files como la nueva
+            // referencia vigente, reemplazando la que se envió; así el cache queda apuntando al
+            // archivo que corresponde al elemento ya sincronizado.
+            const reconciledFirmaCreate = await reconcileSignatureFieldAfterSync(
+              serverDataRawCreate.firma_supervisor,
+              action.requestData?.firma_supervisor,
+              'checklist_supervision_firma'
+            );
+            const serverPayload = {
+              ...serverDataRawCreate,
+              firma_supervisor: reconciledFirmaCreate,
+              id: newId || serverDataRawCreate?.id,
+            };
             if (newId > 0) {
               const { patchChecklistSupervisionCacheAfterSync } = await import(
                 '@/hooks/checklistSupervisionCacheStorage'
@@ -3471,7 +3806,7 @@ function AppContent() {
               await patchChecklistSupervisionCacheAfterSync({
                 matchIdLocal: action?.id_local,
                 matchServerId: newId,
-                serverPayload: serverPayload && typeof serverPayload === 'object' ? serverPayload : { id: newId },
+                serverPayload,
                 requestData: action.requestData,
               });
             }
@@ -3497,9 +3832,13 @@ function AppContent() {
           } catch {
             /* ignore */
           }
+          const hydratedFirmaUpdate = await hydrateSignatureRef(action.requestData?.firma_supervisor);
           const result = await updateChecklistSupervision({
             id: resolvedId,
-            requestData: action.requestData,
+            requestData: {
+              ...action.requestData,
+              firma_supervisor: hydratedFirmaUpdate ?? action.requestData?.firma_supervisor ?? null,
+            },
             planillasToken:
               String(action.planillasToken ?? action.requestData?.planillasToken ?? '').trim() || undefined,
             refreshAccessToken,
@@ -3511,7 +3850,13 @@ function AppContent() {
               '@/hooks/checklistSupervisionCacheStorage'
             );
             const aid = Number(resolvedId);
-            const serverData = (result as any).data;
+            const serverDataRawUpdate = (result as any).data || {};
+            const reconciledFirmaUpdate = await reconcileSignatureFieldAfterSync(
+              serverDataRawUpdate.firma_supervisor,
+              action.requestData?.firma_supervisor,
+              'checklist_supervision_firma'
+            );
+            const serverData = { ...serverDataRawUpdate, firma_supervisor: reconciledFirmaUpdate };
             await patchChecklistSupervisionCacheAfterSync({
               matchIdLocal: action.id_local,
               matchServerId: aid,
@@ -3527,22 +3872,30 @@ function AppContent() {
           }
         } else if (action.type === 'update_supervisor_firma') {
           const { updateChecklistSupervisionFirmaSupervisor } = await import('@/hooks/checklistSupervisionFunctions');
+          const hydratedFirmaQuick = (await hydrateSignatureRef(action.firma_supervisor)) ?? action.firma_supervisor ?? null;
           const result = await updateChecklistSupervisionFirmaSupervisor({
             id: Number(action.id),
-            firma_supervisor: action.firma_supervisor,
+            firma_supervisor: hydratedFirmaQuick,
             refreshAccessToken,
             logout,
           });
 
           if (result.status) {
-            const serverData = (result as any).data;
-            if (serverData && typeof serverData === 'object') {
+            const serverDataRawQuick = (result as any).data;
+            const reconciledFirmaQuick = await reconcileSignatureFieldAfterSync(
+              serverDataRawQuick?.firma_supervisor,
+              action.firma_supervisor,
+              'checklist_supervision_firma'
+            );
+            if (serverDataRawQuick && typeof serverDataRawQuick === 'object') {
+              const serverData = { ...serverDataRawQuick, firma_supervisor: reconciledFirmaQuick };
               const { patchChecklistSupervisionCacheAfterSync } = await import(
                 '@/hooks/checklistSupervisionCacheStorage'
               );
               await patchChecklistSupervisionCacheAfterSync({
                 matchServerId: Number(action.id),
                 serverPayload: serverData,
+                requestData: { firma_supervisor: reconciledFirmaQuick },
               });
             }
             success = true;
@@ -3743,6 +4096,12 @@ function AppContent() {
             const { buildNotesImagenesJsonForUpload } = await import('@/hooks/notesFilesSync');
             payload.imagenes = await buildNotesImagenesJsonForUpload({ meta: action.notes_images_meta });
           }
+          // `firma_manual_responsable` se guarda como referencia a expo-files; se hidrata al data
+          // URI real que espera el endpoint (nunca se envía el nombre de archivo).
+          if (payload.firma_manual_responsable) {
+            payload.firma_manual_responsable =
+              (await hydrateSignatureRef(payload.firma_manual_responsable)) ?? payload.firma_manual_responsable;
+          }
           const result = await createNote({
             requestData: payload,
             marcaId: action.marcaId,
@@ -3767,12 +4126,24 @@ function AppContent() {
             await saveActions(nextActions);
 
             try {
+              const reconciledFirmaNoteCreate = await reconcileSignatureFieldAfterSync(
+                (result as any)?.data?.firma_manual_responsable,
+                action.requestData?.firma_manual_responsable,
+                'note_firma_manual_responsable'
+              );
               const cacheStr = await AsyncStorage.getItem('notes_cache');
               const parsed = cacheStr ? JSON.parse(String(cacheStr)) : { notas: [] };
               if (Array.isArray(parsed?.notas)) {
                 parsed.notas = parsed.notas.map((n: any) =>
                   String(n?.id_local) === String(action.id)
-                    ? { ...n, id: serverId > 0 ? serverId : n.id, id_local: '', synced: true }
+                    ? {
+                        ...n,
+                        id: serverId > 0 ? serverId : n.id,
+                        id_local: '',
+                        synced: true,
+                        firma_manual_responsable:
+                          reconciledFirmaNoteCreate !== undefined ? reconciledFirmaNoteCreate : n.firma_manual_responsable,
+                      }
                     : n
                 );
                 await AsyncStorage.setItem('notes_cache', JSON.stringify(parsed));
@@ -3794,6 +4165,10 @@ function AppContent() {
           if (Array.isArray(action.notes_images_meta) && action.notes_images_meta.length > 0) {
             const { buildNotesImagenesJsonForUpload } = await import('@/hooks/notesFilesSync');
             payload.imagenes = await buildNotesImagenesJsonForUpload({ meta: action.notes_images_meta });
+          }
+          if (payload.firma_manual_responsable) {
+            payload.firma_manual_responsable =
+              (await hydrateSignatureRef(payload.firma_manual_responsable)) ?? payload.firma_manual_responsable;
           }
           const result = await updateNote({
             requestData: payload,
@@ -4353,6 +4728,7 @@ function AppContent() {
             const { createNonConformingProduct } = await import('@/hooks/evaluationFunctions');
             const {
               clearPncPendingFilesFromArchivoList,
+              clearPncPendingFirmasFromPayload,
               buildNonConformingProductRequestDataForSync,
             } = await import('@/hooks/nonConformingProductFilesSync');
             const { requestData, rawArchivos, diskHydrationComplete } =
@@ -4376,16 +4752,36 @@ function AppContent() {
             if (result.status) {
               console.log('Producto no conforme creado correctamente');
               await clearPncPendingFilesFromArchivoList(rawArchivos);
+              await clearPncPendingFirmasFromPayload(action.payload);
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'non_conforming_product'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
               actions = updatedActions;
+
+              const reconciledFirmaIdentificoPncCreate = await reconcileSignatureFieldAfterSync(
+                (result.data as any)?.firma_persona_identifico_pnc,
+                action.payload?.firma_persona_identifico_pnc,
+                'pnc_firma_identifico'
+              );
+              const reconciledFirmaOriginoPncCreate = await reconcileSignatureFieldAfterSync(
+                (result.data as any)?.firma_persona_origino_pnc,
+                action.payload?.firma_persona_origino_pnc,
+                'pnc_firma_origino'
+              );
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
                 const cache = JSON.parse(cacheStr);
                 const updatedCache = cache.map((item: any) => {
                   if (item.id_local === action.id && item.type === 'non_conforming_product') {
-                    return { ...item, synced: true, id: result.data?.id || item.id };
+                    return {
+                      ...item,
+                      synced: true,
+                      id: result.data?.id || item.id,
+                      firma_persona_identifico_pnc:
+                        reconciledFirmaIdentificoPncCreate !== undefined ? reconciledFirmaIdentificoPncCreate : item.firma_persona_identifico_pnc,
+                      firma_persona_origino_pnc:
+                        reconciledFirmaOriginoPncCreate !== undefined ? reconciledFirmaOriginoPncCreate : item.firma_persona_origino_pnc,
+                    };
                   }
                   return item;
                 });
@@ -4466,8 +4862,9 @@ function AppContent() {
               )
             );
             const { createAgendaMinuta } = await import('@/hooks/evaluationFunctions');
+            const hydratedParticipantesJson = await hydrateAgendaMinutaParticipantesJson(action.payload?.participantes);
             const result = await createAgendaMinuta({
-              requestData: action.payload,
+              requestData: { ...action.payload, participantes: hydratedParticipantesJson },
               refreshAccessToken,
               logout,
             });
@@ -4480,6 +4877,13 @@ function AppContent() {
 
             if (result.status) {
               console.log('Agenda minuta creada correctamente');
+              // Reconcilia `participantes[].firma` contra la respuesta del servidor en vez de solo
+              // borrar los archivos locales previos, para no dejar el cache apuntando a un archivo
+              // ya eliminado.
+              const reconciledParticipantesCreate = await localizeAgendaMinutaParticipantesJsonAfterSync(
+                result.data?.participantes,
+                action.payload?.participantes
+              );
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && (a.type === 'agenda_minuta' || a.type === 'physical_minute_agenda')));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
               actions = updatedActions;
@@ -4496,6 +4900,7 @@ function AppContent() {
                   ) {
                     return {
                       ...item,
+                      participantes: reconciledParticipantesCreate ?? item.participantes,
                       synced: true,
                       id: result.data?.id || item.id,
                       id_local: '',
@@ -4895,6 +5300,12 @@ function AppContent() {
                 logout,
               });
             }
+            // Las firmas se guardan como referencia a expo-files; se hidratan al data URI real que
+            // espera el endpoint (nunca se envía el nombre de archivo).
+            requestData.firma_entrega =
+              (await hydrateSignatureRef(requestData.firma_entrega as any)) ?? requestData.firma_entrega;
+            requestData.firma_recibe =
+              (await hydrateSignatureRef(requestData.firma_recibe as any)) ?? requestData.firma_recibe;
 
             const { createActaEntregaProducto } = await import('@/hooks/evaluationFunctions');
             const result = await createActaEntregaProducto({
@@ -4979,6 +5390,18 @@ function AppContent() {
             if (imagenesStr) {
               rawPayload.imagenes = imagenesStr;
             }
+            // Las 3 firmas se guardan como referencia a expo-files; se hidratan al base64 real que
+            // espera el endpoint (nunca se envía el nombre de archivo).
+            const previousOpeningClosingFirmas: Record<string, any> = {
+              firma_representante_cliente: rawPayload.firma_representante_cliente,
+              firma_representante_empresa_entrante: rawPayload.firma_representante_empresa_entrante,
+              firma_representante_empresa_saliente: rawPayload.firma_representante_empresa_saliente,
+            };
+            for (const f of ['firma_representante_cliente', 'firma_representante_empresa_entrante', 'firma_representante_empresa_saliente']) {
+              if (rawPayload[f]) {
+                rawPayload[f] = (await hydrateSignatureRef(rawPayload[f])) ?? rawPayload[f];
+              }
+            }
 
             const result = await createOpeningClosingPosition({
               requestData: rawPayload,
@@ -4989,6 +5412,15 @@ function AppContent() {
             if (result.status) {
               console.log('Apertura-Cierre de Puesto creado correctamente');
               await deleteOpeningClosingLocalFilesFromMeta(metaFiltered);
+
+              const reconciledOpeningClosingFirmasCreate: Record<string, any> = {};
+              for (const f of ['firma_representante_cliente', 'firma_representante_empresa_entrante', 'firma_representante_empresa_saliente']) {
+                reconciledOpeningClosingFirmasCreate[f] = await reconcileSignatureFieldAfterSync(
+                  (result.data as any)?.[f],
+                  previousOpeningClosingFirmas[f],
+                  'opening_closing_' + f
+                );
+              }
 
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'opening_closing_position'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
@@ -5017,6 +5449,9 @@ function AppContent() {
                   if (item.id_local === action.id && item.type === 'opening_closing_position') {
                     return {
                       ...item,
+                      firma_representante_cliente: reconciledOpeningClosingFirmasCreate.firma_representante_cliente !== undefined ? reconciledOpeningClosingFirmasCreate.firma_representante_cliente : item.firma_representante_cliente,
+                      firma_representante_empresa_entrante: reconciledOpeningClosingFirmasCreate.firma_representante_empresa_entrante !== undefined ? reconciledOpeningClosingFirmasCreate.firma_representante_empresa_entrante : item.firma_representante_empresa_entrante,
+                      firma_representante_empresa_saliente: reconciledOpeningClosingFirmasCreate.firma_representante_empresa_saliente !== undefined ? reconciledOpeningClosingFirmasCreate.firma_representante_empresa_saliente : item.firma_representante_empresa_saliente,
                       synced: true,
                       id: result.data?.id || item.id,
                       id_local: '',
@@ -5034,11 +5469,12 @@ function AppContent() {
             console.log('Creando registro de inducción y recorrido:', action.id);
             const { createInductionTourRecord } = await import('@/hooks/evaluationFunctions');
             // Backward compatibility for older offline actions
-            const payload = {
+            const payloadRaw = {
               division: 'Otros',
               firma_responsable: '',
               ...action.payload,
             };
+            const payload = await hydrateInductionTourFirmasForSync(payloadRaw);
             const result = await createInductionTourRecord({
               requestData: payload,
               refreshAccessToken,
@@ -5053,17 +5489,25 @@ function AppContent() {
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr && result.data) {
-                const d = result.data as Record<string, unknown>;
+                const { participantes: _ip, firma_supervisor: _ifs, firma_empleado: _ife, ...d } =
+                  result.data as Record<string, unknown>;
+                const reconciledFirmas = await localizeInductionTourFirmasForCache(
+                  result.data as Record<string, unknown>,
+                  action.payload
+                );
                 const cache = JSON.parse(cacheStr);
                 const updatedCache = cache.map((item: any) => {
                   if (item.id_local === action.id && item.type === 'induction_tour_record') {
                     return {
                       ...item,
                       ...d,
+                      participantes: reconciledFirmas.participantes !== undefined ? reconciledFirmas.participantes : item.participantes,
+                      firma_supervisor: reconciledFirmas.firma_supervisor !== undefined ? reconciledFirmas.firma_supervisor : item.firma_supervisor,
+                      firma_empleado: reconciledFirmas.firma_empleado !== undefined ? reconciledFirmas.firma_empleado : item.firma_empleado,
                       synced: true,
-                      id: (d as any).id ?? item.id,
+                      id: (result.data as any).id ?? item.id,
                       type: 'induction_tour_record',
-                      isActive: (d as any).isActive !== false,
+                      isActive: (result.data as any).isActive !== false,
                     };
                   }
                   return item;
@@ -5074,8 +5518,17 @@ function AppContent() {
           } else if (action.type === 'general_induction_register') {
             console.log('Creando registro de inducción general:', action.id);
             const { createGeneralInductionRegister } = await import('@/hooks/evaluationFunctions');
+            const { hydrateGirPersonasFirmasForApi } = await import('@/hooks/generalInductionRegisterCache');
+            // `colaboradores`/`capacitadores` guardan la firma de cada persona como referencia a
+            // expo-files; se hidratan al bare-base64 que espera el endpoint (nunca se envía el
+            // nombre de archivo).
+            const requestDataGirCreate = {
+              ...action.payload,
+              colaboradores: await hydrateGirPersonasFirmasForApi(action.payload?.colaboradores),
+              capacitadores: await hydrateGirPersonasFirmasForApi(action.payload?.capacitadores),
+            };
             const result = await createGeneralInductionRegister({
-              requestData: action.payload,
+              requestData: requestDataGirCreate,
               refreshAccessToken,
               logout,
             });
@@ -5681,6 +6134,7 @@ function AppContent() {
             const { updateNonConformingProduct } = await import('@/hooks/evaluationFunctions');
             const {
               clearPncPendingFilesFromArchivoList,
+              clearPncPendingFirmasFromPayload,
               buildNonConformingProductRequestDataForSync,
             } = await import('@/hooks/nonConformingProductFilesSync');
             const { requestData, rawArchivos, diskHydrationComplete } =
@@ -5705,9 +6159,39 @@ function AppContent() {
             if (result.status) {
               console.log('Producto no conforme actualizado correctamente');
               await clearPncPendingFilesFromArchivoList(rawArchivos);
+              await clearPncPendingFirmasFromPayload(action.payload);
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'non_conforming_product'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
               actions = updatedActions;
+
+              const reconciledFirmaIdentificoPncUp = await reconcileSignatureFieldAfterSync(
+                (result.data as any)?.firma_persona_identifico_pnc,
+                action.payload?.firma_persona_identifico_pnc,
+                'pnc_firma_identifico'
+              );
+              const reconciledFirmaOriginoPncUp = await reconcileSignatureFieldAfterSync(
+                (result.data as any)?.firma_persona_origino_pnc,
+                action.payload?.firma_persona_origino_pnc,
+                'pnc_firma_origino'
+              );
+              const cacheStrPncUp = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStrPncUp) {
+                const cache = JSON.parse(cacheStrPncUp);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.type !== 'non_conforming_product') return item;
+                  if (String(item.id) === String(action.id) || String(item.id_local) === String(action.id)) {
+                    return {
+                      ...item,
+                      firma_persona_identifico_pnc:
+                        reconciledFirmaIdentificoPncUp !== undefined ? reconciledFirmaIdentificoPncUp : item.firma_persona_identifico_pnc,
+                      firma_persona_origino_pnc:
+                        reconciledFirmaOriginoPncUp !== undefined ? reconciledFirmaOriginoPncUp : item.firma_persona_origino_pnc,
+                    };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
             }
           } else if (action.type === 'complaints_master') {
             console.log('Actualizando queja:', action.id);
@@ -5869,9 +6353,10 @@ function AppContent() {
               )
             );
             const { updateAgendaMinuta } = await import('@/hooks/evaluationFunctions');
+            const hydratedParticipantesJsonUpd = await hydrateAgendaMinutaParticipantesJson(action.payload?.participantes);
             const result = await updateAgendaMinuta({
               id: action.remote_id || action.id,
-              requestData: action.payload,
+              requestData: { ...action.payload, participantes: hydratedParticipantesJsonUpd },
               refreshAccessToken,
               logout,
             });
@@ -5884,6 +6369,14 @@ function AppContent() {
 
             if (result.status) {
               console.log('Agenda minuta actualizada correctamente');
+              // Reconcilia `participantes[].firma` contra la respuesta del servidor en vez de solo
+              // borrar los archivos locales previos (dejaría el cache apuntando a un archivo ya
+              // eliminado) y nunca se debe volcar el `participantes` crudo del servidor (base64) tal
+              // cual al cache.
+              const reconciledParticipantesUpd = await localizeAgendaMinutaParticipantesJsonAfterSync(
+                result.data?.participantes,
+                action.payload?.participantes
+              );
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && (a.type === 'agenda_minuta' || a.type === 'physical_minute_agenda')));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
               actions = updatedActions;
@@ -5903,11 +6396,12 @@ function AppContent() {
                     String(item.id_local ?? '').trim() === String(action.id ?? '').trim() ||
                     (actionLocalKey.length > 0 && String(item.id_local ?? '').trim() === actionLocalKey);
                   if (sameType && sameRecord) {
-                    const { imagenes: _resultImagenes, ...resultForCache } = result.data || {};
+                    const { imagenes: _resultImagenes, participantes: _resultParticipantes, ...resultForCache } = result.data || {};
                     return {
                       ...item,
                       ...payloadForCache,
                       ...resultForCache,
+                      participantes: reconciledParticipantesUpd ?? payloadForCache.participantes ?? item.participantes,
                       imagenes: (result.data || {}).imagenes ?? item.imagenes ?? [],
                       type: 'agenda_minuta',
                       synced: true,
@@ -6161,6 +6655,10 @@ function AppContent() {
                 logout,
               });
             }
+            requestData.firma_entrega =
+              (await hydrateSignatureRef(requestData.firma_entrega as any)) ?? requestData.firma_entrega;
+            requestData.firma_recibe =
+              (await hydrateSignatureRef(requestData.firma_recibe as any)) ?? requestData.firma_recibe;
 
             const { updateActaEntregaProducto } = await import('@/hooks/evaluationFunctions');
             const result = await updateActaEntregaProducto({
@@ -6271,6 +6769,18 @@ function AppContent() {
             if (imagenesStrUp) {
               rawUp.imagenes = imagenesStrUp;
             }
+            // Las 3 firmas se guardan como referencia a expo-files; se hidratan al base64 real que
+            // espera el endpoint (nunca se envía el nombre de archivo).
+            const previousOpeningClosingFirmasUp: Record<string, any> = {
+              firma_representante_cliente: rawUp.firma_representante_cliente,
+              firma_representante_empresa_entrante: rawUp.firma_representante_empresa_entrante,
+              firma_representante_empresa_saliente: rawUp.firma_representante_empresa_saliente,
+            };
+            for (const f of ['firma_representante_cliente', 'firma_representante_empresa_entrante', 'firma_representante_empresa_saliente']) {
+              if (rawUp[f]) {
+                rawUp[f] = (await hydrateSignatureRef(rawUp[f])) ?? rawUp[f];
+              }
+            }
 
             const result = await updateOpeningClosingPosition({
               id: resolvedId,
@@ -6282,6 +6792,15 @@ function AppContent() {
             if (result.status) {
               console.log('Apertura-Cierre de Puesto actualizado correctamente');
               await deleteOpeningClosingLocalFilesFromMeta(metaUp);
+
+              const reconciledOpeningClosingFirmasUp: Record<string, any> = {};
+              for (const f of ['firma_representante_cliente', 'firma_representante_empresa_entrante', 'firma_representante_empresa_saliente']) {
+                reconciledOpeningClosingFirmasUp[f] = await reconcileSignatureFieldAfterSync(
+                  (result.data as any)?.[f],
+                  previousOpeningClosingFirmasUp[f],
+                  'opening_closing_' + f
+                );
+              }
 
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'opening_closing_position'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
@@ -6296,6 +6815,9 @@ function AppContent() {
                     if ((item.id === resolvedId || String(item.id) === String(resolvedId) || item.id_local === action.id) && item.type === 'opening_closing_position') {
                       return {
                         ...item,
+                        firma_representante_cliente: reconciledOpeningClosingFirmasUp.firma_representante_cliente !== undefined ? reconciledOpeningClosingFirmasUp.firma_representante_cliente : item.firma_representante_cliente,
+                        firma_representante_empresa_entrante: reconciledOpeningClosingFirmasUp.firma_representante_empresa_entrante !== undefined ? reconciledOpeningClosingFirmasUp.firma_representante_empresa_entrante : item.firma_representante_empresa_entrante,
+                        firma_representante_empresa_saliente: reconciledOpeningClosingFirmasUp.firma_representante_empresa_saliente !== undefined ? reconciledOpeningClosingFirmasUp.firma_representante_empresa_saliente : item.firma_representante_empresa_saliente,
                         synced: true,
                         images: result.data?.images || item.images || [],
                         images_local: [],
@@ -6314,11 +6836,12 @@ function AppContent() {
             console.log('Actualizando registro de inducción y recorrido:', action.id);
             const { updateInductionTourRecord } = await import('@/hooks/evaluationFunctions');
             // Backward compatibility for older offline actions
-            const payload = {
+            const payloadRawUp = {
               division: 'Otros',
               firma_responsable: '',
               ...action.payload,
             };
+            const payload = await hydrateInductionTourFirmasForSync(payloadRawUp);
             const result = await updateInductionTourRecord({
               id: action.id,
               requestData: payload,
@@ -6333,7 +6856,12 @@ function AppContent() {
               actions = updatedActions;
               try {
                 if (result.data) {
-                  const d = result.data as Record<string, unknown>;
+                  const { participantes: _ip2, firma_supervisor: _ifs2, firma_empleado: _ife2, ...d } =
+                    result.data as Record<string, unknown>;
+                  const reconciledFirmasUp = await localizeInductionTourFirmasForCache(
+                    result.data as Record<string, unknown>,
+                    action.payload
+                  );
                   const cacheStr = await AsyncStorage.getItem('evaluations_cache');
                   if (cacheStr) {
                     const cache = JSON.parse(cacheStr);
@@ -6343,9 +6871,12 @@ function AppContent() {
                         return {
                           ...item,
                           ...d,
+                          participantes: reconciledFirmasUp.participantes !== undefined ? reconciledFirmasUp.participantes : item.participantes,
+                          firma_supervisor: reconciledFirmasUp.firma_supervisor !== undefined ? reconciledFirmasUp.firma_supervisor : item.firma_supervisor,
+                          firma_empleado: reconciledFirmasUp.firma_empleado !== undefined ? reconciledFirmasUp.firma_empleado : item.firma_empleado,
                           type: 'induction_tour_record',
                           synced: true,
-                          isActive: (d as any).isActive !== false,
+                          isActive: (result.data as any).isActive !== false,
                         };
                       }
                       return item;
@@ -6376,9 +6907,15 @@ function AppContent() {
                 // ignore
               }
             }
+            const { hydrateGirPersonasFirmasForApi } = await import('@/hooks/generalInductionRegisterCache');
+            const requestDataGirUpdate = {
+              ...action.payload,
+              colaboradores: await hydrateGirPersonasFirmasForApi(action.payload?.colaboradores),
+              capacitadores: await hydrateGirPersonasFirmasForApi(action.payload?.capacitadores),
+            };
             const result = await updateGeneralInductionRegister({
               id: resolvedId,
-              requestData: action.payload,
+              requestData: requestDataGirUpdate,
               refreshAccessToken,
               logout,
             });
@@ -7066,6 +7603,11 @@ function AppContent() {
               actions = updatedActions;
 
               const cache = await readActaEntregaProductosCache();
+              const removedActa = cache.find(
+                (item: any) => (item.id === action.id || item.id_local === action.id) && item.type === 'acta_entrega_producto',
+              );
+              if (removedActa?.firma_entrega) await deleteSignatureLocalRef(removedActa.firma_entrega);
+              if (removedActa?.firma_recibe) await deleteSignatureLocalRef(removedActa.firma_recibe);
               const updatedCache = cache.filter(
                 (item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'acta_entrega_producto'),
               );
@@ -7477,8 +8019,14 @@ function AppContent() {
       try {
         if (action.type === 'create') {
           console.log('Creando encuesta:', action.id);
+          // `firma_persona_evaluada` se guarda como referencia a expo-files; se hidrata al data URI
+          // real que espera el endpoint (nunca se envía el nombre de archivo).
+          const hydratedFirmaPersonaCreate = await hydrateSignatureRef(action.requestData?.firma_persona_evaluada);
           const result = await createSurveyAPI({
-            requestData: action.requestData,
+            requestData: {
+              ...action.requestData,
+              firma_persona_evaluada: hydratedFirmaPersonaCreate ?? action.requestData?.firma_persona_evaluada ?? '',
+            },
             marcaId: action.marcaId,
             refreshAccessToken,
             logout,
@@ -7494,8 +8042,19 @@ function AppContent() {
               const withoutDraft = fullCache.filter(
                 (s: any) => String(s?.id_local ?? '') !== String(action.id)
               );
+              const reconciledFirmaPersonaCreate = await reconcileSignatureFieldAfterSync(
+                (result.data as any)?.firma_persona_evaluada,
+                action.requestData?.firma_persona_evaluada,
+                'survey_firma_persona'
+              );
               const row = buildSurveyCacheRowFromCreateRequest(
-                action.requestData,
+                {
+                  ...action.requestData,
+                  firma_persona_evaluada:
+                    reconciledFirmaPersonaCreate !== undefined
+                      ? reconciledFirmaPersonaCreate
+                      : action.requestData?.firma_persona_evaluada,
+                },
                 newId,
                 ''
               );
@@ -7509,9 +8068,13 @@ function AppContent() {
           }
         } else if (action.type === 'update' && action.surveyId) {
           console.log('Actualizando encuesta:', action.surveyId);
+          const hydratedFirmaPersonaUpdate = await hydrateSignatureRef(action.requestData?.firma_persona_evaluada);
           const result = await updateSurveyAPI({
             surveyId: action.surveyId,
-            requestData: action.requestData,
+            requestData: {
+              ...action.requestData,
+              firma_persona_evaluada: hydratedFirmaPersonaUpdate ?? action.requestData?.firma_persona_evaluada ?? '',
+            },
             refreshAccessToken,
             logout,
           });
@@ -7523,8 +8086,20 @@ function AppContent() {
                 if (Array.isArray(list)) {
                   const sid = Number(action.surveyId);
                   const puestoId = Number(action.requestData?.puesto_id);
+                  const reconciledFirmaPersonaUpdate = await reconcileSignatureFieldAfterSync(
+                    (result.data as any)?.firma_persona_evaluada,
+                    action.requestData?.firma_persona_evaluada,
+                    'survey_firma_persona'
+                  );
                   const row = buildSurveyCacheRowFromCreateRequest(
-                    { ...action.requestData, puesto_id: action.requestData?.puesto_id ?? puestoId },
+                    {
+                      ...action.requestData,
+                      puesto_id: action.requestData?.puesto_id ?? puestoId,
+                      firma_persona_evaluada:
+                        reconciledFirmaPersonaUpdate !== undefined
+                          ? reconciledFirmaPersonaUpdate
+                          : action.requestData?.firma_persona_evaluada,
+                    },
                     sid,
                     ''
                   );
@@ -7541,14 +8116,34 @@ function AppContent() {
             done = true;
           }
         } else if (action.type === 'patchFirmaPersona' && action.surveyId) {
+          const hydratedFirmaQuick = (await hydrateSignatureRef(action.value)) ?? action.value ?? '';
           const result = await updateSurveySignatureAPI({
             surveyId: Number(action.surveyId),
             field: 'firma_persona_evaluada',
-            value: action.value != null ? String(action.value) : '',
+            value: hydratedFirmaQuick ? String(hydratedFirmaQuick) : '',
             refreshAccessToken,
             logout,
           });
-          if (result.status) done = true;
+          if (result.status) {
+            // El PATCH fija determinísticamente `action.value` (la referencia local ya vigente);
+            // no hay un valor de servidor independiente que reconciliar, solo aplicarlo al cache.
+            const cacheStr = await AsyncStorage.getItem('surveys_cache');
+            if (cacheStr) {
+              try {
+                const list = JSON.parse(cacheStr);
+                if (Array.isArray(list)) {
+                  const sid = Number(action.surveyId);
+                  const updatedCache = list.map((s: any) =>
+                    Number(s?.id) === sid ? { ...s, firma_persona_evaluada: action.value ?? null } : s
+                  );
+                  await AsyncStorage.setItem('surveys_cache', JSON.stringify(updatedCache));
+                }
+              } catch {
+                /* ignore cache patch */
+              }
+            }
+            done = true;
+          }
         } else if (action.type === 'delete' && action.surveyId) {
           console.log('Eliminando encuesta:', action.surveyId);
           const result = await deleteSurveyAPI({
@@ -7772,6 +8367,14 @@ function AppContent() {
               mergeFirmasIntoRequest(requestData, u);
             }
           }
+          // `firma_empleado_manual` se guarda como referencia a expo-files; se hidrata al data URI
+          // real que espera el endpoint (nunca se envía el nombre de archivo). Se conserva la
+          // referencia original para que el cache no la pierda tras sincronizar.
+          const firmaEmpleadoManualRefCreate = requestData.firma_empleado_manual ?? null;
+          if (firmaEmpleadoManualRefCreate) {
+            requestData.firma_empleado_manual =
+              (await hydrateSignatureRef(firmaEmpleadoManualRefCreate)) ?? firmaEmpleadoManualRefCreate;
+          }
           try {
             const sections = JSON.parse(
               typeof requestData.evaluacion === 'string' ? requestData.evaluacion : '[]',
@@ -7814,6 +8417,13 @@ function AppContent() {
             await saveActions(next);
             if (newId) {
               const d = (result as any).data;
+              // Si el servidor devolvió la firma manual (base64), se guarda en expo-files como la
+              // nueva referencia vigente, reemplazando la que se envió.
+              const reconciledFirmaEmpleadoManual = await reconcileSignatureFieldAfterSync(
+                d && typeof d === 'object' ? d.firma_empleado_manual : undefined,
+                firmaEmpleadoManualRefCreate,
+                'staff_eval_firma_manual'
+              );
               const cacheStr = await AsyncStorage.getItem('evaluations_staff_cache');
               if (cacheStr) {
                 try {
@@ -7833,7 +8443,7 @@ function AppContent() {
                         if (d.comentarios != null) next.comentarios = d.comentarios;
                         if (d.firma_evaluador != null) next.firma_evaluador = d.firma_evaluador;
                         if (d.firma_empleado !== undefined) next.firma_empleado = d.firma_empleado;
-                        if (d.firma_empleado_manual !== undefined) next.firma_empleado_manual = d.firma_empleado_manual;
+                        if (reconciledFirmaEmpleadoManual !== undefined) next.firma_empleado_manual = reconciledFirmaEmpleadoManual;
                         if (d.tipo != null) next.tipo = d.tipo;
                         if (d.fecha_ingreso != null) next.fecha_ingreso = d.fecha_ingreso;
                         if (d.fecha_evaluacion != null) next.fecha_evaluacion = d.fecha_evaluacion;
@@ -7868,10 +8478,14 @@ function AppContent() {
             continue;
           }
           console.log('Actualizando firma evaluación de personal:', action.evaluationId, action.field);
+          const hydratedActionValue =
+            action.field === 'firma_empleado_manual' && action.value
+              ? (await hydrateSignatureRef(action.value)) ?? action.value
+              : action.value;
           const result = await updateStaffEvaluationSignature({
             evaluationId: Number(action.evaluationId),
             field: action.field,
-            value: action.value ?? '',
+            value: hydratedActionValue ?? '',
             refreshAccessToken,
             logout,
           });
@@ -8108,12 +8722,18 @@ function AppContent() {
       try {
         if (action.type !== 'create' || !action.requestData) continue;
 
+        const hydratedFirmaRecibe = await hydrateSignatureRef(action.requestData?.firma_recibe);
+        const hydratedFirmaEntrega = await hydrateSignatureRef(action.requestData?.firma_entrega);
         const response = await authedFetch({
           url: `${apiUrl}/api/entrega-puestos`,
           init: {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(action.requestData),
+            body: JSON.stringify({
+              ...action.requestData,
+              firma_recibe: hydratedFirmaRecibe ?? null,
+              firma_entrega: hydratedFirmaEntrega ?? null,
+            }),
           },
           refreshAccessToken,
           logout,
@@ -8123,6 +8743,8 @@ function AppContent() {
         const data = await response.json();
         if (!data?.status) continue;
 
+        await deleteSignatureLocalRef(action.requestData?.firma_recibe);
+        await deleteSignatureLocalRef(action.requestData?.firma_entrega);
         actions = actions.filter(
           (a: any) => !(a.type === 'create' && String(a.id) === String(action.id))
         );
@@ -8332,14 +8954,26 @@ function AppContent() {
             continue;
           }
           const { createIncidentContribution } = await import('@/hooks/incidentsFunctions');
+          const hydratedFirmaAporteCreate = await hydrateSignatureRef(action.requestData?.firma_aporte_tercero);
           const result = await createIncidentContribution({
             incidentId: incidentIdResolved,
-            requestData: action.requestData,
+            requestData: {
+              ...action.requestData,
+              firma_aporte_tercero: hydratedFirmaAporteCreate ?? null,
+            },
             refreshAccessToken,
             logout,
           });
 
           if (result?.status) {
+            // El endpoint no devuelve la firma guardada: el valor recién hidratado y enviado
+            // es la firma ya sincronizada, así que se persiste como la referencia vigente en
+            // expo-files (reemplazando la anterior) en vez de solo borrarla.
+            const reconciledFirmaAporteCreate = await persistSignatureRef({
+              value: hydratedFirmaAporteCreate ?? null,
+              previousRef: action.requestData?.firma_aporte_tercero ?? null,
+              prefix: 'incident_contribution_firma',
+            });
             actions = actions.filter((a: any) => !(a.type === 'create' && a.id === action.id));
             await AsyncStorage.setItem('incident_contributions_actions', JSON.stringify(actions));
 
@@ -8358,7 +8992,7 @@ function AppContent() {
                     const aportes = Array.isArray(inc?.aportes) ? inc.aportes : [];
                     const updatedAportes = aportes.map((a: any) => {
                       if (a?.id_local && a.id_local === action.id) {
-                        return { ...a, id: result.contributionId, id_local: '' };
+                        return { ...a, id: result.contributionId, id_local: '', firma_aporte_tercero: reconciledFirmaAporteCreate };
                       }
                       return a;
                     });
@@ -8375,17 +9009,45 @@ function AppContent() {
           }
         } else if (action.type === 'update') {
           const { updateIncidentContribution } = await import('@/hooks/incidentsFunctions');
+          const hydratedFirmaAporteUpdate = await hydrateSignatureRef(action.requestData?.firma_aporte_tercero);
           const result = await updateIncidentContribution({
             incidentId: action.incidentId,
             contributionId: action.contributionId,
-            requestData: action.requestData,
+            requestData: {
+              ...action.requestData,
+              firma_aporte_tercero: hydratedFirmaAporteUpdate ?? null,
+            },
             refreshAccessToken,
             logout,
           });
 
           if (result?.status) {
+            // El endpoint no devuelve la firma guardada: el valor recién hidratado y enviado
+            // es la firma ya sincronizada, así que se persiste como la referencia vigente en
+            // expo-files (reemplazando la anterior) en vez de solo borrarla.
+            const reconciledFirmaAporteUpdate = await persistSignatureRef({
+              value: hydratedFirmaAporteUpdate ?? null,
+              previousRef: action.requestData?.firma_aporte_tercero ?? null,
+              prefix: 'incident_contribution_firma',
+            });
             actions = actions.filter((a: any) => !(a.type === 'update' && a.incidentId === action.incidentId && a.contributionId === action.contributionId));
             await AsyncStorage.setItem('incident_contributions_actions', JSON.stringify(actions));
+
+            const cacheStrAporteUp = await AsyncStorage.getItem('incidents_cache');
+            if (cacheStrAporteUp) {
+              const cache = JSON.parse(cacheStrAporteUp);
+              const updated = Array.isArray(cache)
+                ? cache.map((inc: any) => {
+                    if (inc?.id !== action.incidentId) return inc;
+                    const aportes = Array.isArray(inc?.aportes) ? inc.aportes : [];
+                    const updatedAportes = aportes.map((a: any) =>
+                      a?.id === action.contributionId ? { ...a, firma_aporte_tercero: reconciledFirmaAporteUpdate } : a
+                    );
+                    return { ...inc, aportes: updatedAportes };
+                  })
+                : cache;
+              await AsyncStorage.setItem('incidents_cache', JSON.stringify(updated));
+            }
           }
         } else if (action.type === 'delete') {
           const { deleteIncidentContribution } = await import('@/hooks/incidentsFunctions');
@@ -8407,6 +9069,10 @@ function AppContent() {
                 ? cache.map((inc: any) => {
                   if (inc?.id !== action.incidentId) return inc;
                   const aportes = Array.isArray(inc?.aportes) ? inc.aportes : [];
+                  const removedAporte = aportes.find((a: any) => a?.id === action.contributionId);
+                  if (removedAporte?.firma_aporte_tercero) {
+                    void deleteSignatureLocalRef(removedAporte.firma_aporte_tercero);
+                  }
                   const updatedAportes = aportes.filter((a: any) => a?.id !== action.contributionId);
                   return { ...inc, aportes: updatedAportes };
                 })

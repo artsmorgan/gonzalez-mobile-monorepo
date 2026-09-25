@@ -682,6 +682,11 @@ export async function buildRevisionVehiculosExcelConsolidado(
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Revisiones");
     const wsDet = wb.addWorksheet("Detalles");
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente.
+    for (const sheet of [wsMain, wsDet]) {
+        sheet.views = [{ showGridLines: false }];
+    }
     const border = borderThin;
 
     const anchorGen = new Map<number, number>();
@@ -925,7 +930,6 @@ export async function buildRevisionVehiculosExcelConsolidado(
         });
     }
 
-    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.autoFilter = {
         from: { row: 12, column: 2 },
         to: { row: Math.max(12, wsMain.rowCount), column: mainHeaders.length + 1 },

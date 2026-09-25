@@ -16,8 +16,8 @@ import {
 
 export type InduccionRecorridoModuleFilters = ActaEntregaModuleFilters & {
     responsableEmpleadoIds?: number[];
-    empleadoIds?: number[];
     participanteCedulas?: string[];
+    participanteNombres?: string[];
 };
 
 export type InduccionRecorridoOrderKey =
@@ -40,6 +40,12 @@ function parseParticipanteCedulas(v: unknown): string[] {
         .map((x) => String(x ?? "").trim())
         .filter((s) => s.length > 0)
         .map((s) => s.replace(/\s+/g, ""));
+    return [...new Set(out)];
+}
+
+function parseParticipanteNombres(v: unknown): string[] {
+    if (!Array.isArray(v)) return [];
+    const out = v.map((x) => String(x ?? "").trim()).filter((s) => s.length > 0);
     return [...new Set(out)];
 }
 
@@ -154,16 +160,43 @@ function safeParseJsonArray(raw: string | null | undefined): any[] {
     }
 }
 
-function rowMatchesParticipanteCedulas(participantesJson: string | null | undefined, needles: string[]): boolean {
-    if (!needles.length) return true;
+function normalizeSearchText(s: string): string {
+    return s
+        .trim()
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, "");
+}
+
+/** Coincide si algún participante calza por cédula (needles de cédula) o por nombre completo (needles de nombre). */
+function rowMatchesParticipantesSearch(
+    participantesJson: string | null | undefined,
+    cedulaNeedles: string[],
+    nombreNeedles: string[],
+): boolean {
+    if (!cedulaNeedles.length && !nombreNeedles.length) return true;
     const arr = safeParseJsonArray(participantesJson ?? undefined);
     const cedulas = arr
         .map((p: any) => String(p?.cedula ?? "").trim().replace(/\s+/g, ""))
         .filter((c: string) => c.length > 0);
-    return needles.some((needle) => {
+    const nombres = arr
+        .map((p: any) => normalizeSearchText(String(p?.nombre_completo ?? "")))
+        .filter((n: string) => n.length > 0);
+
+    // Semejanza = la cédula/nombre guardado contiene lo buscado (no al revés: si lo buscado
+    // contuviera al dato guardado, una cédula corta/mal cargada como "6" calzaría con cualquier
+    // búsqueda que tenga un "6", p. ej. "106480229").
+    const matchesCedula = cedulaNeedles.some((needle) => {
         const n = needle.trim().replace(/\s+/g, "").toLowerCase();
         if (!n) return false;
-        return cedulas.some((c) => c.toLowerCase().includes(n) || n.includes(c.toLowerCase()));
+        return cedulas.some((c) => c.toLowerCase().includes(n));
+    });
+    if (matchesCedula) return true;
+
+    return nombreNeedles.some((needle) => {
+        const n = normalizeSearchText(needle);
+        if (!n) return false;
+        return nombres.some((nom) => nom.includes(n));
     });
 }
 
@@ -171,20 +204,21 @@ export function normalizeInduccionRecorridoFilters(raw: unknown): InduccionRecor
     const base = normalizeActaEntregaFilters(raw);
     const o = raw != null && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
     const resp = toValidIds(o.responsableEmpleadoIds);
-    const emp = toValidIds(o.empleadoIds);
     const ceds = parseParticipanteCedulas(o.participanteCedulas);
+    const noms = parseParticipanteNombres(o.participanteNombres);
     return {
         ...base,
         ...(resp.length ? { responsableEmpleadoIds: resp } : {}),
-        ...(emp.length ? { empleadoIds: emp } : {}),
         ...(ceds.length ? { participanteCedulas: ceds } : {}),
+        ...(noms.length ? { participanteNombres: noms } : {}),
     };
 }
 
 export function hasInduccionRecorridoListModuleFiltersContent(f: InduccionRecorridoModuleFilters): boolean {
     if (hasActaContent(f)) return true;
-    if (f.responsableEmpleadoIds?.length || f.empleadoIds?.length) return true;
+    if (f.responsableEmpleadoIds?.length) return true;
     if (f.participanteCedulas?.length) return true;
+    if (f.participanteNombres?.length) return true;
     return false;
 }
 
@@ -212,7 +246,6 @@ export function filtersMatchInduccionRecorridoListQuery(parsedRowFilters: any, l
     if (!overlaps(listModuleFilters.corpoIds ?? undefined, saved.corpoIds ?? undefined)) return false;
     if (!overlaps(listModuleFilters.puestoIds ?? undefined, saved.puestoIds ?? undefined)) return false;
     if (!overlaps(listModuleFilters.responsableEmpleadoIds ?? undefined, saved.responsableEmpleadoIds ?? undefined)) return false;
-    if (!overlaps(listModuleFilters.empleadoIds ?? undefined, saved.empleadoIds ?? undefined)) return false;
     const lp = listModuleFilters.participanteCedulas ?? [];
     const sp = saved.participanteCedulas ?? [];
     if (lp.length) {
@@ -221,6 +254,16 @@ export function filtersMatchInduccionRecorridoListQuery(parsedRowFilters: any, l
         for (const c of lp) {
             const k = String(c).toLowerCase().trim();
             if (!k || !setS.has(k)) return false;
+        }
+    }
+    const ln = listModuleFilters.participanteNombres ?? [];
+    const sn = saved.participanteNombres ?? [];
+    if (ln.length) {
+        if (!sn.length) return false;
+        const setN = new Set(sn.map((x) => normalizeSearchText(String(x))));
+        for (const c of ln) {
+            const k = normalizeSearchText(String(c));
+            if (!k || !setN.has(k)) return false;
         }
     }
     return true;
@@ -248,21 +291,73 @@ export async function queryInduccionRecorridoRows(
     if (filters.responsableEmpleadoIds?.length) {
         where.created_by = { in: filters.responsableEmpleadoIds.map((id) => String(id)) };
     }
-    if (filters.empleadoIds?.length) where.empleado_id = { in: filters.empleadoIds };
 
+    // `select` explícito: `participantes` ya no existe como columna (ver
+    // `c_participantes_induccion_recorrido` más abajo) y no debe pedirse aquí, o la consulta vía
+    // `callDynamicPrisma` falla con "column ... does not exist". Tampoco se piden `empleado_id`/
+    // `firma_empleado`: esas columnas también fueron eliminadas de la base externa y ni este reporte
+    // ni el resto de la app las leen ya (el concepto de "empleado" individual del registro quedó
+    // obsoleto; los participantes cubren esa información).
     let rows = await prisma.c_registro_induccion_recorrido.findMany({
         where,
         orderBy: { id: "desc" },
         take: 50_000,
+        select: {
+            id: true,
+            empresa_id: true,
+            cliente_id: true,
+            contrato_id: true,
+            corpo_id: true,
+            puesto_id: true,
+            plaza_id: true,
+            fecha: true,
+            renglon_edificio: true,
+            supervisor_cliente: true,
+            supervisor_corporacion: true,
+            temas_desarrollados: true,
+            aspectos_especificos: true,
+            firma_supervisor: true,
+            created_at: true,
+            created_by: true,
+            division: true,
+            firma_responsable: true,
+            isActive: true,
+            division_id: true,
+        },
     });
 
-    if (filters.participanteCedulas?.length) {
-        rows = rows.filter((r: any) => rowMatchesParticipanteCedulas(r.participantes, filters.participanteCedulas!));
+    // `participantes` (LongText JSON) fue reemplazado por la tabla `c_participantes_induccion_recorrido`;
+    // se reconstruye aquí como string JSON para no tocar el resto de este archivo, que lo lee de `r.participantes`.
+    const rowIdsForParticipantes = [...new Set(rows.map((r: any) => Number(r.id)).filter((n) => Number.isFinite(n)))];
+    const participantesRows = rowIdsForParticipantes.length
+        ? await prisma.c_participantes_induccion_recorrido.findMany({
+              where: { registro_id: { in: rowIdsForParticipantes } },
+          })
+        : [];
+    const participantesByRegistro = new Map<number, any[]>();
+    for (const p of participantesRows as any[]) {
+        const rid = Number(p.registro_id);
+        if (!participantesByRegistro.has(rid)) participantesByRegistro.set(rid, []);
+        participantesByRegistro.get(rid)!.push({
+            nombre_completo: p.nombre_completo,
+            cedula: p.cedula,
+            firma: p.firma,
+        });
+    }
+    rows = rows.map((r: any) => ({
+        ...r,
+        participantes: JSON.stringify(participantesByRegistro.get(Number(r.id)) ?? []),
+    }));
+
+    if (filters.participanteCedulas?.length || filters.participanteNombres?.length) {
+        rows = rows.filter((r: any) =>
+            rowMatchesParticipantesSearch(r.participantes, filters.participanteCedulas ?? [], filters.participanteNombres ?? [])
+        );
     }
 
     const ids = <T>(vals: T[]) => [...new Set(vals.map((x: any) => Number(x)).filter((n) => Number.isFinite(n) && n > 0))];
     const creadorIds = [...new Set(rows.map((x: any) => parseEmpleadoIdFromCreatedBy(x.created_by)).filter((n): n is number => n != null))];
-    const [empresaIds, clienteIds, divisionIds, contratoIds, corpoIds, puestoIds, plazaIds, empleadoIds] = [
+    const [empresaIds, clienteIds, divisionIds, contratoIds, corpoIds, puestoIds, plazaIds] = [
         ids(rows.map((x: any) => x.empresa_id)),
         ids(rows.map((x: any) => x.cliente_id)),
         ids(rows.map((x: any) => x.division_id)),
@@ -270,9 +365,8 @@ export async function queryInduccionRecorridoRows(
         ids(rows.map((x: any) => x.corpo_id)),
         ids(rows.map((x: any) => x.puesto_id)),
         ids(rows.map((x: any) => x.plaza_id)),
-        ids(rows.map((x: any) => x.empleado_id)),
     ];
-    const [empresas, clientes, divisiones, contratos, corpos, puestos, plazas, empleados, creadores] = await Promise.all([
+    const [empresas, clientes, divisiones, contratos, corpos, puestos, plazas, creadores] = await Promise.all([
         empresaIds.length
             ? prisma.e_estructura_empresa.findMany({ where: { id: { in: empresaIds } }, select: { id: true, nombre: true, codigo: true } })
             : [],
@@ -293,12 +387,6 @@ export async function queryInduccionRecorridoRows(
                   select: { id: true, nombre: true, codigo_plaza: true, nro_plaza: true },
               })
             : [],
-        empleadoIds.length
-            ? prisma.c_empleado.findMany({
-                  where: { id: { in: empleadoIds } },
-                  select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
-              })
-            : [],
         creadorIds.length
             ? prisma.c_empleado.findMany({
                   where: { id: { in: creadorIds } },
@@ -313,7 +401,6 @@ export async function queryInduccionRecorridoRows(
     const corpoById = new Map(corpos.map((x) => [x.id, x]));
     const puestoById = new Map(puestos.map((x) => [x.id, x]));
     const plazaById = new Map(plazas.map((x) => [x.id, x]));
-    const empleadoById = new Map(empleados.map((x) => [x.id, x]));
     const creadorById = new Map(creadores.map((x) => [x.id, x]));
 
     const enriched = rows.map((r: any) => {
@@ -324,7 +411,6 @@ export async function queryInduccionRecorridoRows(
         const corpo = corpoById.get(Number(r.corpo_id));
         const puesto = puestoById.get(Number(r.puesto_id));
         const plaza = plazaById.get(Number(r.plaza_id));
-        const empleado = empleadoById.get(Number(r.empleado_id));
         const empCreadorId = parseEmpleadoIdFromCreatedBy(r.created_by);
         const creador = empCreadorId != null ? creadorById.get(empCreadorId) : undefined;
         return {
@@ -338,11 +424,9 @@ export async function queryInduccionRecorridoRows(
             plaza_nombre: plaza
                 ? [plaza.nro_plaza != null ? String(plaza.nro_plaza) : "", plaza.codigo_plaza, plaza.nombre].filter(Boolean).join(" - ")
                 : String(r.plaza_id ?? ""),
-            empleado_txt: empleado ? empleadoDisplayName(empleado) : String(r.empleado_id),
             fecha_txt: fmtDateOnly(r.fecha),
             created_by_nombre: creador ? empleadoDisplayName(creador) : excelCellString(r.created_by),
             firma_supervisor_data_uri: normalizeSignatureDataUri(r.firma_supervisor),
-            firma_empleado_data_uri: normalizeSignatureDataUri(r.firma_empleado),
             firma_responsable_data_uri: normalizeSignatureDataUri(r.firma_responsable),
         };
     });
@@ -590,35 +674,6 @@ async function appendDetalleBlocks(
         wsDet.getCell(rr, 1).value = "— Sin firma —";
     }
     for (let c = 1; c <= maxCol; c++) wsDet.getCell(rr, c).border = border;
-    rr += 1;
-
-    mergeWide(wsDet, rr, 1, maxCol);
-    wsDet.getCell(rr, 1).value = "Firma empleado (evaluado)";
-    wsDet.getCell(rr, 1).font = { bold: true };
-    wsDet.getCell(rr, 1).fill = hdrFill;
-    for (let c = 1; c <= maxCol; c++) wsDet.getCell(rr, c).border = border;
-    rr += 1;
-    mergeWide(wsDet, rr, 1, maxCol);
-    wsDet.getRow(rr).height = 100;
-    const sigE = parseSignatureForExcel(r.firma_empleado);
-    if (sigE) {
-        try {
-            const buf = tryBufferFromSignatureBase64(sigE.base64);
-            if (buf) {
-                const imgId = wb.addImage({ buffer: buf as any, extension: sigE.extension });
-                const nat = getImageDimensionsFromBuffer(buf);
-                const nw = nat?.width ?? 280;
-                const nh = nat?.height ?? 90;
-                const { width: dw, height: dh } = fitImageExtInsideBox(nw, nh, 400, 88);
-                wsDet.addImage(imgId, { tl: { col: 0.3, row: rr - 1 + 0.04 }, ext: { width: dw, height: dh } } as any);
-            }
-        } catch {
-            wsDet.getCell(rr, 1).value = "— Sin firma —";
-        }
-    } else {
-        wsDet.getCell(rr, 1).value = "— Sin firma —";
-    }
-    for (let c = 1; c <= maxCol; c++) wsDet.getCell(rr, c).border = border;
     wsDet.addRow([]);
     return { rt: rowTemasTitle, ra: rowAspTitle, rp: rowPartTitle, rs: rowSupTitle };
 }
@@ -631,6 +686,11 @@ export async function buildInduccionRecorridoExcelConsolidado(
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Inducción recorrido");
     const wsDet = wb.addWorksheet("Detalles");
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente.
+    for (const sheet of [wsMain, wsDet]) {
+        sheet.views = [{ showGridLines: false }];
+    }
     const maxCol = 4;
     const anchorTemas = new Map<number, number>();
     const anchorAsp = new Map<number, number>();
@@ -669,7 +729,6 @@ export async function buildInduccionRecorridoExcelConsolidado(
         "Supervisor cliente",
         "Supervisor corporación",
         "División (texto)",
-        "Empleado",
         "Responsable (creado por)",
         "Usuario modifica",
         "Fecha y hora modifica",
@@ -710,7 +769,6 @@ export async function buildInduccionRecorridoExcelConsolidado(
         cell.border = borderThin as ExcelJS.Borders;
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     }
-    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.columns = [
         { width: 3 },
         ...headers.map((lab) => {
@@ -756,7 +814,6 @@ export async function buildInduccionRecorridoExcelConsolidado(
             [headers.indexOf("Supervisor cliente") + 1]: excelCellString(r.supervisor_cliente),
             [headers.indexOf("Supervisor corporación") + 1]: excelCellString(r.supervisor_corporacion),
             [headers.indexOf("División (texto)") + 1]: excelCellString(r.division),
-            [headers.indexOf("Empleado") + 1]: r.empleado_txt,
             [headers.indexOf("Responsable (creado por)") + 1]: r.created_by_nombre,
             [headers.indexOf("Usuario modifica") + 1]: cambio?.cedula ?? "",
             [headers.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",

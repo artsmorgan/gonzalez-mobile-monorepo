@@ -7,6 +7,12 @@ import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
 import { reportError } from "../../../utils/reportError";
+import {
+  createCapacitadoresForRegistro,
+  createColaboradoresForRegistro,
+  hydratePersonasForRecords,
+  GENERAL_INDUCTION_SAFE_SELECT,
+} from "./personasHelpers";
 
 const GENERAL_INDUCTION_ESTRUCTURA_INCLUDE = {
   e_estructura_empresa: { select: { nombre: true, codigo: true } },
@@ -133,13 +139,14 @@ export async function GET(req: NextRequest) {
         operation: "findMany",
         where: whereActive,
         orderBy: { created_at: "desc" },
-        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
+        select: { ...GENERAL_INDUCTION_SAFE_SELECT, ...(sameGroupInclude || {}) },
       },
     });
     await hydratePreexistentRelations(records, preexistentSpecs);
 
     const recordsArray = Array.isArray(records) ? records : [];
-    const recordsWithNames = recordsArray.map((r: any) => ({
+    const recordsHydrated = await hydratePersonasForRecords(req, recordsArray);
+    const recordsWithNames = recordsHydrated.map((r: any) => ({
       ...r,
       id_local: "",
       empresa_nombre: r.e_estructura_empresa ? `${r.e_estructura_empresa.codigo} - ${r.e_estructura_empresa.nombre}` : null,
@@ -268,8 +275,6 @@ export async function POST(req: NextRequest) {
       isActive: true,
       division: String(division).trim(),
       temas_a_tratar: ensureStringJson(temas_a_tratar, "[]"),
-      colaboradores: ensureStringJson(colaboradores, "[]"),
-      capacitadores: ensureStringJson(capacitadores, "[]"),
       firma_responsable: String(firma_responsable),
       created_at: createdAt.toISOString(),
       created_by: createdBy.toString(),
@@ -287,10 +292,14 @@ export async function POST(req: NextRequest) {
         table: "c_registro_induccion_general",
         operation: "create",
         data: createData,
+        select: GENERAL_INDUCTION_SAFE_SELECT,
       },
     });
     await hydratePreexistentRelations(record, createPreexistentSpecs);
     const recordObj = record as any;
+
+    const colaboradoresCreated = await createColaboradoresForRegistro(req, recordObj.id, colaboradores);
+    const capacitadoresCreated = await createCapacitadoresForRegistro(req, recordObj.id, capacitadores);
 
     // Guardar imágenes (si vienen)
     let imagesParsed: GeneralInductionImageInput[] = [];
@@ -336,7 +345,7 @@ export async function POST(req: NextRequest) {
         table: "c_registro_induccion_general",
         operation: "findUnique",
         where: { id: recordObj.id },
-        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
+        select: { ...GENERAL_INDUCTION_SAFE_SELECT, ...(sameGroupInclude || {}) },
       },
     });
     await hydratePreexistentRelations(fullRecord, preexistentSpecs);
@@ -364,8 +373,8 @@ export async function POST(req: NextRequest) {
               division: recordObj.division,
               fecha: fechaParsed ? fechaParsed.toISOString() : null,
               temas_a_tratar: recordObj.temas_a_tratar,
-              colaboradores: recordObj.colaboradores,
-              capacitadores: recordObj.capacitadores,
+              colaboradores: JSON.stringify(colaboradoresCreated),
+              capacitadores: JSON.stringify(capacitadoresCreated),
               firma_responsable: recordObj.firma_responsable,
             },
           }]),
@@ -407,6 +416,8 @@ export async function POST(req: NextRequest) {
         data: {
           ...fullRecordObj,
           id_local: "",
+          colaboradores: JSON.stringify(colaboradoresCreated),
+          capacitadores: JSON.stringify(capacitadoresCreated),
           empresa_nombre: fullRecordObj?.e_estructura_empresa ? `${fullRecordObj.e_estructura_empresa.codigo} - ${fullRecordObj.e_estructura_empresa.nombre}` : null,
           cliente_nombre: fullRecordObj?.e_estructura_cliente?.nombre || null,
           corpo_nombre: fullRecordObj?.e_estructura_sucursal ? `${fullRecordObj.e_estructura_sucursal.nro_sucursal} - ${fullRecordObj.e_estructura_sucursal.nombre}` : null,

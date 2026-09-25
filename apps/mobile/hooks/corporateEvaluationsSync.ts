@@ -30,6 +30,24 @@ import type {
   CorporateVehicleMaintenanceRequest,
   CorporateVehicleUseRequest,
 } from './evaluationFunctions';
+import { hydrateSignatureRef, reconcileSignatureFieldAfterSync } from './fileStorage';
+import {
+  localizeBitacoraInformacionGeneralFirmas,
+  hydrateBitacoraInformacionGeneralFirmas,
+} from './bitacoraMainStructureCache';
+
+/**
+ * `firma_conductor`/`firma_mecanico` viajan al endpoint en base64 (con o sin prefijo `data:`, según
+ * el módulo). En `evaluations_actions` se guardan como referencia a expo-files; esto la hidrata de
+ * vuelta antes de sincronizar. Si `value` no es una referencia local válida, se asume que ya es
+ * base64 (dato legado) y se usa tal cual.
+ */
+async function hydrateCorporateSignatureField(value: unknown): Promise<string | null> {
+  const s = value != null ? String(value).trim() : '';
+  if (!s) return null;
+  const hydrated = await hydrateSignatureRef(s);
+  return hydrated ?? s;
+}
 
 /** Igual que `CreateCorporateVehicleParams['requestData']` en evaluationFunctions (payload tras hidratar imágenes). */
 type CorporateVehicleRequestBody = {
@@ -731,9 +749,13 @@ async function processBitacoraVehiculoDetenidoActions(deps: {
           progressed = true;
           continue;
         }
+        const payloadUpForApi = {
+          ...payloadUp,
+          informacion_general: await hydrateBitacoraInformacionGeneralFirmas(payloadUp.informacion_general),
+        };
         const resUp = await updateBitacoraVehiculoDetenido({
           id: bid,
-          requestData: payloadUp,
+          requestData: payloadUpForApi,
           refreshAccessToken,
           logout,
         });
@@ -813,7 +835,14 @@ async function processBitacoraVehiculoDetenidoActions(deps: {
       }
 
       try {
-        const result = await createBitacoraVehiculoDetenido({ requestData: payload, refreshAccessToken, logout });
+        // Las firmas de `informacion_general` se guardan como referencia a expo-files en
+        // `evaluations_actions`; `payload` (usado también para el cache tras éxito) conserva la
+        // referencia, y `payloadForApi` lleva el data URI real que espera el endpoint.
+        const payloadForApi = {
+          ...payload,
+          informacion_general: await hydrateBitacoraInformacionGeneralFirmas(payload.informacion_general),
+        };
+        const result = await createBitacoraVehiculoDetenido({ requestData: payloadForApi, refreshAccessToken, logout });
         if (!result.status) continue;
 
         try {
@@ -1247,7 +1276,13 @@ async function processOneCorporateAction(
     const { vehiculoId, rawVehiculo } = await resolveServerVehiculoIdFromPayload(payload);
     if (!vehiculoId) return false;
 
-    const requestData = stripUsePayloadForApi(payload);
+    const requestDataRaw = stripUsePayloadForApi(payload);
+    // `firma_conductor` se guarda como referencia a expo-files; se hidrata al base64 real que
+    // espera el endpoint (nunca se envía el nombre de archivo).
+    const requestData = {
+      ...requestDataRaw,
+      firma_conductor: await hydrateCorporateSignatureField(requestDataRaw.firma_conductor),
+    };
     const result = await createCorporateVehicleUse({
       vehiculo_id: String(vehiculoId),
       requestData: requestData as unknown as CorporateVehicleUseRequest,
@@ -1265,6 +1300,16 @@ async function processOneCorporateAction(
       await patchPendingBitacoraAfterUsoSync(String(action.id), newUsoId, vehiculoId);
     }
 
+    const reconciledFirmaConductorCreate = await reconcileSignatureFieldAfterSync(
+      (result.data as any)?.firma_conductor,
+      payload.firma_conductor,
+      'corporate_vehicle_firma_conductor'
+    );
+    const resultDataForCache = {
+      ...result.data,
+      firma_conductor: reconciledFirmaConductorCreate !== undefined ? reconciledFirmaConductorCreate : payload.firma_conductor,
+    };
+
     const cacheStr = await AsyncStorage.getItem('evaluations_cache');
     if (cacheStr) {
       const cache = JSON.parse(cacheStr);
@@ -1277,7 +1322,7 @@ async function processOneCorporateAction(
         const usos = Array.isArray(item.usos) ? item.usos : [];
         const newUsos = usos.map((u: any) => {
           if (String(u.id) === String(action.id) || String(u.id_local) === String(action.id)) {
-            const nextUse = { ...u, ...result.data, id: result.data?.id ?? u.id, synced: true };
+            const nextUse = { ...u, ...resultDataForCache, id: result.data?.id ?? u.id, synced: true };
             delete (nextUse as any).id_local;
             return nextUse;
           }
@@ -1290,7 +1335,7 @@ async function processOneCorporateAction(
 
     const sid = (await resolveSucursalIdForVehiculo(vehiculoId)) ?? undefined;
     if (sid) {
-      const usoMerged = { ...requestData, ...result.data, id: result.data?.id, vehiculo_id: vehiculoId };
+      const usoMerged = { ...requestData, ...resultDataForCache, id: result.data?.id, vehiculo_id: vehiculoId };
       await mergeMainStructureUso(sid, vehiculoId, usoMerged, String(action.id));
       await refreshCorpoCacheVehicleRowFromMainStructure(sid, vehiculoId);
     }
@@ -1304,7 +1349,13 @@ async function processOneCorporateAction(
     if (!vehiculoId) return false;
 
     const requestDataRaw = stripMaintenancePayloadForApi(payload);
-    const requestData = await hydrateCorporateMaintenanceImagesInPayload(requestDataRaw);
+    const requestDataWithImages = await hydrateCorporateMaintenanceImagesInPayload(requestDataRaw);
+    // `firma_mecanico` se guarda como referencia a expo-files; se hidrata al base64 real que espera
+    // el endpoint (nunca se envía el nombre de archivo).
+    const requestData = {
+      ...requestDataWithImages,
+      firma_mecanico: await hydrateCorporateSignatureField(requestDataWithImages.firma_mecanico),
+    };
     const result = await createCorporateVehicleMaintenance({
       vehiculo_id: String(vehiculoId),
       requestData: requestData as unknown as CorporateVehicleMaintenanceRequest,
@@ -1319,6 +1370,15 @@ async function processOneCorporateAction(
 
     const created = result.data as any;
     const newMantId = Number(created?.id ?? 0);
+    const reconciledFirmaMecanicoCreate = await reconcileSignatureFieldAfterSync(
+      created?.firma_mecanico,
+      payload.firma_mecanico,
+      'corporate_vehicle_firma_mecanico'
+    );
+    const createdForCache = {
+      ...created,
+      firma_mecanico: reconciledFirmaMecanicoCreate !== undefined ? reconciledFirmaMecanicoCreate : payload.firma_mecanico,
+    };
 
     const cacheStr = await AsyncStorage.getItem('evaluations_cache');
     if (cacheStr) {
@@ -1336,7 +1396,7 @@ async function processOneCorporateAction(
             : [];
         const newMants = mants.map((m: any) => {
           if (String(m.id) === String(action.id) || String(m.id_local) === String(action.id)) {
-            const nextMaintenance = { ...m, ...created, id: newMantId || m.id, synced: true };
+            const nextMaintenance = { ...m, ...createdForCache, id: newMantId || m.id, synced: true };
             delete (nextMaintenance as any).id_local;
             return nextMaintenance;
           }
@@ -1353,7 +1413,7 @@ async function processOneCorporateAction(
 
     const sid = (await resolveSucursalIdForVehiculo(vehiculoId)) ?? undefined;
     if (sid && newMantId) {
-      const mantMerged = { ...requestData, ...created, id: newMantId, vehiculo_id: vehiculoId };
+      const mantMerged = { ...requestData, ...createdForCache, id: newMantId, vehiculo_id: vehiculoId };
       await mergeMainStructureMantenimiento(sid, vehiculoId, mantMerged, String(action.id));
       await refreshCorpoCacheVehicleRowFromMainStructure(sid, vehiculoId);
     }
@@ -1430,7 +1490,13 @@ async function processOneCorporateAction(
       useId = String(foundServerUseId);
     }
 
-    const requestData = stripUsePayloadForApi(payload);
+    const requestDataRaw = stripUsePayloadForApi(payload);
+    // `firma_conductor` se guarda como referencia a expo-files; se hidrata al base64 real que
+    // espera el endpoint (nunca se envía el nombre de archivo).
+    const requestData = {
+      ...requestDataRaw,
+      firma_conductor: await hydrateCorporateSignatureField(requestDataRaw.firma_conductor),
+    };
     const result = await updateCorporateVehicleUse({
       use_id: String(useId),
       requestData: requestData as unknown as Partial<CorporateVehicleUseRequest>,
@@ -1443,6 +1509,16 @@ async function processOneCorporateAction(
     all = removeActionFromQueue(all, action);
     await AsyncStorage.setItem('evaluations_actions', JSON.stringify(all));
 
+    const reconciledFirmaConductorUpdate = await reconcileSignatureFieldAfterSync(
+      (result.data as any)?.firma_conductor,
+      payload.firma_conductor,
+      'corporate_vehicle_firma_conductor'
+    );
+    const payloadForCacheUse = {
+      ...payload,
+      firma_conductor: reconciledFirmaConductorUpdate !== undefined ? reconciledFirmaConductorUpdate : payload.firma_conductor,
+    };
+
     const cacheStr = await AsyncStorage.getItem('evaluations_cache');
     let vehiculoIdForStruct: number | null = null;
     if (cacheStr) {
@@ -1454,7 +1530,7 @@ async function processOneCorporateAction(
           const matches = String(u.id) === String(useId) || String(u.id_local) === String(action.id);
           if (!matches) return u;
           if (!vehiculoIdForStruct && item.id) vehiculoIdForStruct = Number(item.id);
-          return { ...u, ...payload, id: u.id, synced: true };
+          return { ...u, ...payloadForCacheUse, id: u.id, synced: true };
         });
         return { ...item, usos: newUsos, c_usos_vehiculos_corporativos: newUsos };
       });
@@ -1471,7 +1547,7 @@ async function processOneCorporateAction(
     if (vehiculoId) {
       const sid = await resolveSucursalIdForVehiculo(vehiculoId);
       if (sid) {
-        await mergeMainStructureUso(sid, vehiculoId, { ...requestData, ...payload, id: useId }, String(action.id));
+        await mergeMainStructureUso(sid, vehiculoId, { ...requestData, ...payloadForCacheUse, id: useId }, String(action.id));
         await refreshCorpoCacheVehicleRowFromMainStructure(sid, vehiculoId);
       }
     }
@@ -1509,7 +1585,13 @@ async function processOneCorporateAction(
     const maintenanceId = String(mid);
 
     const requestDataRaw = stripMaintenancePayloadForApi(payload);
-    const requestData = await hydrateCorporateMaintenanceImagesInPayload(requestDataRaw);
+    const requestDataWithImages = await hydrateCorporateMaintenanceImagesInPayload(requestDataRaw);
+    // `firma_mecanico` se guarda como referencia a expo-files; se hidrata al base64 real que espera
+    // el endpoint (nunca se envía el nombre de archivo).
+    const requestData = {
+      ...requestDataWithImages,
+      firma_mecanico: await hydrateCorporateSignatureField(requestDataWithImages.firma_mecanico),
+    };
     const result = await updateCorporateVehicleMaintenance({
       maintenance_id: maintenanceId,
       requestData: requestData as unknown as Partial<CorporateVehicleMaintenanceRequest>,
@@ -1524,6 +1606,15 @@ async function processOneCorporateAction(
 
     const { vehiculoId } = await resolveServerVehiculoIdFromPayload(payload);
     const vid = vehiculoId || 0;
+    const reconciledFirmaMecanicoUpdate = await reconcileSignatureFieldAfterSync(
+      (result.data as any)?.firma_mecanico,
+      payload.firma_mecanico,
+      'corporate_vehicle_firma_mecanico'
+    );
+    const payloadForCacheMant = {
+      ...payload,
+      firma_mecanico: reconciledFirmaMecanicoUpdate !== undefined ? reconciledFirmaMecanicoUpdate : payload.firma_mecanico,
+    };
     const cacheStr = await AsyncStorage.getItem('evaluations_cache');
     if (cacheStr) {
       const cache = JSON.parse(cacheStr);
@@ -1537,7 +1628,7 @@ async function processOneCorporateAction(
         const newMants = mants.map((m: any) => {
           const matches = String(m.id) === String(maintenanceId) || String(m.id_local) === String(action.id);
           if (!matches) return m;
-          return { ...m, ...payload, id: m.id, synced: true };
+          return { ...m, ...payloadForCacheMant, id: m.id, synced: true };
         });
         return {
           ...item,
@@ -1551,7 +1642,12 @@ async function processOneCorporateAction(
     if (vid) {
       const sid = await resolveSucursalIdForVehiculo(vid);
       if (sid) {
-        await mergeMainStructureMantenimiento(sid, vid, { ...requestData, id: maintenanceId }, String(action.id));
+        await mergeMainStructureMantenimiento(
+          sid,
+          vid,
+          { ...requestData, ...payloadForCacheMant, id: maintenanceId },
+          String(action.id)
+        );
         await refreshCorpoCacheVehicleRowFromMainStructure(sid, vid);
       }
     }

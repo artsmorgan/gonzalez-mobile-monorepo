@@ -31,7 +31,7 @@ import SignatureScreen from 'react-native-signature-canvas';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
-import { saveFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
+import { saveFile, getLocalFileDisplayUri, persistSignatureRef, hydrateSignatureRef, deleteSignatureLocalRef, resolveStoredSignatureDisplayUri, saveBase64File } from '@/hooks/fileStorage';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { buildNotesImagenesJsonForUpload, deleteNotesLocalFilesFromMeta, stripNoteImagesForActionPayload } from '@/hooks/notesFilesSync';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
@@ -1205,7 +1205,25 @@ export default function NotesScreen() {
         const data = await response.json();
 
         if (data.status) {
-          const serverRows = Array.isArray(data.notas) ? data.notas.filter((n: any) => n?.isActive !== false) : [];
+          const serverRowsRaw = Array.isArray(data.notas) ? data.notas.filter((n: any) => n?.isActive !== false) : [];
+          // La firma llega en base64 desde el servidor; se guarda en expo-files y solo se conserva
+          // la referencia en el cache (nunca el base64).
+          const serverRows = await Promise.all(
+            serverRowsRaw.map(async (n: any) => {
+              if (!n?.firma_manual_responsable) return n;
+              try {
+                const fileName = await saveBase64File({
+                  base64: n.firma_manual_responsable,
+                  extension: 'png',
+                  type: 'image',
+                  prefix: 'note_firma_manual',
+                });
+                return { ...n, firma_manual_responsable: fileName };
+              } catch {
+                return { ...n, firma_manual_responsable: null };
+              }
+            })
+          );
           const mergedAll = mergeNotesCacheForPuesto(
             cachedData.notas || [],
             serverRows,
@@ -1564,6 +1582,13 @@ export default function NotesScreen() {
                 const localId = generateRandomId();
                 const horaAccion = await getHoraAccion();
 
+                // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions.
+                const firmaManualRefOffline = await persistSignatureRef({
+                  value: firmaManualResponsable || null,
+                  prefix: 'note_firma_manual',
+                });
+                const requestBodyOffline = { ...requestBody, firma_manual_responsable: firmaManualRefOffline };
+
                 // Crear entrada en notes_actions
                 const actionsStr = await AsyncStorage.getItem('notes_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
@@ -1571,7 +1596,7 @@ export default function NotesScreen() {
                   (a: any) => !(a.type === 'create' && String(a.id) === String(localId))
                 );
                 nextActions.push({
-                  requestData: requestBody,
+                  requestData: requestBodyOffline,
                   marcaId: currentMarcaData.id,
                   puestoId: apiPuestoId,
                   notes_images_meta: stripNoteImagesForActionPayload(images),
@@ -1602,7 +1627,7 @@ export default function NotesScreen() {
                   creador: employee?.name || 'Desconocido',
                   is_modified: false,
                   firma_responsable: firmaResponsableHash.trim(),
-                  firma_manual_responsable: firmaManualResponsable,
+                  firma_manual_responsable: firmaManualRefOffline,
                   images: images,
                   updated_at: new Date(horaAccion).toISOString(),
                   id_local: localId,
@@ -1713,6 +1738,21 @@ export default function NotesScreen() {
                   currentMarca?.puesto?.id ||
                   0;
 
+                // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions.
+                // La referencia previa (tal como estaba la nota en cache antes de este cambio)
+                // permite reemplazar/borrar el archivo correcto en vez de acumular huérfanos.
+                const cacheStrForFirma = await AsyncStorage.getItem('notes_cache');
+                const cacheForFirma = cacheStrForFirma ? JSON.parse(cacheStrForFirma) : { notas: [], puesto: null };
+                const previousCachedNote = (cacheForFirma.notas || []).find((n: Note) =>
+                  editingNote.id_local !== '' ? n.id_local === editingNote.id_local : n.id === noteId
+                );
+                const firmaManualRefUpdate = await persistSignatureRef({
+                  value: firmaManualResponsable || null,
+                  previousRef: (previousCachedNote as any)?.firma_manual_responsable ?? null,
+                  prefix: 'note_firma_manual',
+                });
+                const requestBodyOffline = { ...requestBody, firma_manual_responsable: firmaManualRefUpdate };
+
                 const actionsStr = await AsyncStorage.getItem('notes_actions');
                 let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
 
@@ -1727,14 +1767,14 @@ export default function NotesScreen() {
                   if (actionIndex !== -1) {
                     actions[actionIndex] = {
                       ...actions[actionIndex],
-                      requestData: requestBody,
+                      requestData: requestBodyOffline,
                       notes_images_meta: stripNoteImagesForActionPayload(images),
                       marcaId: actions[actionIndex].marcaId ?? marcaIdOffline,
                       puestoId: actions[actionIndex].puestoId ?? puestoIdOffline,
                     };
                   } else {
                     actions.push({
-                      requestData: requestBody,
+                      requestData: requestBodyOffline,
                       notes_images_meta: stripNoteImagesForActionPayload(images),
                       marcaId: marcaIdOffline,
                       puestoId: puestoIdOffline,
@@ -1748,7 +1788,7 @@ export default function NotesScreen() {
                       !(a.type === 'update' && (Number(a.id) === Number(noteId) || String(a.id) === String(noteId)))
                   );
                   actions.push({
-                    requestData: requestBody,
+                    requestData: requestBodyOffline,
                     notes_images_meta: stripNoteImagesForActionPayload(images),
                     puestoId: editingNote.puesto_id || currentMarca?.puesto?.id || 0,
                     id: noteId,
@@ -1759,8 +1799,7 @@ export default function NotesScreen() {
                 await AsyncStorage.setItem('notes_actions', JSON.stringify(actions));
 
                 // Actualizar notes_cache
-                const cacheStr = await AsyncStorage.getItem('notes_cache');
-                const cache = cacheStr ? JSON.parse(cacheStr) : { notas: [], puesto: null };
+                const cache = cacheForFirma;
 
                 const noteIndex = cache.notas.findIndex((n: Note) =>
                   editingNote.id_local !== '' ? n.id_local === editingNote.id_local : n.id === noteId
@@ -1775,7 +1814,7 @@ export default function NotesScreen() {
                     categoria_id: editingNote.categoria_id,
                     relevancia: editingNote.relevancia,
                     firma_responsable: firmaResponsableHash.trim(),
-                    firma_manual_responsable: firmaManualResponsable,
+                    firma_manual_responsable: firmaManualRefUpdate,
                     is_modified: true,
                     images,
                   };
@@ -1922,7 +1961,11 @@ export default function NotesScreen() {
     tituloRef.current = note.titulo;
     descriptionRef.current = note.description;
     setFirmaResponsableHash(note.firma_responsable || '');
-    setFirmaManualResponsable(note.firma_manual_responsable || null);
+    // `firma_manual_responsable` puede venir del cache como referencia local a expo-files: se
+    // hidrata a un data URI real, porque este estado también se reenvía al servidor al guardar.
+    setFirmaManualResponsable(
+      note.firma_manual_responsable ? (await hydrateSignatureRef(note.firma_manual_responsable)) || note.firma_manual_responsable : null
+    );
     // En edición solo se muestran/gestionan archivos nuevos.
     // Los adjuntos ya existentes permanecen en la tarjeta y no se precargan en el formulario.
     setImages([]);
@@ -2490,7 +2533,7 @@ export default function NotesScreen() {
                 {!!note.firma_manual_responsable && (
                   <ThemedView style={styles.lastChangeContainer}>
                     <ThemedText style={styles.lastChangeLabel}>Firma manual responsable:</ThemedText>
-                    <Image source={{ uri: note.firma_manual_responsable }} style={styles.signaturePreview} resizeMode="contain" />
+                    <Image source={{ uri: resolveStoredSignatureDisplayUri(note.firma_manual_responsable) }} style={styles.signaturePreview} resizeMode="contain" />
                   </ThemedView>
                 )}
 

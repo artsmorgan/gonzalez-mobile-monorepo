@@ -535,6 +535,11 @@ export async function buildEntregaPuestoExcelConsolidado(
     const wb = new ExcelJS.Workbook();
     const main = wb.addWorksheet("Entrega puesto");
     const details = wb.addWorksheet("Detalles");
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente.
+    for (const sheet of [main, details]) {
+        sheet.views = [{ showGridLines: false }];
+    }
     const borderThin: Partial<ExcelJS.Borders> = {
         top: { style: "thin" },
         left: { style: "thin" },
@@ -608,7 +613,6 @@ export async function buildEntregaPuestoExcelConsolidado(
         c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } };
         c.border = borderThin;
     });
-    main.views = [{ state: "frozen", ySplit: 12 }];
     main.columns = [
         { width: 3 },
         { width: 12 },

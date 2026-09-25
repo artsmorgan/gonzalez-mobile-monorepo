@@ -45,7 +45,6 @@ import {
   mergeActaEntregaServerIntoCache,
   migrateActaEntregaFromEvaluationsCacheIfEmpty,
   normalizeActaEntregaImagesForCache,
-  normalizeSyncedActaEntregaRecord,
   readActaEntregaProductosCache,
   upsertActaEntregaInCache,
   writeActaEntregaProductosCache,
@@ -60,7 +59,16 @@ import {
   listActaEntregaProductoByCorpo,
   updateActaEntregaProducto,
 } from '@/hooks/evaluationFunctions';
-import { saveFile, getFile, deleteFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
+import {
+  saveFile,
+  getFile,
+  deleteFile,
+  getLocalFileDisplayUri,
+  persistSignatureRef,
+  hydrateSignatureRef,
+  resolveStoredSignatureDisplayUri,
+  deleteSignatureLocalRef,
+} from '@/hooks/fileStorage';
 import { stripActaEntregaImagesForActionPayload } from '@/hooks/actaEntregaProductosImagesSync';
 
 type NavProp = NativeStackNavigationProp<RootStackParamList, 'ActaEntregaProductos'>;
@@ -1384,12 +1392,14 @@ export default function ActaEntregaProductosScreen() {
     setNombreEntrega(record.nombre_entrega || '');
     setCedulaEntrega(record.cedula_entrega || '');
     setFechaEntrega(parseDateInputToLocalDate(record.fecha_entrega, new Date(horaAccion)));
-    setFirmaEntrega(formatSignatureForDisplay(record.firma_entrega) || '');
+    // Las firmas pueden venir del cache como referencia local a expo-files: se hidratan a un data
+    // URI real para poder mostrarlas y, si se guardan de nuevo, reenviarlas tal cual.
+    setFirmaEntrega((await hydrateSignatureRef(record.firma_entrega)) || formatSignatureForDisplay(record.firma_entrega) || '');
 
     setNombreRecibe(record.nombre_recibe || '');
     setCedulaRecibe(record.cedula_recibe || '');
     setFechaRecibe(parseDateInputToLocalDate(record.fecha_recibe, new Date(horaAccion)));
-    setFirmaRecibe(formatSignatureForDisplay(record.firma_recibe) || '');
+    setFirmaRecibe((await hydrateSignatureRef(record.firma_recibe)) || formatSignatureForDisplay(record.firma_recibe) || '');
 
     setFirmaResponsableHash(record.firma_responsable || '');
 
@@ -1512,9 +1522,7 @@ export default function ActaEntregaProductosScreen() {
               if (res.status) {
                 const d = res.data as any;
                 if (d && typeof d === 'object' && d.id != null) {
-                  await upsertActaEntregaInCache(
-                    normalizeSyncedActaEntregaRecord({ ...d, type: 'acta_entrega_producto', synced: true }),
-                  );
+                  await upsertActaEntregaInCache({ ...d, type: 'acta_entrega_producto', synced: true });
                 }
                 await deleteLocalImageFiles(images);
                 Alert.alert('Éxito', res.message || 'Acta creada correctamente');
@@ -1529,8 +1537,24 @@ export default function ActaEntregaProductosScreen() {
             }
 
             // Offline — cola con rutas locales (sin base64 en AsyncStorage)
+            // Las firmas se guardan en expo-files; solo se conserva la referencia en cache/actions.
+            const firmaEntregaRefOffCreate = await persistSignatureRef({
+              value: basePayload.firma_entrega ?? null,
+              previousRef: null,
+              prefix: 'acta_entrega_firma_entrega',
+            });
+            const firmaRecibeRefOffCreate = await persistSignatureRef({
+              value: basePayload.firma_recibe ?? null,
+              previousRef: null,
+              prefix: 'acta_entrega_firma_recibe',
+            });
+            const basePayloadForCache = {
+              ...basePayload,
+              firma_entrega: firmaEntregaRefOffCreate ?? '',
+              firma_recibe: firmaRecibeRefOffCreate ?? '',
+            };
             const acta_entrega_images_meta = stripActaEntregaImagesForActionPayload(images);
-            const offlinePayload = { ...basePayload, acta_entrega_images_meta };
+            const offlinePayload = { ...basePayloadForCache, acta_entrega_images_meta };
             const localId = generateRandomId();
             const actionsStr = await AsyncStorage.getItem('evaluations_actions');
             const actions = actionsStr ? JSON.parse(actionsStr) : [];
@@ -1564,11 +1588,11 @@ export default function ActaEntregaProductosScreen() {
               nombre_entrega: basePayload.nombre_entrega,
               cedula_entrega: basePayload.cedula_entrega,
               fecha_entrega: basePayload.fecha_entrega,
-              firma_entrega: basePayload.firma_entrega,
+              firma_entrega: basePayloadForCache.firma_entrega,
               nombre_recibe: basePayload.nombre_recibe,
               cedula_recibe: basePayload.cedula_recibe,
               fecha_recibe: basePayload.fecha_recibe,
-              firma_recibe: basePayload.firma_recibe,
+              firma_recibe: basePayloadForCache.firma_recibe,
               firma_responsable: basePayload.firma_responsable,
               images: images,
             };
@@ -1664,30 +1688,26 @@ export default function ActaEntregaProductosScreen() {
               if (res.status) {
                 const d = res.data as any;
                 if (d && typeof d === 'object') {
-                  await upsertActaEntregaInCache(
-                    normalizeSyncedActaEntregaRecord({
-                      ...editingRecord,
-                      ...d,
-                      type: 'acta_entrega_producto',
-                      synced: true,
-                      images: d.images ?? images,
-                    }),
-                  );
+                  await upsertActaEntregaInCache({
+                    ...editingRecord,
+                    ...d,
+                    type: 'acta_entrega_producto',
+                    synced: true,
+                    images: d.images ?? images,
+                  });
                 } else {
                   const mergedImages = [
                     ...((Array.isArray(editingRecord.images) ? editingRecord.images : []) as ActaImage[]),
                     ...(Array.isArray(images) ? images : []),
                   ];
-                  await upsertActaEntregaInCache(
-                    normalizeSyncedActaEntregaRecord({
-                      ...editingRecord,
-                      ...requestData,
-                      id: editingRecord.id,
-                      type: 'acta_entrega_producto',
-                      synced: true,
-                      images: mergedImages,
-                    }),
-                  );
+                  await upsertActaEntregaInCache({
+                    ...editingRecord,
+                    ...requestData,
+                    id: editingRecord.id,
+                    type: 'acta_entrega_producto',
+                    synced: true,
+                    images: mergedImages,
+                  });
                 }
                 if (photosDirty) {
                   await deleteLocalImageFiles(images);
@@ -1710,10 +1730,26 @@ export default function ActaEntregaProductosScreen() {
                 : hasServerId && photosDirty
                   ? stripActaEntregaImagesForActionPayload(images)
                   : undefined;
+            // Las firmas se guardan en expo-files; se reemplaza la referencia anterior del registro.
+            const firmaEntregaRefOffUpdate = await persistSignatureRef({
+              value: baseRequestData.firma_entrega ?? null,
+              previousRef: (editingRecord as any)?.firma_entrega ?? null,
+              prefix: 'acta_entrega_firma_entrega',
+            });
+            const firmaRecibeRefOffUpdate = await persistSignatureRef({
+              value: baseRequestData.firma_recibe ?? null,
+              previousRef: (editingRecord as any)?.firma_recibe ?? null,
+              prefix: 'acta_entrega_firma_recibe',
+            });
+            const baseRequestDataForCache = {
+              ...baseRequestData,
+              firma_entrega: firmaEntregaRefOffUpdate ?? '',
+              firma_recibe: firmaRecibeRefOffUpdate ?? '',
+            };
             const offlinePayload =
               metaForOfflineResolved != null
-                ? { ...baseRequestData, acta_entrega_images_meta: metaForOfflineResolved }
-                : { ...baseRequestData };
+                ? { ...baseRequestDataForCache, acta_entrega_images_meta: metaForOfflineResolved }
+                : { ...baseRequestDataForCache };
 
             // Offline: actualizar cache + acción
             const actionsStr = await AsyncStorage.getItem('evaluations_actions');
@@ -1785,7 +1821,7 @@ export default function ActaEntregaProductosScreen() {
                     : images;
                 return {
                   ...it,
-                  ...baseRequestData,
+                  ...baseRequestDataForCache,
                   synced: false,
                   images: mergedImagesForCache,
                 };
@@ -1835,6 +1871,9 @@ export default function ActaEntregaProductosScreen() {
               const res = await deleteActaEntregaProducto({ id: idForApi, refreshAccessToken, logout });
               if (res.status) {
                 const c = await readActaEntregaProductosCache();
+                const removedActa = c.find((it: any) => it.type === 'acta_entrega_producto' && Number(it.id) === Number(idForApi));
+                if (removedActa?.firma_entrega) await deleteSignatureLocalRef(removedActa.firma_entrega);
+                if (removedActa?.firma_recibe) await deleteSignatureLocalRef(removedActa.firma_recibe);
                 await writeActaEntregaProductosCache(
                   c.filter((it: any) => !(it.type === 'acta_entrega_producto' && Number(it.id) === Number(idForApi))),
                 );
@@ -1870,6 +1909,10 @@ export default function ActaEntregaProductosScreen() {
             }
 
             await deleteLocalImageFiles((record.images || []) as ActaImage[]);
+            if (isLocalDraft) {
+              if (record.firma_entrega) await deleteSignatureLocalRef(record.firma_entrega);
+              if (record.firma_recibe) await deleteSignatureLocalRef(record.firma_recibe);
+            }
 
             const cache = await readActaEntregaProductosCache();
             const updatedCache = (cache || []).filter((it: any) => {
@@ -2006,6 +2049,8 @@ export default function ActaEntregaProductosScreen() {
   const renderSignaturesPreview = (record: ActaEntregaProducto) => {
     const firmaEntrega = record.firma_entrega || '';
     const firmaRecibe = record.firma_recibe || '';
+    const firmaEntregaUri = resolveStoredSignatureDisplayUri(firmaEntrega);
+    const firmaRecibeUri = resolveStoredSignatureDisplayUri(firmaRecibe);
 
     if (!firmaEntrega && !firmaRecibe) return null;
 
@@ -2026,13 +2071,13 @@ export default function ActaEntregaProductosScreen() {
             {firmaEntrega && (
               <ThemedView style={styles.signatureItem}>
                 <ThemedText style={styles.signatureItemLabel}>Firma de entrega</ThemedText>
-                <Image source={{ uri: formatSignatureForDisplay(firmaEntrega) }} style={styles.signaturePreviewImage} resizeMode="contain" />
+                <Image source={{ uri: firmaEntregaUri }} style={styles.signaturePreviewImage} resizeMode="contain" />
               </ThemedView>
             )}
             {firmaRecibe && (
               <ThemedView style={styles.signatureItem}>
                 <ThemedText style={styles.signatureItemLabel}>Firma de recibe</ThemedText>
-                <Image source={{ uri: formatSignatureForDisplay(firmaRecibe) }} style={styles.signaturePreviewImage} resizeMode="contain" />
+                <Image source={{ uri: firmaRecibeUri }} style={styles.signaturePreviewImage} resizeMode="contain" />
               </ThemedView>
             )}
           </ThemedView>

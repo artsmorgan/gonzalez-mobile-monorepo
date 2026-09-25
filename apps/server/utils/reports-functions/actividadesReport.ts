@@ -626,7 +626,11 @@ export async function buildActividadesExcelConsolidado(
         c.fill = hdrFill;
         c.border = borderThin;
     });
-    wsMain.views = [{ state: "frozen", ySplit: 12 }];
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente.
+    for (const sheet of [wsMain, wsP, wsU, wsA]) {
+        sheet.views = [{ showGridLines: false }];
+    }
     wsMain.columns = [
         { width: 3 },
         { width: 12 },

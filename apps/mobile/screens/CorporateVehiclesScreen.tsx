@@ -46,7 +46,7 @@ import {
 } from '@/hooks/corporateVehiclesCorpoCache';
 import { mergeMainStructureFragments } from '@/hooks/mergeMainStructureFragments';
 import { loadMainStructureFragmentsObject } from '@/hooks/mainStructureFragmentsStorage';
-import { deleteFile, getFile, getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
+import { deleteFile, getFile, getLocalFileDisplayUri, saveFile, persistSignatureRef, hydrateSignatureRef, deleteSignatureLocalRef, saveBase64File } from '@/hooks/fileStorage';
 import {
   readCorporateVehiclesForSucursalFromMainStructure,
   readCorporateVehiclesForSucursalFromFragmentStorage,
@@ -745,6 +745,8 @@ function findHierarchyByCorpoIn(structureArr: MainStructureTree, corpoId: number
   return null;
 }
 
+const FIRMA_MANUAL_OFFLINE_MESSAGE = 'Para visualizar las firmas manuales, conéctate a internet y actualiza la lista';
+
 export default function CorporateVehiclesScreen() {
   const navigation = useNavigation<Nav>();
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
@@ -824,6 +826,7 @@ export default function CorporateVehiclesScreen() {
   const [useKmFin, setUseKmFin] = useState('');
   const [useMotivo, setUseMotivo] = useState('');
   const [useFirmaConductor, setUseFirmaConductor] = useState<string>('');
+  const [useFirmaConductorUnavailableOffline, setUseFirmaConductorUnavailableOffline] = useState(false);
   const [useFirmaResponsable, setUseFirmaResponsable] = useState<FirmaData | null>(null);
 
   // pickers (fechas/horas) para usos
@@ -851,6 +854,7 @@ export default function CorporateVehiclesScreen() {
   const [maintenanceImagenDespuesRef, setMaintenanceImagenDespuesRef] = useState<string>(''); // local file reference
   const [maintenanceNombreMecanico, setMaintenanceNombreMecanico] = useState('');
   const [maintenanceFirmaMecanico, setMaintenanceFirmaMecanico] = useState<string>(''); // base64 signature
+  const [maintenanceFirmaMecanicoUnavailableOffline, setMaintenanceFirmaMecanicoUnavailableOffline] = useState(false);
   const [maintenanceFirmaResponsable, setMaintenanceFirmaResponsable] = useState<FirmaData | null>(null);
 
   // pickers para mantenimiento
@@ -1991,6 +1995,7 @@ export default function CorporateVehiclesScreen() {
     setUseKmFin('');
     setUseMotivo('');
     setUseFirmaConductor('');
+    setUseFirmaConductorUnavailableOffline(false);
     setUseFirmaResponsable(null);
     setShowUseDatePicker(false);
     setShowUseTimePicker(false);
@@ -2044,7 +2049,25 @@ export default function CorporateVehiclesScreen() {
     setUsePickerKey(null);
   };
 
-  const setUsesForVehicleKey = useCallback(async (vehicleKey: string, usos: VehicleUse[]) => {
+  const setUsesForVehicleKey = useCallback(async (vehicleKey: string, usosRaw: VehicleUse[]) => {
+    // La firma del conductor se guarda en expo-files; nunca se persiste el base64 en las cachés
+    // (`main_structure_cache`, cache por corpo). La referencia previa (si existía) permite
+    // reemplazar/borrar el archivo correcto en vez de acumular huérfanos.
+    const prevUsos = records.find((r) => String(r.id || r.id_local) === vehicleKey)?.usos || [];
+    const prevByKey = new Map(prevUsos.map((u: any) => [String(u.id || u.id_local), u]));
+    const usos = await Promise.all(
+      usosRaw.map(async (u: any) => {
+        if (!u?.firma_conductor) return u;
+        const previousRef = prevByKey.get(String(u.id || u.id_local))?.firma_conductor ?? null;
+        const nextRef = await persistSignatureRef({
+          value: u.firma_conductor,
+          previousRef,
+          prefix: 'corporate_vehicle_use_firma',
+        });
+        return { ...u, firma_conductor: nextRef };
+      })
+    );
+
     setRecords((prev) =>
       prev.map((r) => {
         const key = String(r.id || r.id_local);
@@ -2056,7 +2079,7 @@ export default function CorporateVehiclesScreen() {
     const sid = await findSucursalIdForVehicleKeyInMainStructure(vehicleKey);
     if (sid) await updateVehicleUsosInMainStructureBranch(sid, vehicleKey, usos);
     await setVehicleUsosInCorpoCache(vehicleKey, usos);
-  }, []);
+  }, [records]);
 
   const openUsesModal = useCallback(
     async (vehicle: VehicleRecord) => {
@@ -2122,7 +2145,7 @@ export default function CorporateVehiclesScreen() {
     resetUseForm();
   };
 
-  const startEditingUse = (u: VehicleUse) => {
+  const startEditingUse = async (u: VehicleUse) => {
     setIsUseFormOpen(true);
     setUseEditing(u);
     setUseNombreConductor(String(u.nombre_conductor || ''));
@@ -2140,7 +2163,17 @@ export default function CorporateVehiclesScreen() {
     setUseKmInicio(String(u.km_inicio ?? ''));
     setUseKmFin(String(u.km_fin ?? ''));
     setUseMotivo(String(u.motivo || ''));
-    setUseFirmaConductor(String((u as any).firma_conductor || ''));
+    const hydratedUseFirmaConductor = await hydrateOrWrapLegacySignature((u as any).firma_conductor);
+    setUseFirmaConductor(hydratedUseFirmaConductor);
+    // Un uso ya registrado (con id de servidor) sin firma disponible localmente significa que la
+    // jerarquía no la trajo (ya no viaja ahí); si además no hay conexión para consultarla en el
+    // endpoint dedicado, se avisa en vez de mostrar "Sin firma del conductor".
+    if (!hydratedUseFirmaConductor && Number((u as any).id) > 0) {
+      const isConnected = await getConnectionStatus();
+      setUseFirmaConductorUnavailableOffline(!isConnected);
+    } else {
+      setUseFirmaConductorUnavailableOffline(false);
+    }
     setUseFirmaResponsable(decodeFirmaHash(u.firma_responsable) as any);
   };
 
@@ -2717,10 +2750,27 @@ export default function CorporateVehiclesScreen() {
     setMaintenanceImagenDespuesRef('');
     setMaintenanceNombreMecanico('');
     setMaintenanceFirmaMecanico('');
+    setMaintenanceFirmaMecanicoUnavailableOffline(false);
     setMaintenanceFirmaResponsable(null);
   }, []);
 
-  const setMaintenancesForVehicleKey = useCallback(async (vehicleKey: string, mantenimientos: VehicleMaintenance[]) => {
+  const setMaintenancesForVehicleKey = useCallback(async (vehicleKey: string, mantenimientosRaw: VehicleMaintenance[]) => {
+    // La firma del mecánico se guarda en expo-files; nunca se persiste el base64 en las cachés.
+    const prevMantenimientos = records.find((r) => String(r.id || r.id_local) === vehicleKey)?.mantenimientos || [];
+    const prevByKey = new Map(prevMantenimientos.map((m: any) => [String(m.id || m.id_local), m]));
+    const mantenimientos = await Promise.all(
+      mantenimientosRaw.map(async (m: any) => {
+        if (!m?.firma_mecanico) return m;
+        const previousRef = prevByKey.get(String(m.id || m.id_local))?.firma_mecanico ?? null;
+        const nextRef = await persistSignatureRef({
+          value: m.firma_mecanico,
+          previousRef,
+          prefix: 'corporate_vehicle_maint_firma',
+        });
+        return { ...m, firma_mecanico: nextRef };
+      })
+    );
+
     setRecords((prev) =>
       prev.map((r) => {
         const key = String(r.id || r.id_local);
@@ -2735,7 +2785,7 @@ export default function CorporateVehiclesScreen() {
 
     const sid = await findSucursalIdForVehicleKeyInMainStructure(vehicleKey);
     if (sid) await updateVehicleMantenimientosInMainStructureBranch(sid, vehicleKey, mantenimientos);
-  }, []);
+  }, [records]);
 
   const openMaintenanceModal = useCallback(
     async (vehicle: VehicleRecord) => {
@@ -2811,7 +2861,7 @@ export default function CorporateVehiclesScreen() {
     resetMaintenanceForm();
   };
 
-  const startEditingMaintenance = (m: VehicleMaintenance) => {
+  const startEditingMaintenance = async (m: VehicleMaintenance) => {
     setIsMaintenanceFormOpen(true);
     setMaintenanceEditing(m);
     setMaintenanceFecha(isoToDate(m.fecha));
@@ -2826,7 +2876,17 @@ export default function CorporateVehiclesScreen() {
     setMaintenanceKmSiguiente(String(m.kilometraje_siguiente_revision ?? ''));
     setMaintenanceNombreMecanico(m.nombre_mecanico || '');
     // Cargar firma del mecánico formateada correctamente
-    setMaintenanceFirmaMecanico(formatSignatureForDisplay(m.firma_mecanico));
+    const hydratedMaintenanceFirmaMecanico = await hydrateOrWrapLegacySignature(m.firma_mecanico);
+    setMaintenanceFirmaMecanico(hydratedMaintenanceFirmaMecanico);
+    // Un mantenimiento ya registrado (con id de servidor) sin firma disponible localmente significa
+    // que la jerarquía no la trajo (ya no viaja ahí); si además no hay conexión para consultarla en
+    // el endpoint dedicado, se avisa en vez de mostrar el estado "sin firma".
+    if (!hydratedMaintenanceFirmaMecanico && Number((m as any).id) > 0) {
+      const isConnected = await getConnectionStatus();
+      setMaintenanceFirmaMecanicoUnavailableOffline(!isConnected);
+    } else {
+      setMaintenanceFirmaMecanicoUnavailableOffline(false);
+    }
     setMaintenanceFirmaResponsable(decodeFirmaHash(m.firma_responsable) as any);
   };
 
@@ -3387,6 +3447,18 @@ export default function CorporateVehiclesScreen() {
   const formatSignatureForDisplay = (value?: string | null) => {
     if (!value) return '';
     return value.startsWith('data:') ? value : `data:image/png;base64,${value}`;
+  };
+
+  /**
+   * `value` puede ser un data URI, una referencia local a expo-files (firmas cacheadas tras esta
+   * migración), o (legado) base64 puro sin prefijo. Intenta cada forma en orden, sin perder datos.
+   */
+  const hydrateOrWrapLegacySignature = async (value?: string | null): Promise<string> => {
+    if (!value) return '';
+    if (value.startsWith('data:')) return value;
+    const hydrated = await hydrateSignatureRef(value);
+    if (hydrated) return hydrated;
+    return formatSignatureForDisplay(value);
   };
 
   const openSignatureModal = (target: 'maintenance_mecanico' | 'use_conductor') => {
@@ -4997,6 +5069,8 @@ export default function CorporateVehiclesScreen() {
                   <ThemedView style={styles.signatureInfo}>
                     {useFirmaConductor ? (
                       <Image source={{ uri: formatSignatureForDisplay(useFirmaConductor) }} style={styles.signaturePreview} resizeMode="contain" />
+                    ) : useFirmaConductorUnavailableOffline ? (
+                      <ThemedText style={styles.signatureLine}>{FIRMA_MANUAL_OFFLINE_MESSAGE}</ThemedText>
                     ) : (
                       <ThemedText style={styles.signatureLine}>Sin firma del conductor</ThemedText>
                     )}
@@ -5521,14 +5595,19 @@ export default function CorporateVehiclesScreen() {
 
                   <ThemedText style={styles.sectionTitle}>Firma del mecánico</ThemedText>
                   {!maintenanceFirmaMecanico ? (
-                    <TouchableOpacity
-                      style={styles.signatureButtonPrimary}
-                      onPress={() => openSignatureModal('maintenance_mecanico')}
-                      activeOpacity={0.85}
-                    >
-                      <Ionicons name="create-outline" size={18} color="#FFFFFF" />
-                      <ThemedText style={styles.signatureButtonText}>Dibujar firma</ThemedText>
-                    </TouchableOpacity>
+                    <>
+                      {maintenanceFirmaMecanicoUnavailableOffline ? (
+                        <ThemedText style={styles.signatureLine}>{FIRMA_MANUAL_OFFLINE_MESSAGE}</ThemedText>
+                      ) : null}
+                      <TouchableOpacity
+                        style={styles.signatureButtonPrimary}
+                        onPress={() => openSignatureModal('maintenance_mecanico')}
+                        activeOpacity={0.85}
+                      >
+                        <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+                        <ThemedText style={styles.signatureButtonText}>Dibujar firma</ThemedText>
+                      </TouchableOpacity>
+                    </>
                   ) : (
                     <ThemedView style={styles.signatureInfo}>
                       <ThemedText style={styles.signatureInfoTitle}>Firma del mecánico registrada</ThemedText>
@@ -5536,7 +5615,7 @@ export default function CorporateVehiclesScreen() {
                         <Image source={{ uri: formatSignatureForDisplay(maintenanceFirmaMecanico) }} style={styles.signaturePreview} resizeMode="contain" />
                         <TouchableOpacity
                           style={styles.removeImageBtn}
-                          onPress={() => setMaintenanceFirmaMecanico('')}
+                          onPress={() => { setMaintenanceFirmaMecanico(''); setMaintenanceFirmaMecanicoUnavailableOffline(false); }}
                           activeOpacity={0.85}
                         >
                           <Ionicons name="trash-outline" size={18} color="#FF3B30" />

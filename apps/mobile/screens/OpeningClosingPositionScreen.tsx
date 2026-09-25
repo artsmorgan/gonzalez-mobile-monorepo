@@ -51,7 +51,7 @@ import { useQRScanner } from '@/hooks/useQRScanner';
 import authedFetch from '@/hooks/authedFetch';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
-import { getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
+import { getLocalFileDisplayUri, saveFile, persistSignatureRef, hydrateSignatureRef, deleteSignatureLocalRef, saveBase64File } from '@/hooks/fileStorage';
 import {
   buildOpeningClosingImagenesJsonForUpload,
   deleteOpeningClosingLocalFilesFromMeta,
@@ -600,6 +600,18 @@ export default function OpeningClosingPositionScreen() {
     return `data:image/png;base64,${signature}`;
   };
 
+  /**
+   * `value` puede ser un data URI, una referencia local a expo-files (firmas cacheadas tras esta
+   * migración), o (legado) base64 puro sin prefijo. Intenta cada forma en orden, sin perder datos.
+   */
+  const hydrateOrWrapLegacySignature = async (value?: string | null): Promise<string | null> => {
+    if (!value) return null;
+    if (value.startsWith('data:')) return value;
+    const hydrated = await hydrateSignatureRef(value);
+    if (hydrated) return hydrated;
+    return formatSignatureForDisplay(value);
+  };
+
   const appendTokenToUrl = useCallback((url: string): string => {
     if (!url) return '';
     const token = String(queryAccessToken || '').trim();
@@ -999,7 +1011,24 @@ export default function OpeningClosingPositionScreen() {
         }
 
         if (result.status && Array.isArray(result.data)) {
-          const merged = mergeEvaluationsCacheOcpForCorpo(fullCache, result.data, corpoIdNum);
+          // Las firmas llegan en base64 desde el servidor; se guardan en expo-files y solo se
+          // conserva la referencia en el cache (nunca el base64).
+          const localizedData = await Promise.all(
+            (result.data as any[]).map(async (row) => {
+              const next = { ...row };
+              for (const f of ['firma_representante_cliente', 'firma_representante_empresa_entrante', 'firma_representante_empresa_saliente']) {
+                if (next[f]) {
+                  try {
+                    next[f] = await saveBase64File({ base64: next[f], extension: 'png', type: 'image', prefix: `ocp_${f}` });
+                  } catch {
+                    next[f] = null;
+                  }
+                }
+              }
+              return next;
+            })
+          );
+          const merged = mergeEvaluationsCacheOcpForCorpo(fullCache, localizedData, corpoIdNum);
           await AsyncStorage.setItem('evaluations_cache', JSON.stringify(merged));
           const forList = filterOcpFromEvaluationsCacheByCorpo(merged, corpoIdNum);
           setPositions(dedupeOcpRows(forList) as OpeningClosingPosition[]);
@@ -1437,9 +1466,9 @@ export default function OpeningClosingPositionScreen() {
     setDeletedRemoteImageIds([]);
 
     setOtrasObservaciones(record.otras_observaciones || '');
-    setFirmaRepresentanteCliente(formatSignatureForDisplay(record.firma_representante_cliente ?? null));
-    setFirmaRepresentanteEmpresaEntrante(formatSignatureForDisplay(record.firma_representante_empresa_entrante ?? null));
-    setFirmaRepresentanteEmpresaSaliente(formatSignatureForDisplay(record.firma_representante_empresa_saliente ?? null));
+    setFirmaRepresentanteCliente(await hydrateOrWrapLegacySignature(record.firma_representante_cliente ?? null));
+    setFirmaRepresentanteEmpresaEntrante(await hydrateOrWrapLegacySignature(record.firma_representante_empresa_entrante ?? null));
+    setFirmaRepresentanteEmpresaSaliente(await hydrateOrWrapLegacySignature(record.firma_representante_empresa_saliente ?? null));
     setFirmaResponsable(record.firma_responsable || '');
   };
 
@@ -1744,7 +1773,18 @@ export default function OpeningClosingPositionScreen() {
       } else {
         const localId = generateRandomId();
 
-        await mergeOrPushOpeningClosingCreateEvaluationsActions(localId, requestData, currentMarcaData.id);
+        // Las firmas se guardan en expo-files; solo se conserva la referencia en cache/actions.
+        const fClienteRefOffline = await persistSignatureRef({ value: fCliente, prefix: 'ocp_firma_cliente' });
+        const fEntranteRefOffline = await persistSignatureRef({ value: fEntrante, prefix: 'ocp_firma_entrante' });
+        const fSalienteRefOffline = await persistSignatureRef({ value: fSaliente, prefix: 'ocp_firma_saliente' });
+        const requestDataOffline = {
+          ...requestData,
+          firma_representante_cliente: fClienteRefOffline,
+          firma_representante_empresa_entrante: fEntranteRefOffline,
+          firma_representante_empresa_saliente: fSalienteRefOffline,
+        };
+
+        await mergeOrPushOpeningClosingCreateEvaluationsActions(localId, requestDataOffline, currentMarcaData.id);
 
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
@@ -1772,9 +1812,9 @@ export default function OpeningClosingPositionScreen() {
           actividades: actividadesStr,
           inventario: inventarioStr,
           otras_observaciones: otrasObservaciones.trim() || null,
-          firma_representante_cliente: fCliente,
-          firma_representante_empresa_entrante: fEntrante,
-          firma_representante_empresa_saliente: fSaliente,
+          firma_representante_cliente: fClienteRefOffline,
+          firma_representante_empresa_entrante: fEntranteRefOffline,
+          firma_representante_empresa_saliente: fSalienteRefOffline,
           firma_responsable: firmaResponsable,
           cliente_nombre: selectedClienteNode?.nombre || null,
           corpo_nombre: selectedSucursalNode?.nombre || null,
@@ -1892,9 +1932,41 @@ export default function OpeningClosingPositionScreen() {
 
         const isLocalDraft = editingRecord.id == null;
 
+        // Las firmas se guardan en expo-files; solo se conserva la referencia en cache/actions. La
+        // referencia previa (tal como estaba el registro en cache antes de este cambio) permite
+        // reemplazar/borrar el archivo correcto en vez de acumular huérfanos.
+        const cacheStrForFirma = await AsyncStorage.getItem('evaluations_cache');
+        const cacheForFirma = cacheStrForFirma ? JSON.parse(cacheStrForFirma) : [];
+        const previousCachedRow = cacheForFirma.find(
+          (item: any) =>
+            item.type === 'opening_closing_position' &&
+            (item.id === recordIdStr || String(item.id) === recordIdStr || item.id_local === recordIdStr)
+        );
+        const fClienteRefOffline = await persistSignatureRef({
+          value: fCliente,
+          previousRef: previousCachedRow?.firma_representante_cliente ?? null,
+          prefix: 'ocp_firma_cliente',
+        });
+        const fEntranteRefOffline = await persistSignatureRef({
+          value: fEntrante,
+          previousRef: previousCachedRow?.firma_representante_empresa_entrante ?? null,
+          prefix: 'ocp_firma_entrante',
+        });
+        const fSalienteRefOffline = await persistSignatureRef({
+          value: fSaliente,
+          previousRef: previousCachedRow?.firma_representante_empresa_saliente ?? null,
+          prefix: 'ocp_firma_saliente',
+        });
+        const requestDataOffline = {
+          ...requestData,
+          firma_representante_cliente: fClienteRefOffline,
+          firma_representante_empresa_entrante: fEntranteRefOffline,
+          firma_representante_empresa_saliente: fSalienteRefOffline,
+        };
+
         if (isLocalDraft) {
           const localKey = String(editingRecord.id_local || recordIdStr);
-          await mergeOrPushOpeningClosingCreateEvaluationsActions(localKey, requestData, marcaFallback);
+          await mergeOrPushOpeningClosingCreateEvaluationsActions(localKey, requestDataOffline, marcaFallback);
         } else {
           const actionsStr = await AsyncStorage.getItem('evaluations_actions');
           let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
@@ -1911,7 +1983,7 @@ export default function OpeningClosingPositionScreen() {
             id: recordIdStr,
             action: 'update',
             type: OCP_EVAL_TYPE,
-            payload: requestData,
+            payload: requestDataOffline,
             synced: false,
           });
           await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
@@ -1938,9 +2010,9 @@ export default function OpeningClosingPositionScreen() {
                 actividades: JSON.stringify(actividades || []),
                 inventario: JSON.stringify(shouldPersistInventario ? (inventario || []) : []),
                 otras_observaciones: otrasObservaciones.trim() || null,
-                firma_representante_cliente: getBase64Only(firmaRepresentanteCliente),
-                firma_representante_empresa_entrante: getBase64Only(firmaRepresentanteEmpresaEntrante),
-                firma_representante_empresa_saliente: getBase64Only(firmaRepresentanteEmpresaSaliente),
+                firma_representante_cliente: fClienteRefOffline,
+                firma_representante_empresa_entrante: fEntranteRefOffline,
+                firma_representante_empresa_saliente: fSalienteRefOffline,
                 firma_responsable: firmaResponsable,
                 cliente_nombre: selectedClienteNode?.nombre || item.cliente_nombre || null,
                 corpo_nombre: selectedSucursalNode?.nombre || item.corpo_nombre || null,

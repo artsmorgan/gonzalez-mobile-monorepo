@@ -907,7 +907,11 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(
         cell.border = border;
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     }
-    wsMain.views = [{ state: "frozen", ySplit: 12 }];
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente.
+    for (const sheet of [wsMain, wsDet]) {
+        sheet.views = [{ showGridLines: false }];
+    }
     wsMain.columns = [
         { width: 3 },
         { width: 12 },

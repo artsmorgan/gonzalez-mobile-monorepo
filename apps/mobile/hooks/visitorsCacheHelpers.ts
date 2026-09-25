@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import authedFetch from '@/hooks/authedFetch';
+import { localizeSignatureFieldInList, deleteSignatureLocalRef } from '@/hooks/fileStorage';
 
 const VISITORS_CACHE_KEY = 'visitors_cache';
 
@@ -18,6 +19,8 @@ export type VisitorCacheRow = {
   cliente_id?: number;
   /** Si el servidor envía isActive: false, no debería mostrarse; pendientes offline sin campo se tratan como activos. */
   isActive?: boolean;
+  /** Referencia local a expo-files (o, por compatibilidad, un data URI) de la firma del visitante. */
+  firma_visitante?: string | null;
 };
 
 export function getVisitorCorpoId(v: VisitorCacheRow): number | null {
@@ -104,9 +107,21 @@ export async function syncVisitorsCacheFromNetwork(params: {
   if (!data?.status || !Array.isArray(data.data)) {
     return { ok: false, message: data?.message || 'Respuesta inválida' };
   }
+  // La firma del visitante llega en base64 desde el servidor; se guarda en expo-files antes de
+  // cachear, para no acumular base64 en AsyncStorage.
+  const localizedFresh = await localizeSignatureFieldInList<VisitorCacheRow>(data.data, 'firma_visitante', 'visitor_firma');
   const prev = await readVisitorsCacheRaw();
-  const merged = mergeVisitorsCacheForCorpo(prev, data.data, corpoId);
+  // Los registros de esta sucursal que se van a reemplazar quedan obsoletos: sus archivos de firma
+  // (si son referencias locales) se borran tras guardar el cache actualizado.
+  const staleRefs = prev
+    .filter((v) => getVisitorCorpoId(v) === corpoId && !isVisitorLocalPending(v))
+    .map((v: any) => v.firma_visitante)
+    .filter((ref: any) => typeof ref === 'string' && ref.length > 0);
+  const merged = mergeVisitorsCacheForCorpo(prev, localizedFresh, corpoId);
   await AsyncStorage.setItem(VISITORS_CACHE_KEY, JSON.stringify(merged));
+  for (const ref of staleRefs) {
+    await deleteSignatureLocalRef(ref);
+  }
   return { ok: true };
 }
 

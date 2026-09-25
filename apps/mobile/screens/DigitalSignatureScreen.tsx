@@ -26,6 +26,7 @@ import getCurrentUserDigitalSignature, {
   SIGNATURE_USER_ACTION_SCREEN,
   type DigitalSignatureOptions,
 } from '@/hooks/getCurrentUserDigitalSignature';
+import { saveBase64File, deleteSignatureLocalRef, resolveStoredSignatureDisplayUri } from '@/hooks/fileStorage';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -257,18 +258,26 @@ export default function DigitalSignatureScreen() {
     navigation.goBack();
   };
 
-  const persistEmployeeFirmaManual = async (signature: string) => {
+  /**
+   * `firmaManual` guarda solo una referencia a expo-files (nunca el base64 completo). Si ya había
+   * un archivo previo referenciado y es distinto al nuevo, se borra para no dejar huérfanos.
+   */
+  const persistEmployeeFirmaManual = async (fileName: string) => {
     if (!employee) return;
-    employee.firmaManual = signature;
+    const previousRef = employee.firmaManual;
+    employee.firmaManual = fileName;
     try {
       const empRaw = await AsyncStorage.getItem('employee_data');
       if (empRaw) {
         const emp = JSON.parse(empRaw);
-        emp.firmaManual = signature;
+        emp.firmaManual = fileName;
         await AsyncStorage.setItem('employee_data', JSON.stringify(emp));
       }
     } catch (e) {
       console.error('Error persisting firmaManual in employee_data:', e);
+    }
+    if (previousRef && previousRef !== fileName) {
+      await deleteSignatureLocalRef(previousRef);
     }
   };
 
@@ -294,8 +303,14 @@ export default function DigitalSignatureScreen() {
           if (response?.ok) {
             const data = await response.json();
             if (data?.status && data.manualSignature) {
-              setManualSignature(data.manualSignature);
-              await persistEmployeeFirmaManual(data.manualSignature);
+              const fileName = await saveBase64File({
+                base64: data.manualSignature,
+                extension: 'png',
+                type: 'image',
+                prefix: 'digital_signature_manual',
+              });
+              setManualSignature(fileName);
+              await persistEmployeeFirmaManual(fileName);
               return;
             }
           }
@@ -362,26 +377,43 @@ export default function DigitalSignatureScreen() {
     setIsSavingSignature(true);
 
     const networkState = await Network.getNetworkStateAsync();
+    const isOnline = !!(networkState.isConnected && networkState.isInternetReachable);
+    const previousPendingRef = await AsyncStorage.getItem('manual_signature_cache');
 
     try {
       let status_result = false;
       let message_result = "";
-      if (networkState.isConnected && networkState.isInternetReachable) {
-
+      if (isOnline) {
         const data = await saveManualSignature({ signature, employeeId: employee.id, refreshAccessToken, logout });
-
         status_result = data.status;
         message_result = data.message;
       } else {
         status_result = true;
-        await AsyncStorage.setItem('manual_signature_cache', signature);
-        await persistEmployeeFirmaManual(signature);
       }
 
       if (status_result) {
+        // La firma dibujada se guarda una sola vez en expo-files; la misma referencia se reutiliza
+        // para el cache pendiente (si aplica) y para `employee_data`.
+        const fileName = await saveBase64File({
+          base64: signature,
+          extension: 'png',
+          type: 'image',
+          prefix: 'digital_signature_manual',
+        });
+
+        if (isOnline) {
+          // Ya se sincronizó: no queda nada pendiente por enviar (saveManualSignature ya limpia la clave).
+          await AsyncStorage.removeItem('manual_signature_cache');
+        } else {
+          await AsyncStorage.setItem('manual_signature_cache', fileName);
+        }
+        if (previousPendingRef && previousPendingRef !== fileName) {
+          await deleteSignatureLocalRef(previousPendingRef);
+        }
+
         Alert.alert('Éxito', 'Firma guardada correctamente');
-        await persistEmployeeFirmaManual(signature);
-        setManualSignature(signature);
+        await persistEmployeeFirmaManual(fileName);
+        setManualSignature(fileName);
         setIsDrawingMode(false);
       } else {
         throw new Error(message_result || 'Error al guardar la firma');
@@ -606,8 +638,8 @@ export default function DigitalSignatureScreen() {
                       <ThemedText style={styles.signatureLabel}>
                         Tu firma actual:
                       </ThemedText>
-                      <Image 
-                        source={{ uri: manualSignature }}
+                      <Image
+                        source={{ uri: resolveStoredSignatureDisplayUri(manualSignature) }}
                         style={styles.signatureImage}
                         resizeMode="contain"
                       />

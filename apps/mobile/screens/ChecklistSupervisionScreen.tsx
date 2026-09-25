@@ -54,7 +54,7 @@ import ArticuloMantenimientoArchivosModal from '@/components/ArticuloMantenimien
 import type { ArticuloMantenimientoPendingFile } from '@/utils/articuloMantenimientoFiles';
 import { serializeArticulosPuestoForStorage } from '@/utils/articuloMantenimientoFiles';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
-import { deleteFile, getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
+import { deleteFile, getLocalFileDisplayUri, saveFile, persistSignatureRef, hydrateSignatureRef, deleteSignatureLocalRef, resolveStoredSignatureDisplayUri } from '@/hooks/fileStorage';
 import {
   clearChecklistSupervisionFormDraft,
   collectChecklistFormDraftLocalFileNames,
@@ -2099,9 +2099,11 @@ export default function ChecklistSupervisionScreen() {
       filterPuestoIdRef.current = puestoScope;
       setFilterPuestoId(puestoScope);
 
+      let previouslyCachedRows: ChecklistSupervisionUI[] = [];
       try {
         const cached = await loadChecklistSupervisionCacheForPuesto(puestoScope);
-        setChecklists(dedupeChecklistRows(cached) as ChecklistSupervisionUI[]);
+        previouslyCachedRows = dedupeChecklistRows(cached) as ChecklistSupervisionUI[];
+        setChecklists(previouslyCachedRows);
       } catch {
         /* conservar lista previa si falla la caché */
       }
@@ -2123,7 +2125,27 @@ export default function ChecklistSupervisionScreen() {
         const list = dedupeChecklistRows(
           normalizeApiChecklistRows(rawRows, puestoScope) as ChecklistSupervisionItem[],
         );
-        const enrichedList = await enrichChecklistsWithSupervisorNames(list as ChecklistSupervisionUI[]);
+        const enrichedListRaw = await enrichChecklistsWithSupervisorNames(list as ChecklistSupervisionUI[]);
+        // La firma llega en base64 desde el servidor; se guarda en expo-files y solo se conserva la
+        // referencia en el cache (nunca el base64). Se limpia el archivo de la referencia previa
+        // (ya reemplazada por la recién descargada) para no acumular huérfanos.
+        const previousByServerId = new Map<number, any>(
+          (Array.isArray(previouslyCachedRows) ? previouslyCachedRows : [])
+            .filter((it: any) => Number(it?.id) > 0)
+            .map((it: any) => [Number(it.id), it]),
+        );
+        const enrichedList = await Promise.all(
+          enrichedListRaw.map(async (row) => {
+            if (!row.firma_supervisor) return row;
+            const previousRef = previousByServerId.get(Number(row.id))?.firma_supervisor ?? null;
+            const firmaRef = await persistSignatureRef({
+              value: row.firma_supervisor,
+              previousRef,
+              prefix: 'checklist_supervision_firma',
+            });
+            return { ...row, firma_supervisor: firmaRef } as ChecklistSupervisionUI;
+          }),
+        );
         setChecklists(enrichedList);
         await mergeChecklistSupervisionServerIntoCacheForPuesto(puestoScope, enrichedList);
       } else if (!result.status) {
@@ -2719,12 +2741,20 @@ export default function ChecklistSupervisionScreen() {
   const persistListSupervisorSignature = async (row: ChecklistSupervisionUI, formattedSignature: string): Promise<boolean> => {
     const matchesRow = (c: ChecklistSupervisionUI) => rowMatchesSignatureTarget(c, row);
     const isLocalOnly = !row.id || Number(row.id) === 0;
+    // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions (nunca el
+    // base64). `row.firma_supervisor` (tal como estaba antes de este cambio) permite reemplazar o
+    // borrar el archivo correcto en vez de acumular huérfanos.
+    const firmaRef = (await persistSignatureRef({
+      value: formattedSignature,
+      previousRef: (row as any)?.firma_supervisor ?? null,
+      prefix: 'checklist_supervision_firma',
+    })) ?? '';
 
     if (isLocalOnly && row.id_local) {
       const puestoId = resolveChecklistRowPuestoId(row, filterPuestoIdRef.current);
       const bucket = await loadChecklistSupervisionCacheForPuesto(puestoId);
       const next = bucket.map((c) =>
-        matchesRow(c as ChecklistSupervisionUI) ? { ...c, firma_supervisor: formattedSignature } : c,
+        matchesRow(c as ChecklistSupervisionUI) ? { ...c, firma_supervisor: firmaRef } : c,
       );
       const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
       const actions = actionsStr ? JSON.parse(actionsStr) : [];
@@ -2732,7 +2762,7 @@ export default function ChecklistSupervisionScreen() {
       if (idx !== -1) {
         actions[idx] = {
           ...actions[idx],
-          requestData: { ...actions[idx].requestData, firma_supervisor: formattedSignature },
+          requestData: { ...actions[idx].requestData, firma_supervisor: firmaRef },
         };
         await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(actions));
       }
@@ -2760,7 +2790,7 @@ export default function ChecklistSupervisionScreen() {
         Number(c.id) === Number(row.id)
           ? applyServerPayloadToCachedChecklistRow(c, {
               ...(sr && typeof sr === 'object' ? sr : {}),
-              firma_supervisor: sr?.firma_supervisor ?? formattedSignature,
+              firma_supervisor: firmaRef,
             })
           : c,
       );
@@ -2773,7 +2803,7 @@ export default function ChecklistSupervisionScreen() {
       const puestoId = resolveChecklistRowPuestoId(row, filterPuestoIdRef.current);
       const bucket = await loadChecklistSupervisionCacheForPuesto(puestoId);
       const next = bucket.map((c) =>
-        matchesRow(c as ChecklistSupervisionUI) ? { ...c, firma_supervisor: formattedSignature } : c,
+        matchesRow(c as ChecklistSupervisionUI) ? { ...c, firma_supervisor: firmaRef } : c,
       );
       const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
       const actions = actionsStr ? JSON.parse(actionsStr) : [];
@@ -2781,7 +2811,7 @@ export default function ChecklistSupervisionScreen() {
       if (uidx !== -1) {
         actions[uidx] = {
           ...actions[uidx],
-          requestData: { ...actions[uidx].requestData, firma_supervisor: formattedSignature },
+          requestData: { ...actions[uidx].requestData, firma_supervisor: firmaRef },
         };
       } else {
         const fidx = actions.findIndex(
@@ -2791,7 +2821,7 @@ export default function ChecklistSupervisionScreen() {
           type: 'update_supervisor_firma' as const,
           id: row.id,
           id_local: row.id_local || '',
-          firma_supervisor: formattedSignature,
+          firma_supervisor: firmaRef,
         };
         if (fidx !== -1) actions[fidx] = entry;
         else actions.push(entry);
@@ -3548,7 +3578,9 @@ export default function ChecklistSupervisionScreen() {
     setIsCreating(true);
     setFecha(it.fecha ? new Date(it.fecha) : new Date(horaAccion));
     setEjecutivoCuenta(it.ejecutivo_cuenta || '');
-    setFirmaSupervisor(it.firma_supervisor || '');
+    // `firma_supervisor` puede venir del cache como referencia local a expo-files: se hidrata a un
+    // data URI real, porque este estado también se reenvía al servidor al guardar el formulario.
+    setFirmaSupervisor((await hydrateSignatureRef(it.firma_supervisor)) || it.firma_supervisor || '');
     setFirmaResponsable(it.firma_responsable || '');
 
     const empleadoId = Number((it as any).empleado_id ?? 0);
@@ -3801,13 +3833,20 @@ export default function ChecklistSupervisionScreen() {
             editing.id_local && String(editing.id_local).length > 0
               ? editing.id_local
               : `local-checklist-${Date.now()}-${generateRandomId()}`;
+          // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions.
+          const firmaRefUpdate = await persistSignatureRef({
+            value: firmaSupervisor || null,
+            previousRef: (editing as any)?.firma_supervisor ?? null,
+            prefix: 'checklist_supervision_firma',
+          });
+          const requestDataOffline = { ...requestData, firma_supervisor: firmaRefUpdate };
           const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
           const actions = actionsStr ? JSON.parse(actionsStr) : [];
           const entry = {
             type: 'update' as const,
             id: editing.id,
             id_local: localId,
-            requestData,
+            requestData: requestDataOffline,
             ...(planillasToken ? { planillasToken } : {}),
           };
           const uidx = actions.findIndex((a: any) => a.type === 'update' && a.id === editing.id);
@@ -3824,7 +3863,7 @@ export default function ChecklistSupervisionScreen() {
             return normalizeChecklistRowForCache(
               {
                 ...c,
-                ...requestData,
+                ...requestDataOffline,
                 id_local: localId,
                 cliente: {
                   id: selectedClienteId!,
@@ -3875,9 +3914,16 @@ export default function ChecklistSupervisionScreen() {
               const clienteNode = empresaNode?.clientes?.find((c: any) => c.id === selectedClienteId);
               const sucursalNode = sucursales.find((s: any) => s.id === selectedCorpoId);
               const puestoNode = puestos.find((p: any) => p.id === selectedPuestoId);
+              // El servidor puede devolver `firma_supervisor` en base64: nunca se debe volcar tal
+              // cual al cache, se persiste primero como referencia local a expo-files.
+              const firmaSupervisorRefCreateOnline = await persistSignatureRef({
+                value: (payload && typeof payload === 'object' ? (payload as any).firma_supervisor : null) ?? firmaSupervisor ?? null,
+                previousRef: null,
+                prefix: 'checklist_supervision_firma',
+              });
               const serverRow: ChecklistSupervisionUI =
                 payload && typeof payload === 'object' && Number((payload as any).id) === newId
-                  ? ({ ...(payload as ChecklistSupervisionUI), id_local: '' } as ChecklistSupervisionUI)
+                  ? ({ ...(payload as ChecklistSupervisionUI), firma_supervisor: firmaSupervisorRefCreateOnline, id_local: '' } as ChecklistSupervisionUI)
                   : {
                       id: newId,
                       empresa_id: selectedEmpresaId!,
@@ -3891,7 +3937,7 @@ export default function ChecklistSupervisionScreen() {
                       ejecutivo_cuenta: ejecutivoCuenta,
                       evaluacion: evaluacionStr,
                       articulos_puesto: articulosPuesto as any,
-                      firma_supervisor: firmaSupervisor,
+                      firma_supervisor: firmaSupervisorRefCreateOnline ?? '',
                       firma_responsable: firmaResponsable,
                       created_by: typeof employee?.id === 'number' ? employee.id : Number(employee?.id ?? 0),
                       created_at: horaAccionIso,
@@ -3941,12 +3987,19 @@ export default function ChecklistSupervisionScreen() {
             editing?.id_local && String(editing.id_local).length > 0
               ? editing.id_local
               : `local-checklist-${Date.now()}-${generateRandomId()}`;
+          // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions.
+          const firmaRefCreate = await persistSignatureRef({
+            value: firmaSupervisor || null,
+            previousRef: (editing as any)?.firma_supervisor ?? null,
+            prefix: 'checklist_supervision_firma',
+          });
+          const requestDataOffline = { ...requestData, firma_supervisor: firmaRefCreate };
           const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
           const actions = actionsStr ? JSON.parse(actionsStr) : [];
           const entry = {
             type: 'create' as const,
             id_local: localId,
-            requestData,
+            requestData: requestDataOffline,
             ...(planillasToken ? { planillasToken } : {}),
           };
           const existingIdx = actions.findIndex((a: any) => a.type === 'create' && a.id_local === localId);
@@ -3975,7 +4028,7 @@ export default function ChecklistSupervisionScreen() {
             ejecutivo_cuenta: ejecutivoCuenta,
             evaluacion: evaluacionStr,
             articulos_puesto: articulosPuesto,
-            firma_supervisor: firmaSupervisor,
+            firma_supervisor: firmaRefCreate ?? '',
             firma_responsable: firmaResponsable,
             created_by: typeof employee?.id === 'number' ? employee.id : (employee?.id ? Number(employee.id) : 0),
             created_at: new Date(horaAccion).toISOString(),
@@ -4079,6 +4132,7 @@ export default function ChecklistSupervisionScreen() {
               const puestoId = resolveChecklistRowPuestoId(it, filterPuestoIdRef.current);
               const bucket = await loadChecklistSupervisionCacheForPuesto(puestoId);
               const nextBucket = bucket.filter((c) => Number(c.id) !== Number(it.id));
+              if ((it as any).firma_supervisor) await deleteSignatureLocalRef((it as any).firma_supervisor);
               await saveChecklistSupervisionCacheForPuesto(puestoId, nextBucket);
               await syncChecklistsFromCache(puestoId);
 
@@ -4098,6 +4152,7 @@ export default function ChecklistSupervisionScreen() {
               const nextBucket = bucket.filter(
                 (c) => String((c as ChecklistSupervisionUI).id_local || '') !== String(it.id_local),
               );
+              if ((it as any).firma_supervisor) await deleteSignatureLocalRef((it as any).firma_supervisor);
               await saveChecklistSupervisionCacheForPuesto(puestoId, nextBucket);
               await syncChecklistsFromCache(puestoId);
 
@@ -4411,7 +4466,7 @@ export default function ChecklistSupervisionScreen() {
                 {it.firma_supervisor && String(it.firma_supervisor).trim() !== '' ? (
                   <>
                     <Image
-                      source={{ uri: formatSignatureForDisplay(it.firma_supervisor) }}
+                      source={{ uri: resolveStoredSignatureDisplayUri(it.firma_supervisor) }}
                       style={styles.listSignatureImage}
                       resizeMode="contain"
                     />

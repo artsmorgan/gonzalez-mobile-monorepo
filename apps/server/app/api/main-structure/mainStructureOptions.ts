@@ -1,6 +1,3 @@
-import fs from "fs/promises";
-import path from "path";
-
 export type MainStructureScope = {
     empresaId?: number | null;
     clienteId?: number | null;
@@ -24,7 +21,6 @@ export type MainStructureModules = {
 export type MainStructureBuildRequest = {
     scope: MainStructureScope;
     modules: MainStructureModules;
-    mergeWithExisting: boolean;
 };
 
 export const DEFAULT_MAIN_STRUCTURE_MODULES: MainStructureModules = {
@@ -73,104 +69,5 @@ export function parseMainStructureBuildRequest(body: unknown): MainStructureBuil
     return {
         scope: parseScope(o.scope),
         modules: anyModule ? modules : { ...DEFAULT_MAIN_STRUCTURE_MODULES },
-        mergeWithExisting: o.mergeWithExisting !== false,
     };
-}
-
-export function scopeHasFilter(scope: MainStructureScope): boolean {
-    return (
-        scope.puestoId != null ||
-        scope.sucursalId != null ||
-        scope.contratoId != null ||
-        scope.divisionId != null ||
-        scope.clienteId != null ||
-        scope.empresaId != null
-    );
-}
-
-type HierarchyContext = {
-    empresaId: number;
-    clienteId: number;
-    divisionId: number;
-    contratoId: number;
-    sucursalId: number;
-    puestoId?: number;
-};
-
-/** Determina si un nodo de la jerarquía cae dentro del alcance seleccionado. */
-export function matchesMainStructureScope(ctx: HierarchyContext, scope: MainStructureScope): boolean {
-    if (scope.puestoId != null) {
-        return ctx.puestoId === scope.puestoId;
-    }
-    if (scope.sucursalId != null) {
-        if (ctx.puestoId != null) {
-            return ctx.sucursalId === scope.sucursalId;
-        }
-        return ctx.sucursalId === scope.sucursalId;
-    }
-    if (scope.contratoId != null) {
-        if (ctx.sucursalId != null || ctx.puestoId != null) {
-            return ctx.contratoId === scope.contratoId;
-        }
-        return ctx.contratoId === scope.contratoId;
-    }
-    if (scope.divisionId != null) {
-        return ctx.divisionId === scope.divisionId;
-    }
-    if (scope.clienteId != null) {
-        return ctx.clienteId === scope.clienteId;
-    }
-    if (scope.empresaId != null) {
-        return ctx.empresaId === scope.empresaId;
-    }
-    return true;
-}
-
-/** Sucursal incluida si el alcance apunta a ella o a un puesto/contrato/cliente descendiente. */
-export function sucursalMatchesScope(
-    ctx: Omit<HierarchyContext, "puestoId">,
-    scope: MainStructureScope,
-): boolean {
-    return matchesMainStructureScope({ ...ctx, puestoId: undefined }, scope);
-}
-
-export function puestoMatchesScope(ctx: HierarchyContext, scope: MainStructureScope): boolean {
-    return matchesMainStructureScope(ctx, scope);
-}
-
-export function mainStructureCachePath(): string {
-    return path.resolve(process.cwd(), "main-structure.json");
-}
-
-export async function loadMainStructureFragmentsFromDisk(): Promise<Record<string, unknown>> {
-    const outPath = mainStructureCachePath();
-    try {
-        const data = await fs.readFile(outPath, "utf8");
-        const parsed = JSON.parse(data) as { fragments?: unknown };
-        if (parsed.fragments && typeof parsed.fragments === "object" && !Array.isArray(parsed.fragments)) {
-            return parsed.fragments as Record<string, unknown>;
-        }
-    } catch {
-        /* cache inexistente o corrupto */
-    }
-    return {};
-}
-
-export async function persistMainStructureFragmentsToDisk(
-    fragments: Record<string, unknown>,
-): Promise<number> {
-    const { toZonedTime } = await import("date-fns-tz");
-    const createdAt = toZonedTime(new Date(), "America/Costa_Rica").getTime();
-    const outPath = mainStructureCachePath();
-    const tmpPath = `${outPath}.tmp`;
-    await fs.mkdir(path.dirname(outPath), { recursive: true });
-    const payload = JSON.stringify({ created_at: createdAt, fragmentsVersion: 2, fragments }, null, 2);
-    await fs.writeFile(tmpPath, payload, "utf8");
-    try {
-        await fs.rename(tmpPath, outPath);
-    } catch {
-        await fs.unlink(outPath).catch(() => undefined);
-        await fs.rename(tmpPath, outPath);
-    }
-    return createdAt;
 }

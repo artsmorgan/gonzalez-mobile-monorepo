@@ -155,8 +155,9 @@ class ExcelWriter {
     async fillUserLoginSheet(rows: any[]): Promise<void> {
         const sheet = this.workbook.addWorksheet("Ingresos de usuario", {
             properties: { outlineProperties: { summaryBelow: false, summaryRight: false } },
-            views: [{ state: "frozen", ySplit: 3 }],
         });
+        // Fondo blanco: se oculta la cuadrícula de Excel, así solo se ven los bordes que dibujamos manualmente.
+        sheet.views = [{ showGridLines: false }];
 
         sheet.mergeCells("A1:H1");
         const title = sheet.getCell("A1");

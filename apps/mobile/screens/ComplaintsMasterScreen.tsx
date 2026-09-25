@@ -16,6 +16,8 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
+import RecordAudioButton from '@/components/RecordAudioButton';
+import AudioPreviewModal from '@/components/AudioPreviewModal';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
@@ -466,6 +468,7 @@ export default function ComplaintsMasterScreen() {
   /** Solo archivos **nuevos** en el formulario (se muestran al usuario). */
   const [imageFiles, setImageFiles] = useState<LocalFile[]>([]);
   const [audioFiles, setAudioFiles] = useState<LocalFile[]>([]);
+  const [audioPreview, setAudioPreview] = useState<{ uri: string; label: string } | null>(null);
   const [videoFiles, setVideoFiles] = useState<LocalFile[]>([]);
   const [documentFiles, setDocumentFiles] = useState<LocalFile[]>([]);
 
@@ -1258,6 +1261,10 @@ export default function ComplaintsMasterScreen() {
       console.error('Error picking file for complaint:', e);
       Alert.alert('Error', 'No se pudo seleccionar el archivo. Intenta nuevamente.');
     }
+  };
+
+  const handleRecordedComplaintAudio = async (uri: string) => {
+    await addPickedComplaintFileAsset('audio', { uri, name: `grabacion_${Date.now()}.m4a`, mimeType: 'audio/m4a' });
   };
 
   const preloadExistingFilesForEdit = useCallback(async (record: Complaint) => {
@@ -2952,6 +2959,11 @@ export default function ComplaintsMasterScreen() {
             <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('audio')}>
               <Ionicons name="mic-outline" size={20} color="#007AFF" />
             </TouchableOpacity>
+            <RecordAudioButton
+              variant="icon"
+              onRecorded={handleRecordedComplaintAudio}
+              buttonStyle={styles.fileIconButton}
+            />
             <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('video')}>
               <Ionicons name="videocam-outline" size={20} color="#007AFF" />
             </TouchableOpacity>
@@ -2977,13 +2989,17 @@ export default function ComplaintsMasterScreen() {
               ))}
 
               {audioFiles.map(file => (
-                <ThemedView key={file.id} style={styles.fileRow}>
+                <TouchableOpacity
+                  key={file.id}
+                  style={styles.fileRow}
+                  onPress={() => setAudioPreview({ uri: file.uri || getLocalFileDisplayUri(file.storedFileName || ''), label: file.name })}
+                >
                   <Ionicons name="musical-notes-outline" size={16} color="#007AFF" />
                   <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
                   <TouchableOpacity onPress={() => void removeLocalFile('audio', file)}>
                     <Ionicons name="trash" size={16} color="#FF3B30" />
                   </TouchableOpacity>
-                </ThemedView>
+                </TouchableOpacity>
               ))}
 
               {videoFiles.map(file => (
@@ -3433,6 +3449,13 @@ export default function ComplaintsMasterScreen() {
         title={cambiosTitle}
         items={cambiosItems}
         onClose={closeCambiosModal}
+      />
+
+      <AudioPreviewModal
+        visible={!!audioPreview}
+        onClose={() => setAudioPreview(null)}
+        sourceUri={audioPreview?.uri}
+        label={audioPreview?.label}
       />
 
       <AppFooter />

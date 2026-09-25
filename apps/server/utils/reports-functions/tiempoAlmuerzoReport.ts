@@ -329,6 +329,11 @@ export async function buildTiempoAlmuerzoExcelConsolidado(
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Tiempo de almuerzo");
     const wsPausas = wb.addWorksheet("Pausas");
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente.
+    for (const sheet of [wsMain, wsPausas]) {
+        sheet.views = [{ showGridLines: false }];
+    }
     const anchorPausasById = new Map<number, number>();
 
     for (const r of [...rows].sort((a, b) => Number(b.id) - Number(a.id))) {
@@ -380,7 +385,6 @@ export async function buildTiempoAlmuerzoExcelConsolidado(
         cell.border = borderThin;
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     }
-    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.columns = [
         { width: 3 },
         { width: 12 },

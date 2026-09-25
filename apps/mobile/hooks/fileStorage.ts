@@ -105,6 +105,114 @@ export function getLocalFileDisplayUri(fileName: string): string {
 }
 
 /**
+ * Referencia local (nombre de archivo) o, por compatibilidad, un data URI ya guardado tal cual ->
+ * URI mostrable en `<Image />`. Útil para firmas manuales guardadas en expo-files cuyo cache/actions
+ * solo conserva el nombre de archivo.
+ */
+export function resolveStoredSignatureDisplayUri(value: string | null | undefined): string {
+  if (!value) return '';
+  if (value.startsWith('data:')) return value;
+  return getLocalFileDisplayUri(value);
+}
+
+/**
+ * Referencia local (o, por compatibilidad, un data URI ya en base64) -> data URI listo para enviar
+ * al servidor. Usado al sincronizar una firma manual guardada como referencia a expo-files.
+ */
+export async function hydrateSignatureRef(ref: string | null | undefined): Promise<string | undefined> {
+  if (!ref) return undefined;
+  if (ref.startsWith('data:')) return ref;
+  try {
+    const g = await getFile(ref);
+    return `data:image/png;base64,${g.base64}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Borra el archivo local de una firma manual ya usada (no hace nada si `ref` ya era un data URI). */
+export async function deleteSignatureLocalRef(ref: string | null | undefined): Promise<void> {
+  if (!ref || ref.startsWith('data:')) return;
+  try {
+    await deleteFile(ref);
+  } catch {
+    /* idempotente */
+  }
+}
+
+/**
+ * Convierte una firma recién dibujada/descargada (`value`) en una referencia local a expo-files.
+ * `value` puede ser un data URI, base64 puro sin prefijo (algunos módulos lo envían así al backend),
+ * o ya una referencia local existente (se detecta comprobando que el archivo exista, no solo por el
+ * prefijo `data:`) — en ese caso se deja igual. Si `previousRef` era una referencia local distinta a
+ * la resultante, se borra su archivo (evita huérfanos). Si `value` viene vacío, solo se limpia
+ * `previousRef` y se devuelve `null`.
+ */
+export async function persistSignatureRef(params: {
+  value: string | null | undefined;
+  previousRef?: string | null;
+  prefix: string;
+}): Promise<string | null> {
+  const { value, previousRef, prefix } = params;
+  if (!value) {
+    if (previousRef) await deleteSignatureLocalRef(previousRef);
+    return null;
+  }
+  const isExistingLocalRef = !value.startsWith('data:') && !!getLocalFileDisplayUri(value);
+  const nextRef = isExistingLocalRef ? value : await saveBase64File({ base64: value, extension: 'png', type: 'image', prefix });
+  if (previousRef && previousRef !== nextRef) {
+    await deleteSignatureLocalRef(previousRef);
+  }
+  return nextRef;
+}
+
+/**
+ * Tras sincronizar una acción con éxito: si la respuesta del servidor incluyó un valor para este
+ * campo de firma (la clave está presente, aunque sea `null`/vacío), se guarda como la referencia
+ * local vigente en expo-files, reemplazando la anterior (`previousRef`) y borrando su archivo si
+ * cambió — así la firma en expo-files siempre corresponde al elemento ya sincronizado en cache. Si
+ * el servidor no devolvió esa clave (`undefined`, el endpoint no la incluye en su respuesta), se
+ * conserva `previousRef` tal cual, sin tocar nada.
+ */
+export async function reconcileSignatureFieldAfterSync(
+  serverValue: unknown,
+  previousRef: string | null | undefined,
+  prefix: string
+): Promise<string | null | undefined> {
+  if (serverValue === undefined) return previousRef;
+  return persistSignatureRef({
+    value: (serverValue as string | null) ?? null,
+    previousRef: previousRef ?? null,
+    prefix,
+  });
+}
+
+/**
+ * Convierte el campo `field` (data URI) de cada elemento de `list` en una referencia local a
+ * expo-files, para listas descargadas del servidor que se van a cachear (evita guardar base64 en
+ * AsyncStorage). Elementos sin ese campo, o ya con una referencia, se dejan igual.
+ */
+export async function localizeSignatureFieldInList<T extends Record<string, any>>(
+  list: T[],
+  field: keyof T,
+  prefix: string
+): Promise<T[]> {
+  return Promise.all(
+    list.map(async (item) => {
+      const raw = item[field];
+      if (typeof raw !== 'string' || !raw.startsWith('data:')) return item;
+      try {
+        const fileName = await saveBase64File({ base64: raw, extension: 'png', type: 'image', prefix });
+        return { ...item, [field]: fileName };
+      } catch (error) {
+        console.error(`Error guardando firma descargada en expo-files (${String(field)}):`, error);
+        return { ...item, [field]: null };
+      }
+    })
+  );
+}
+
+/**
  * Obtener archivo (base64 + uri canónica).
  */
 export async function getFile(fileName: string): Promise<{

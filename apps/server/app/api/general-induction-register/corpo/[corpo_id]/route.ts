@@ -3,6 +3,7 @@ import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenBy
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../../utils/hydratePreexistentIncludes";
 import { reportError } from "../../../../../utils/reportError";
+import { hydratePersonasForRecords, GENERAL_INDUCTION_SAFE_SELECT } from "../../personasHelpers";
 
 const GENERAL_INDUCTION_FULL_INCLUDE = {
   c_imagenes_registro_induccion_general: true,
@@ -38,13 +39,14 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
           isActive: true,
         },
         orderBy: { created_at: "desc" },
-        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
+        select: { ...GENERAL_INDUCTION_SAFE_SELECT, ...(sameGroupInclude || {}) },
       },
     });
     await hydratePreexistentRelations(records, preexistentSpecs);
 
     const recordsArray = Array.isArray(records) ? records : [];
-    const recordsWithNames = recordsArray.map((r: any) => ({
+    const recordsHydrated = await hydratePersonasForRecords(req, recordsArray);
+    const recordsWithNames = recordsHydrated.map((r: any) => ({
       ...r,
       id_local: "",
       empresa_nombre: r.e_estructura_empresa ? `${r.e_estructura_empresa.codigo} - ${r.e_estructura_empresa.nombre}` : null,

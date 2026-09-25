@@ -830,7 +830,11 @@ export async function buildChecklistSupervisionExcelConsolidado(
         cell.border = border;
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     }
-    wsMain.views = [{ state: "frozen", ySplit: 12 }];
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente.
+    for (const sheet of [wsMain, wsDet]) {
+        sheet.views = [{ showGridLines: false }];
+    }
     const colWidths = [
         12, 16, 8, 20, 10, 26, 22, 18, 24, 24, 22, 24, 22, 14, 12, 12, 12, 14, 12, 16, 16, 20, 16, 16, 16, 22, 26, 32, 34, 26, 30, 26, 16, 14, 14, 16, 30,
     ];

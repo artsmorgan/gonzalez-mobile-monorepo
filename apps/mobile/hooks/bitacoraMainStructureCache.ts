@@ -14,6 +14,55 @@ import {
   readBitacoraCacheRowsForSucursal,
   setBitacoraCacheRowsForSucursal,
 } from '@/hooks/bitacoraVehiculoDetenidoCacheStorage';
+import { persistSignatureRef, hydrateSignatureRef } from './fileStorage';
+
+function parseInformacionGeneralArray(value: any): any[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+/**
+ * Localiza (persiste a expo-files) el `value` de cada entrada `kind === 'signature'` de
+ * `informacion_general` (bitácora de vehículos detenidos), para no guardar base64 en
+ * `evaluations_cache`/`evaluations_actions`. `previous` (la misma lista tal como estaba antes de
+ * este cambio) permite borrar el archivo huérfano si una firma se reemplazó, emparejando por `key`.
+ * Devuelve un array (misma forma que recibe `informacion_general` en el payload/cache).
+ */
+export async function localizeBitacoraInformacionGeneralFirmas(value: any, previous: any, prefix: string): Promise<any[]> {
+  const parsed = parseInformacionGeneralArray(value);
+  if (parsed.length === 0) return parsed;
+  const prevArr = parseInformacionGeneralArray(previous);
+  const prevByKey = new Map(prevArr.map((f: any) => [String(f?.key ?? ''), f]));
+  return Promise.all(
+    parsed.map(async (f: any) => {
+      if (!f || f.kind !== 'signature') return f;
+      const previousRef = prevByKey.get(String(f.key ?? ''))?.value ?? null;
+      const nextRef = await persistSignatureRef({ value: f.value, previousRef, prefix: `${prefix}_${f.key}` });
+      return { ...f, value: nextRef };
+    })
+  );
+}
+
+/** Inversa de `localizeBitacoraInformacionGeneralFirmas`: referencias locales -> data URI real. */
+export async function hydrateBitacoraInformacionGeneralFirmas(value: any): Promise<any[]> {
+  const parsed = parseInformacionGeneralArray(value);
+  if (parsed.length === 0) return parsed;
+  return Promise.all(
+    parsed.map(async (f: any) => {
+      if (!f || f.kind !== 'signature' || !f.value) return f;
+      const hydrated = await hydrateSignatureRef(f.value);
+      return { ...f, value: hydrated ?? f.value };
+    })
+  );
+}
 
 export function mainStructureCorporateVehiculosKey(sucursal: any): string {
   if (Array.isArray(sucursal?.vehiculos_corporativos)) return 'vehiculos_corporativos';
@@ -492,14 +541,25 @@ export async function mergeBitacorasDetenidosForSucursalFromServer(params: {
     return true;
   });
 
-  const normalizedServer = serverRows
-    .filter((r: any) => r?.isActive !== false)
-    .map((r) => ({
-      ...r,
-      id_local: r.id_local ?? '',
-      sucursal_id: r.sucursal_id ?? sid,
-      corpo_id: r.corpo_id ?? sid,
-    }));
+  // El servidor devuelve las firmas de `informacion_general` en base64: se guardan en expo-files
+  // antes de cachear (nunca base64 crudo en AsyncStorage). Se reconcilian contra la referencia
+  // local ya persistida (si el registro ya estaba cacheado) para no dejar archivos huérfanos.
+  const previousById = new Map(current.map((r: any) => [String(r?.id ?? ''), r]));
+  const normalizedServer = await Promise.all(
+    serverRows
+      .filter((r: any) => r?.isActive !== false)
+      .map(async (r) => ({
+        ...r,
+        id_local: r.id_local ?? '',
+        sucursal_id: r.sucursal_id ?? sid,
+        corpo_id: r.corpo_id ?? sid,
+        informacion_general: await localizeBitacoraInformacionGeneralFirmas(
+          r.informacion_general,
+          previousById.get(String(r?.id ?? ''))?.informacion_general,
+          'bitacora_general_firma'
+        ),
+      }))
+  );
 
   const merged = dedupeBitacoraRows([...normalizedServer, ...localOnly]);
   await setBitacoraCacheRowsForSucursal(sid, merged);

@@ -13,6 +13,8 @@ import {
   Dimensions,
 } from 'react-native';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
+import EmployeeSearchModal, { type EmployeeSearchHit } from '@/components/EmployeeSearchModal';
+import PuestoSearchModal, { type PuestoSearchHit } from '@/components/PuestoSearchModal';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
@@ -55,8 +57,10 @@ import {
   upsertGeneralInductionRegisterFromServerData,
   writeAllGeneralInductionRegisterRecords,
   removeGeneralInductionRegisterFromCacheByKeys,
+  localizeGirPersonasFirmas,
+  hydrateGirPersonasFirmas,
 } from '@/hooks/generalInductionRegisterCache';
-import { saveFile, getFile, deleteFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
+import { saveFile, getFile, deleteFile, getLocalFileDisplayUri, hydrateSignatureRef, deleteSignatureLocalRef } from '@/hooks/fileStorage';
 
 type GeneralInductionRegisterScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -84,7 +88,7 @@ type PersonaItem = {
   id_local: string;
   nombre: string;
   cedula: string;
-  puesto_text: string;
+  puesto_text: string | null;
   puesto_id: number | null;
   firma: string | null;
 };
@@ -359,7 +363,7 @@ function getPuestosForCorpo(structureArr: MainStructureTree, corpoId: number | n
 }
 
 async function getConnectionStatus() {
-  //return false;
+    //return false;
     const networkState = await Network.getNetworkStateAsync();
 
     return (
@@ -564,6 +568,20 @@ function formatSignatureForDisplay(signature: string | null | undefined): string
   return `data:image/png;base64,${s}`;
 }
 
+/**
+ * Resuelve `firma` tal como viene de una lista cacheada (colaboradores/capacitadores) para mostrarla:
+ * `data:` pasa igual; si es una referencia local a expo-files existente, resuelve su URI; si no
+ * (base64 legado nunca migrado a archivo), aplica el mismo criterio que `formatSignatureForDisplay`.
+ */
+function resolveGirFirmaDisplayUri(signature: string | null | undefined): string | null {
+  if (!signature) return null;
+  const s = String(signature);
+  if (s.startsWith('data:')) return s;
+  const localUri = getLocalFileDisplayUri(s);
+  if (localUri) return localUri;
+  return `data:image/png;base64,${s}`;
+}
+
 function formatDateDMY(date: Date): string {
   const day = String(date.getDate()).padStart(2, '0');
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -602,6 +620,12 @@ function buildTemaDataIterative(nodes: TemaNode[]): TemaData {
 const TEMAS_DATA_AYL: TemaData = buildTemaDataIterative(TEMAS_DIV_AYL);
 const TEMAS_DATA_SEG: TemaData = buildTemaDataIterative(TEMAS_DIV_SEG);
 const TEMAS_DATA_EMPTY: TemaData = { flat: [], leafTextById: {} };
+
+/** Opciones fijas del select "División de la inducción" — determinan el checklist de temas y el texto `division` guardado. */
+const INDUCCION_DIVISION_OPTIONS: Array<{ id: number; nombre: string }> = [
+  { id: 5, nombre: 'Aseo y Limpieza' },
+  { id: 4, nombre: 'Seguridad' },
+];
 
 type RoleName = 'OPERATIVO' | 'SUPERVISOR' | 'ADMINISTRATIVO' | string | null;
 
@@ -834,6 +858,8 @@ export default function GeneralInductionRegisterScreen() {
   const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null);
   const [divisionOptions, setDivisionOptions] = useState<Array<{ id: number; nombre: string }>>([]);
   const [isDivisionOptionsLoading, setIsDivisionOptionsLoading] = useState(false);
+  /** "División de la inducción": decide el checklist de temas y el texto `division` guardado (independiente de la jerarquía). */
+  const [induccionDivisionId, setInduccionDivisionId] = useState<number | null>(null);
 
   // form
   const [isCreating, setIsCreating] = useState(false);
@@ -854,6 +880,8 @@ export default function GeneralInductionRegisterScreen() {
   const [expandedColaboradores, setExpandedColaboradores] = useState<string[]>([]);
   const [expandedCapacitadores, setExpandedCapacitadores] = useState<string[]>([]);
   const [colaboradorCodigoInput, setColaboradorCodigoInput] = useState<Record<string, string>>({});
+  const [personaEmployeeSearchTarget, setPersonaEmployeeSearchTarget] = useState<{ listKey: 'colab' | 'cap'; id_local: string } | null>(null);
+  const [colaboradorPuestoSearchId, setColaboradorPuestoSearchId] = useState<string | null>(null);
 
   const [images, setImages] = useState<
     Array<{ id?: number; name?: string; base64?: string; extension?: string; url?: string; localFileName?: string }>
@@ -1334,13 +1362,25 @@ export default function GeneralInductionRegisterScreen() {
             return;
           }
 
-          const serverRecords = (result.data as any[])
-            .filter((r) => r?.isActive !== false)
-            .map((r) => ({
-              ...r,
-              corpo_id: Number(r.corpo_id ?? r.sucursal_id ?? corpoId),
-              synced: true,
-            }));
+          // El servidor devuelve las firmas de colaboradores/capacitadores en base64: se guardan en
+          // expo-files antes de cachear (nunca base64 crudo en AsyncStorage). Se reconcilian contra
+          // la referencia local ya persistida (si el registro ya estaba cacheado) para no dejar
+          // archivos huérfanos en cada refresco de la lista.
+          const previousByServerId = new Map(localAll.map((r: any) => [String(r?.id ?? ''), r]));
+          const serverRecords = await Promise.all(
+            (result.data as any[])
+              .filter((r) => r?.isActive !== false)
+              .map(async (r) => {
+                const previousRow = previousByServerId.get(String(r?.id ?? ''));
+                return {
+                  ...r,
+                  corpo_id: Number(r.corpo_id ?? r.sucursal_id ?? corpoId),
+                  synced: true,
+                  colaboradores: await localizeGirPersonasFirmas(r.colaboradores, previousRow?.colaboradores, 'gir_colaborador_firma'),
+                  capacitadores: await localizeGirPersonasFirmas(r.capacitadores, previousRow?.capacitadores, 'gir_capacitador_firma'),
+                };
+              })
+          );
 
           const merged = [...localOnly, ...serverRecords];
           setRecords(await preloadServerImagesForList(merged));
@@ -1557,10 +1597,11 @@ export default function GeneralInductionRegisterScreen() {
     [puestosForSelectedSucursal]
   );
 
-  const divisionIdForTemas = useMemo(() => {
-    if (roleName === 'OPERATIVO') return marcaDivisionId;
-    return selectedDivisionId;
-  }, [roleName, marcaDivisionId, selectedDivisionId]);
+  const divisionIdForTemas = induccionDivisionId;
+  const induccionDivisionNombre = useMemo(
+    () => INDUCCION_DIVISION_OPTIONS.find((d) => d.id === induccionDivisionId)?.nombre || '',
+    [induccionDivisionId]
+  );
 
   const temasData = useMemo(() => {
     if (divisionIdForTemas === 5) return TEMAS_DATA_AYL;
@@ -1871,6 +1912,25 @@ export default function GeneralInductionRegisterScreen() {
     [findEmployeeInMain]
   );
 
+  const handlePersonaEmployeeHierarchySelect = useCallback(
+    (hit: EmployeeSearchHit) => {
+      if (!personaEmployeeSearchTarget) return;
+      const { listKey, id_local } = personaEmployeeSearchTarget;
+      const nombre = hit.title.replace(/\s*\([^)]*\)\s*$/, '').trim() || hit.title;
+      updatePersona(listKey, id_local, { nombre, cedula: hit.cedula });
+    },
+    [personaEmployeeSearchTarget]
+  );
+
+  const handleColaboradorPuestoHierarchySelect = useCallback(
+    (hit: PuestoSearchHit) => {
+      if (!colaboradorPuestoSearchId) return;
+      const text = hit.codigo ? `${hit.nombre} (${hit.codigo})` : hit.nombre;
+      updatePersona('colab', colaboradorPuestoSearchId, { puesto_id: hit.puestoId, puesto_text: text });
+    },
+    [colaboradorPuestoSearchId]
+  );
+
   const fetchEmpleadoByIdForColaborador = useCallback(
     async (id_local: string, empleadoId: number) => {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
@@ -1950,6 +2010,7 @@ export default function GeneralInductionRegisterScreen() {
 
   const resetForm = async ( horaAccion: number ) => {
     setFecha(new Date(horaAccion));
+    setInduccionDivisionId(null);
     setSelectedTemas(allTemasLeafSelected);
     setColaboradoresList([]);
     setCapacitadoresList([]);
@@ -1985,6 +2046,9 @@ export default function GeneralInductionRegisterScreen() {
       setEditingRecord({ id: record.id ? String(record.id) : null, id_local: record.id_local || '' });
 
       setFecha(record.fecha ? new Date(record.fecha) : new Date(horaAccion));
+      setInduccionDivisionId(
+        INDUCCION_DIVISION_OPTIONS.find((d) => d.nombre === String(record.division || '').trim())?.id ?? null
+      );
 
       const temasParsed = parseTemasPayload(record.temas_a_tratar);
       pendingEditTemasRef.current = temasParsed;
@@ -2063,22 +2127,32 @@ export default function GeneralInductionRegisterScreen() {
         editTemasRestoreDoneRef.current = true;
       }
 
-      setColaboradoresList(safeJsonParse<PersonaItem[]>(record.colaboradores, []).map((p: any) => ({
-        id_local: p.id_local || generateRandomId(),
-        nombre: String(p.nombre || ''),
-        cedula: String(p.cedula || ''),
-        puesto_text: String(p.puesto_text || ''),
-        puesto_id: p.puesto_id !== undefined && p.puesto_id !== null ? Number(p.puesto_id) : null,
-        firma: p.firma ? formatSignatureForDisplay(String(p.firma)) : null,
-      })));
-      setCapacitadoresList(safeJsonParse<PersonaItem[]>(record.capacitadores, []).map((p: any) => ({
-        id_local: p.id_local || generateRandomId(),
-        nombre: String(p.nombre || ''),
-        cedula: String(p.cedula || ''),
-        puesto_text: String(p.puesto_text || ''),
-        puesto_id: p.puesto_id !== undefined && p.puesto_id !== null ? Number(p.puesto_id) : null,
-        firma: p.firma ? formatSignatureForDisplay(String(p.firma)) : null,
-      })));
+      // `firma` puede venir del cache como referencia local a expo-files: se hidrata a un data URI
+      // real para poder mostrarla y, si se guarda de nuevo, reenviarla tal cual.
+      setColaboradoresList(
+        await Promise.all(
+          safeJsonParse<PersonaItem[]>(record.colaboradores, []).map(async (p: any) => ({
+            id_local: p.id_local || generateRandomId(),
+            nombre: String(p.nombre || ''),
+            cedula: String(p.cedula || ''),
+            puesto_text: String(p.puesto_text || ''),
+            puesto_id: p.puesto_id !== undefined && p.puesto_id !== null ? Number(p.puesto_id) : null,
+            firma: p.firma ? (await hydrateSignatureRef(String(p.firma))) || formatSignatureForDisplay(String(p.firma)) : null,
+          }))
+        )
+      );
+      setCapacitadoresList(
+        await Promise.all(
+          safeJsonParse<PersonaItem[]>(record.capacitadores, []).map(async (p: any) => ({
+            id_local: p.id_local || generateRandomId(),
+            nombre: String(p.nombre || ''),
+            cedula: String(p.cedula || ''),
+            puesto_text: String(p.puesto_text || ''),
+            puesto_id: p.puesto_id !== undefined && p.puesto_id !== null ? Number(p.puesto_id) : null,
+            firma: p.firma ? (await hydrateSignatureRef(String(p.firma))) || formatSignatureForDisplay(String(p.firma)) : null,
+          }))
+        )
+      );
 
       setImages(Array.isArray((record as any).images) ? (record as any).images : []);
       setPhotosDirty(false);
@@ -2434,6 +2508,7 @@ export default function GeneralInductionRegisterScreen() {
 
   const validateSaveForm = (): string | null => {
     if (roleName == null) return 'Cargando contexto de marca...';
+    if (!induccionDivisionId) return 'Debes seleccionar la división de la inducción';
     if (roleName === 'OPERATIVO') {
       if (!hasCurrentMarca) return 'Debes tener una marca activa para usar este módulo.';
       if (!marcaClienteId || !marcaCorpoId || !marcaDivisionId || !marcaContratoId || !marcaPuestoId) {
@@ -2459,9 +2534,7 @@ export default function GeneralInductionRegisterScreen() {
       Alert.alert('Error', err);
       return;
     }
-    const temasPayloadDraft = buildTemasPayload(
-      roleName === 'OPERATIVO' ? '' : selectedDivisionNode?.nombre || ''
-    );
+    const temasPayloadDraft = buildTemasPayload(induccionDivisionNombre);
     if (!Array.isArray(temasPayloadDraft.selected) || temasPayloadDraft.selected.length === 0) {
       Alert.alert('Error', 'Debe seleccionar al menos 1 tema (checkbox)');
       return;
@@ -2484,22 +2557,7 @@ export default function GeneralInductionRegisterScreen() {
         return;
       }
 
-      let divisionNombre = '';
-      if (roleName === 'OPERATIVO') {
-        const currentMarcaStr = await AsyncStorage.getItem('current_marca');
-        if (currentMarcaStr) {
-          try {
-            const m = JSON.parse(currentMarcaStr);
-            divisionNombre = String(
-              m?.roleDivision?.division?.nombre || m?.role_division?.division?.nombre || ''
-            );
-          } catch {
-            /* ignore */
-          }
-        }
-      } else {
-        divisionNombre = selectedDivisionNode?.nombre || '';
-      }
+      const divisionNombre = induccionDivisionNombre;
 
       if (!divisionNombre.trim()) {
         Alert.alert('Error', 'No se pudo determinar el nombre de la división');
@@ -2555,6 +2613,49 @@ export default function GeneralInductionRegisterScreen() {
         imagenes: imagenesJson,
       };
 
+      // Las firmas se guardan en expo-files; solo se conserva la referencia en cache/actions (nunca
+      // el base64, ni siquiera el bare-base64 que espera el endpoint). Se reconcilia contra la
+      // referencia local ya persistida del registro en edición (si existe) para no dejar archivos
+      // huérfanos.
+      const previousGirForFirmas = editingRecord
+        ? (await readAllGeneralInductionRegisterRecords()).find(
+            (r: any) =>
+              (editingRecord.id && String(r.id) === String(editingRecord.id)) ||
+              (editingRecord.id_local && String(r.id_local) === String(editingRecord.id_local))
+          )
+        : null;
+      const colaboradoresLocalized = await localizeGirPersonasFirmas(
+        JSON.stringify(
+          colaboradoresList.map((c) => ({
+            id_local: c.id_local,
+            nombre: c.nombre,
+            cedula: c.cedula,
+            puesto_text: c.puesto_text,
+            puesto_id: c.puesto_id,
+            firma: c.firma,
+          }))
+        ),
+        previousGirForFirmas?.colaboradores ?? null,
+        'gir_colaborador_firma'
+      );
+      const capacitadoresLocalized = await localizeGirPersonasFirmas(
+        JSON.stringify(
+          capacitadoresList.map((c) => ({
+            id_local: c.id_local,
+            nombre: c.nombre,
+            cedula: c.cedula,
+            firma: c.firma,
+          }))
+        ),
+        previousGirForFirmas?.capacitadores ?? null,
+        'gir_capacitador_firma'
+      );
+      const requestDataForCache = {
+        ...requestData,
+        colaboradores: colaboradoresLocalized,
+        capacitadores: capacitadoresLocalized,
+      };
+
       const girImagesSnapshot = images.map((im) => ({
         id: im.id,
         name: im.name,
@@ -2604,8 +2705,8 @@ export default function GeneralInductionRegisterScreen() {
             division: requestData.division,
             fecha: requestData.fecha,
             temas_a_tratar: requestData.temas_a_tratar,
-            colaboradores: requestData.colaboradores,
-            capacitadores: requestData.capacitadores,
+            colaboradores: requestDataForCache.colaboradores,
+            capacitadores: requestDataForCache.capacitadores,
             firma_responsable: requestData.firma_responsable,
             created_at: new Date(horaAccion).toISOString(),
             created_by: String(employee?.id || ''),
@@ -2619,7 +2720,7 @@ export default function GeneralInductionRegisterScreen() {
             id: id_local,
             action: 'create',
             type: 'general_induction_register',
-            payload: requestData,
+            payload: requestDataForCache,
             synced: false,
           });
           await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
@@ -2720,7 +2821,7 @@ export default function GeneralInductionRegisterScreen() {
           if (idx !== -1) {
             next[idx] = {
               ...next[idx],
-              payload: { ...(next[idx].payload || {}), ...requestData },
+              payload: { ...(next[idx].payload || {}), ...requestDataForCache },
               synced: false,
             };
           } else {
@@ -2728,7 +2829,7 @@ export default function GeneralInductionRegisterScreen() {
               id: recordId,
               action: 'create',
               type: 'general_induction_register',
-              payload: { ...requestData, id_local: recordId },
+              payload: { ...requestDataForCache, id_local: recordId },
               synced: false,
             });
           }
@@ -2737,7 +2838,7 @@ export default function GeneralInductionRegisterScreen() {
           const filtered = actions.filter(
             (a: any) => !(a.id === recordId && a.action === 'update' && a.type === 'general_induction_register')
           );
-          filtered.push({ id: recordId, action: 'update', type: 'general_induction_register', payload: requestData, synced: false });
+          filtered.push({ id: recordId, action: 'update', type: 'general_induction_register', payload: requestDataForCache, synced: false });
           await AsyncStorage.setItem('evaluations_actions', JSON.stringify(filtered));
         }
 
@@ -2746,7 +2847,7 @@ export default function GeneralInductionRegisterScreen() {
           if (item.id === recordId || item.id_local === recordId) {
             return {
               ...item,
-              ...requestData,
+              ...requestDataForCache,
               id: item.id,
               id_local: item.id_local,
               images: girImagesSnapshot,
@@ -3015,7 +3116,7 @@ export default function GeneralInductionRegisterScreen() {
                       <ThemedText style={styles.detailLine}>—</ThemedText>
                     ) : (
                       colaboradores.map((c: any, idx: number) => {
-                        const sigUri = formatSignatureForDisplay(c?.firma || null);
+                        const sigUri = resolveGirFirmaDisplayUri(c?.firma || null);
                         return (
                           <ThemedView key={String(c?.id_local || idx)} style={styles.personDetailCard}>
                             <ThemedText style={styles.personDetailTitle}>{String(c?.nombre || '').trim() || '—'}</ThemedText>
@@ -3047,7 +3148,7 @@ export default function GeneralInductionRegisterScreen() {
                       <ThemedText style={styles.detailLine}>—</ThemedText>
                     ) : (
                       capacitadores.map((c: any, idx: number) => {
-                        const sigUri = formatSignatureForDisplay(c?.firma || null);
+                        const sigUri = resolveGirFirmaDisplayUri(c?.firma || null);
                         return (
                           <ThemedView key={String(c?.id_local || idx)} style={styles.personDetailCard}>
                             <ThemedText style={styles.personDetailTitle}>{String(c?.nombre || '').trim() || '—'}</ThemedText>
@@ -3249,54 +3350,18 @@ export default function GeneralInductionRegisterScreen() {
 
                 {expanded && (
                   <ThemedView style={styles.expandContent}>
-                    {listKey === 'colab' && (
-                      <ThemedView style={styles.formGroup}>
-                        <ThemedText style={styles.formLabel}>Autocompletar colaborador (online)</ThemedText>
-                        <ThemedView style={styles.firmaButtonsRow}>
-                          <TouchableOpacity
-                            style={styles.firmaBlueButton}
-                            onPress={() => handleScanColaboradorQR(p.id_local)}
-                            activeOpacity={0.85}
-                          >
-                            <Ionicons name="scan-outline" size={18} color="#FFFFFF" />
-                            <ThemedText style={styles.firmaBlueButtonText}>Escanear QR</ThemedText>
-                          </TouchableOpacity>
-                        </ThemedView>
-                        <ThemedView style={styles.codeRow}>
-                          <TextInput
-                            style={[styles.formInput, styles.codeInput]}
-                            value={colaboradorCodigoInput[p.id_local] || ''}
-                            onChangeText={(t) =>
-                              setColaboradorCodigoInput((prev) => ({ ...prev, [p.id_local]: t }))
-                            }
-                            placeholder="Código del empleado"
-                            placeholderTextColor="#999"
-                          />
-                          <TouchableOpacity
-                            style={styles.codeSearchButton}
-                            onPress={async () => {
-                              try {
-                                const isConnected = await getConnectionStatus();
-                                if (!isConnected) {
-                                  Alert.alert('Sin conexión', 'Esta función requiere internet');
-                                  return;
-                                }
-                                await fetchEmpleadoByCodigoForColaborador(
-                                  p.id_local,
-                                  colaboradorCodigoInput[p.id_local] || ''
-                                );
-                              } catch (e: any) {
-                                Alert.alert('Error', e?.message || 'No se pudo buscar por código');
-                              }
-                            }}
-                            activeOpacity={0.85}
-                          >
-                            <Ionicons name="search" size={18} color="#FFFFFF" />
-                            <ThemedText style={styles.buttonText}>Buscar</ThemedText>
-                          </TouchableOpacity>
-                        </ThemedView>
-                      </ThemedView>
-                    )}
+
+                    <ThemedView style={styles.formGroup}>
+                      <ThemedText style={styles.formLabel}>Buscar empleado en la jerarquía</ThemedText>
+                      <TouchableOpacity
+                        style={styles.firmaBlueButton}
+                        onPress={() => setPersonaEmployeeSearchTarget({ listKey, id_local: p.id_local })}
+                        activeOpacity={0.85}
+                      >
+                        <Ionicons name="search" size={18} color="#FFFFFF" />
+                        <ThemedText style={styles.firmaBlueButtonText}>Buscar empleado</ThemedText>
+                      </TouchableOpacity>
+                    </ThemedView>
 
                     <ThemedView style={styles.formGroup}>
                       <ThemedText style={styles.formLabel}>Nombre</ThemedText>
@@ -3321,53 +3386,31 @@ export default function GeneralInductionRegisterScreen() {
                     </ThemedView>
 
                     {listKey === 'colab' && (
-                      <>
-                        <ThemedView style={styles.formGroup}>
-                          <ThemedText style={styles.formLabel}>Puesto</ThemedText>
-                          <TextInput
-                            style={styles.formInput}
-                            value={p.puesto_text}
-                            onChangeText={(t) => updatePersona(listKey, p.id_local, { puesto_text: t })}
-                            placeholder="Puesto"
-                            placeholderTextColor="#999"
-                          />
-                        </ThemedView>
-
-                        <ThemedView style={styles.formGroup}>
-                          <ThemedText style={styles.formLabel}>Seleccionar puesto (sucursal)</ThemedText>
-                          <ThemedView style={styles.pickerWrapper}>
-                            <Picker
-                              selectedValue={p.puesto_id ?? 0}
-                              onValueChange={(v) => {
-                                const id = Number(v) || null;
-                                const found = puestosForSelectedSucursal.find((pp) => pp.id === id);
-                                updatePersona(listKey, p.id_local, {
-                                  puesto_id: id,
-                                  puesto_text: found ? found.nombre : p.puesto_text,
-                                });
-                              }}
-                              enabled={
-                                (roleName === 'OPERATIVO' ? marcaCorpoId : selectedSucursalId) != null &&
-                                puestosForSelectedSucursal.length > 0
-                              }
-                              style={styles.picker}
+                      <ThemedView style={styles.formGroup}>
+                        <ThemedText style={styles.formLabel}>Puesto (opcional)</ThemedText>
+                        {p.puesto_text ? (
+                          <ThemedView style={styles.puestoSelectedBox}>
+                            <ThemedText style={styles.puestoSelectedText} numberOfLines={2}>
+                              {p.puesto_text}
+                            </ThemedText>
+                            <TouchableOpacity
+                              onPress={() => updatePersona(listKey, p.id_local, { puesto_text: null, puesto_id: null })}
+                              activeOpacity={0.85}
                             >
-                              <Picker.Item
-                                label={
-                                  (roleName === 'OPERATIVO' ? marcaCorpoId : selectedSucursalId)
-                                    ? 'Seleccione puesto...'
-                                    : 'Seleccione sucursal primero'
-                                }
-                                value={0}
-                                color="#000000"
-                              />
-                              {puestosForSelectedSucursal.map((pp) => (
-                                <Picker.Item key={pp.id} label={pp.nombre} value={pp.id} color="#000000" />
-                              ))}
-                            </Picker>
+                              <Ionicons name="close-circle" size={24} color="#FF3B30" />
+                            </TouchableOpacity>
                           </ThemedView>
-                        </ThemedView>
-                      </>
+                        ) : (
+                          <TouchableOpacity
+                            style={styles.firmaBlueButton}
+                            onPress={() => setColaboradorPuestoSearchId(p.id_local)}
+                            activeOpacity={0.85}
+                          >
+                            <Ionicons name="search" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.firmaBlueButtonText}>Buscar puesto</ThemedText>
+                          </TouchableOpacity>
+                        )}
+                      </ThemedView>
                     )}
 
                     <ThemedText style={styles.formSectionTitle}>Firma</ThemedText>
@@ -3618,6 +3661,23 @@ export default function GeneralInductionRegisterScreen() {
               </ThemedView>
               )}
 
+              {/* División de la inducción: visible para todos los roles; decide el checklist de temas y el texto `division` guardado. */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>División de la inducción *</ThemedText>
+                <ThemedView style={styles.pickerWrapper}>
+                  <Picker
+                    selectedValue={induccionDivisionId ?? 0}
+                    onValueChange={(v) => setInduccionDivisionId(Number(v) || null)}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Seleccione división..." value={0} color="#000000" />
+                    {INDUCCION_DIVISION_OPTIONS.map((d) => (
+                      <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </ThemedView>
+              </ThemedView>
+
               {/* Temas a tratar (como sección) */}
               <ThemedView style={styles.sectionContainer}>
                 <ThemedView style={styles.sectionHeader}>
@@ -3838,6 +3898,18 @@ export default function GeneralInductionRegisterScreen() {
         onClose={closeCambiosModal}
       />
 
+      <EmployeeSearchModal
+        visible={personaEmployeeSearchTarget !== null}
+        onClose={() => setPersonaEmployeeSearchTarget(null)}
+        onSelect={handlePersonaEmployeeHierarchySelect}
+      />
+
+      <PuestoSearchModal
+        visible={colaboradorPuestoSearchId !== null}
+        onClose={() => setColaboradorPuestoSearchId(null)}
+        onSelect={handleColaboradorPuestoHierarchySelect}
+      />
+
       {/* Modal: vista previa de imagen */}
       <Modal
         visible={isImagePreviewVisible}
@@ -3936,6 +4008,25 @@ const styles = StyleSheet.create({
     color: '#000',
     backgroundColor: '#FFFFFF',
     marginBottom: 10,
+  },
+  puestoSelectedBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: '#F5F5F5',
+    marginTop: 10,
+    gap: 8,
+  },
+  puestoSelectedText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#000',
+    fontWeight: '600',
   },
   disabledField: {
     borderWidth: 1,

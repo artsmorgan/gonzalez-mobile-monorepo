@@ -14,6 +14,8 @@ import { RootStackParamList } from '../App';
 import { useAuth } from '../contexts/AuthContext';
 import { ThemedView } from '../components/ThemedView';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
+import RecordAudioButton from '@/components/RecordAudioButton';
+import AudioPreviewModal from '@/components/AudioPreviewModal';
 import { ThemedText } from '../components/ThemedText';
 import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
@@ -341,6 +343,7 @@ export default function JobManualsScreen() {
   const [textFiles, setTextFiles] = useState<ManualFileLocal[]>([]);
   const [imageFiles, setImageFiles] = useState<ManualFileLocal[]>([]);
   const [audioFiles, setAudioFiles] = useState<ManualFileLocal[]>([]);
+  const [audioPreview, setAudioPreview] = useState<{ uri: string; label: string } | null>(null);
   const [videoFiles, setVideoFiles] = useState<ManualFileLocal[]>([]);
 
   const [isManualCameraVisible, setIsManualCameraVisible] = useState(false);
@@ -2077,6 +2080,10 @@ export default function JobManualsScreen() {
     }
   };
 
+  const handleRecordedManualAudio = async (uri: string) => {
+    await addPickedManualFileAsset('audio', { uri, name: `grabacion_${Date.now()}.m4a`, mimeType: 'audio/m4a' });
+  };
+
   /**
    * Procesa un asset ya elegido (por DocumentPicker o por la cámara) para la sección de
    * visualización. Compartido por `handleAddViewFile` y la cámara para no duplicar el
@@ -2171,6 +2178,10 @@ export default function JobManualsScreen() {
       console.error('Error picking file for visualization:', e);
       Alert.alert('Error', 'No se pudo seleccionar el archivo. Intenta nuevamente.');
     }
+  };
+
+  const handleRecordedViewAudio = async (uri: string) => {
+    await addPickedViewFileAsset('audio', { uri, name: `grabacion_${Date.now()}.m4a`, mimeType: 'audio/m4a' });
   };
 
   const removeViewLocalFile = (type: ManualFileLocal['type'], id: string) => {
@@ -3992,17 +4003,24 @@ export default function JobManualsScreen() {
 
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Audio</ThemedText>
-                <TouchableOpacity
-                  style={styles.addFileButton}
-                  onPress={() => handleAddFile('audio')}
-                >
-                  <Ionicons name="mic-outline" size={18} color="#007AFF" />
-                  <ThemedText style={styles.addFileButtonText}>Añadir audio</ThemedText>
-                </TouchableOpacity>
+                <ThemedView style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                  <TouchableOpacity
+                    style={styles.addFileButton}
+                    onPress={() => handleAddFile('audio')}
+                  >
+                    <Ionicons name="mic-outline" size={18} color="#007AFF" />
+                    <ThemedText style={styles.addFileButtonText}>Añadir audio</ThemedText>
+                  </TouchableOpacity>
+                  <RecordAudioButton onRecorded={handleRecordedManualAudio} label="Grabar audio" />
+                </ThemedView>
                 {audioFiles.length > 0 && (
                   <ThemedView style={styles.filesList}>
                     {audioFiles.map(file => (
-                      <ThemedView key={file.id} style={styles.fileRow}>
+                      <TouchableOpacity
+                        key={file.id}
+                        style={styles.fileRow}
+                        onPress={() => setAudioPreview({ uri: file.uri || (file.localFileName ? getLocalFileDisplayUri(file.localFileName) : ''), label: file.name })}
+                      >
                         <Ionicons name="musical-notes-outline" size={16} color="#007AFF" />
                         <ThemedText numberOfLines={1} style={styles.fileName}>
                           {file.name}
@@ -4010,7 +4028,7 @@ export default function JobManualsScreen() {
                         <TouchableOpacity onPress={() => removeLocalFile('audio', file.id)}>
                           <Ionicons name="trash" size={16} color="#FF3B30" />
                         </TouchableOpacity>
-                      </ThemedView>
+                      </TouchableOpacity>
                     ))}
                   </ThemedView>
                 )}
@@ -4287,6 +4305,13 @@ export default function JobManualsScreen() {
         title={cambiosTitle}
         items={cambiosItems}
         onClose={closeCambiosModal}
+      />
+
+      <AudioPreviewModal
+        visible={!!audioPreview}
+        onClose={() => setAudioPreview(null)}
+        sourceUri={audioPreview?.uri}
+        label={audioPreview?.label}
       />
 
       <AppFooter />
@@ -5462,6 +5487,11 @@ export default function JobManualsScreen() {
                         <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddViewFile('audio')}>
                           <Ionicons name="mic-outline" size={20} color="#007AFF" />
                         </TouchableOpacity>
+                        <RecordAudioButton
+                          variant="icon"
+                          onRecorded={handleRecordedViewAudio}
+                          buttonStyle={styles.fileIconButton}
+                        />
                         <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddViewFile('video')}>
                           <Ionicons name="videocam-outline" size={20} color="#007AFF" />
                         </TouchableOpacity>
@@ -5487,13 +5517,17 @@ export default function JobManualsScreen() {
                           ))}
 
                           {viewAudioFiles.map(file => (
-                            <ThemedView key={file.id} style={styles.fileRow}>
+                            <TouchableOpacity
+                              key={file.id}
+                              style={styles.fileRow}
+                              onPress={() => setAudioPreview({ uri: file.uri || (file.localFileName ? getLocalFileDisplayUri(file.localFileName) : ''), label: file.name })}
+                            >
                               <Ionicons name="musical-notes-outline" size={16} color="#007AFF" />
                               <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
                               <TouchableOpacity onPress={() => removeViewLocalFile('audio', file.id)}>
                                 <Ionicons name="trash" size={16} color="#FF3B30" />
                               </TouchableOpacity>
-                            </ThemedView>
+                            </TouchableOpacity>
                           ))}
 
                           {viewVideoFiles.map(file => (

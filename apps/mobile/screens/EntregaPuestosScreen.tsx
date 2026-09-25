@@ -20,6 +20,7 @@ import { useQRScanner } from '@/hooks/useQRScanner';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import authedFetch from '@/hooks/authedFetch';
+import { persistSignatureRef } from '@/hooks/fileStorage';
 import { Collapsible } from '@/components/Collapsible';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { rewritePuestoArticulosInMainStructure } from '@/hooks/puestoArticulosSync';
@@ -1114,10 +1115,25 @@ export default function EntregaPuestosScreen() {
               } else {
                 // Modo offline
                 const localId = generateRandomId();
+                // Las firmas se guardan en expo-files; solo se conserva la referencia en la acción
+                // encolada (nunca el base64).
+                const firmaRecibeRefOffline = await persistSignatureRef({
+                  value: requestData.firma_recibe || null,
+                  prefix: 'entrega_puesto_firma_recibe',
+                });
+                const firmaEntregaRefOffline = await persistSignatureRef({
+                  value: requestData.firma_entrega || null,
+                  prefix: 'entrega_puesto_firma_entrega',
+                });
+                const requestDataOffline = {
+                  ...requestData,
+                  firma_recibe: firmaRecibeRefOffline,
+                  firma_entrega: firmaEntregaRefOffline,
+                };
                 const actionsStr = await AsyncStorage.getItem('entrega_puestos_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
                 actions.push({
-                  requestData,
+                  requestData: requestDataOffline,
                   marcaId: currentMarca.id,
                   id: localId,
                   type: 'create',

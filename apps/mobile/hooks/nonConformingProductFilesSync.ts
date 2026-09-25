@@ -1,5 +1,39 @@
 import { getFile, getLocalFileDisplayUri, deleteFile, type StoredFileType } from '@/hooks/fileStorage';
 
+/**
+ * `firma_persona_identifico_pnc`/`firma_persona_origino_pnc` viajan al endpoint en base64 puro
+ * (sin prefijo `data:`). En `evaluations_actions` se guardan como referencia a expo-files; esto las
+ * hidrata de vuelta a base64 puro antes de sincronizar. Si `value` no es una referencia local válida,
+ * se asume que ya es base64 (dato legado) y se usa tal cual (quitando un posible prefijo `data:`).
+ */
+async function hydratePncFirmaField(value: unknown): Promise<string | null> {
+  const s = value != null ? String(value).trim() : '';
+  if (!s) return null;
+  try {
+    const { base64 } = await getFile(s);
+    return base64;
+  } catch {
+    return s.startsWith('data:') ? s.split(',').slice(1).join(',') : s;
+  }
+}
+
+/** Borra el archivo local de una firma de PNC ya sincronizada (no hace nada si no era una referencia local). */
+async function deletePncFirmaLocalRef(value: unknown): Promise<void> {
+  const s = value != null ? String(value).trim() : '';
+  if (!s || s.startsWith('data:')) return;
+  try {
+    await deleteFile(s);
+  } catch {
+    /* idempotente */
+  }
+}
+
+/** Borra los archivos locales de ambas firmas de un payload de PNC ya sincronizado. */
+export async function clearPncPendingFirmasFromPayload(payload: Record<string, any> | null | undefined): Promise<void> {
+  await deletePncFirmaLocalRef(payload?.firma_persona_identifico_pnc);
+  await deletePncFirmaLocalRef(payload?.firma_persona_origino_pnc);
+}
+
 const PNC_STORAGE_PREFIX = 'non_conforming_product';
 
 export type PncLocalFileLike = {
@@ -199,10 +233,14 @@ export async function buildNonConformingProductRequestDataForSync(params: {
   const { payload } = params;
   const rawArchivos = parsePncArchivosFromPayload(payload?.archivos);
   const resolved = await resolvePncArchivosForApiRequest(rawArchivos);
+  const firmaIdentifico = await hydratePncFirmaField(payload?.firma_persona_identifico_pnc);
+  const firmaOrigino = await hydratePncFirmaField(payload?.firma_persona_origino_pnc);
   return {
     requestData: {
       ...payload,
       archivos: resolved.archivos,
+      firma_persona_identifico_pnc: firmaIdentifico,
+      firma_persona_origino_pnc: firmaOrigino,
     },
     rawArchivos,
     diskHydrationComplete: resolved.diskHydrationComplete,

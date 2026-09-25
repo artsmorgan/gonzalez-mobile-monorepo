@@ -219,6 +219,11 @@ export async function buildVulnerabilidadExcelConsolidado(
     const workbook = new ExcelJS.Workbook();
     const main = workbook.addWorksheet("Apreciacion vulnerabilidad");
     const details = workbook.addWorksheet("Detalles");
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente.
+    for (const sheet of [main, details]) {
+        sheet.views = [{ showGridLines: false }];
+    }
     const borderThin: Partial<ExcelJS.Borders> = {
         top: { style: "thin" },
         left: { style: "thin" },
@@ -274,7 +279,6 @@ export async function buildVulnerabilidadExcelConsolidado(
         c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } };
         c.border = borderThin;
     });
-    main.views = [{ state: "frozen", ySplit: 12 }];
     main.columns = [
         { width: 3 },
         { width: 12 },

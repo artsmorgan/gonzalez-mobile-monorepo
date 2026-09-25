@@ -3,6 +3,11 @@ import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { reportError } from "../../../../utils/reportError";
+import {
+    hydrateParticipantesForRecords,
+    replaceParticipantesForRegistro,
+    INDUCTION_TOUR_SAFE_SELECT,
+} from "../participantesHelpers";
 
 function parseFechaInput(fecha: any): Date | undefined {
     if (!fecha) return undefined;
@@ -47,7 +52,6 @@ export async function PUT(
             corpo_id,
             puesto_id,
             plaza_id,
-            empleado_id,
             fecha,
             division,
             renglon_edificio,
@@ -57,7 +61,6 @@ export async function PUT(
             aspectos_especificos,
             participantes,
             firma_supervisor,
-            firma_empleado,
             firma_responsable
         } = await req.json();
 
@@ -68,6 +71,7 @@ export async function PUT(
                 table: "c_registro_induccion_recorrido",
                 operation: "findUnique",
                 where: { id: idNum },
+                select: INDUCTION_TOUR_SAFE_SELECT,
             },
         });
         if (!existing) {
@@ -90,14 +94,6 @@ export async function PUT(
         if (corpo_id !== undefined) updateData.corpo_id = Number(corpo_id);
         if (puesto_id !== undefined) updateData.puesto_id = puesto_id !== null ? Number(puesto_id) : null;
         if (plaza_id !== undefined) updateData.plaza_id = Number(plaza_id);
-        if (empleado_id !== undefined) {
-            const empleadoIdNum = Number(empleado_id);
-            if (Number.isNaN(empleadoIdNum) || empleadoIdNum === 0) {
-                await reportError(req, "api/induction-tour-record/[id]", "PUT", 400, "empleado_id inválido");
-                return NextResponse.json({ status: false, message: "empleado_id inválido" }, { status: 400 });
-            }
-            updateData.empleado_id = empleadoIdNum;
-        }
         if (fecha !== undefined) {
             if (fechaParsed) {
                 updateData.fecha = fechaParsed.toISOString();
@@ -109,17 +105,10 @@ export async function PUT(
         if (supervisor_corporacion !== undefined) updateData.supervisor_corporacion = supervisor_corporacion ? String(supervisor_corporacion) : "";
         if (temas_desarrollados !== undefined) updateData.temas_desarrollados = temas_desarrollados ? String(temas_desarrollados) : "[]";
         if (aspectos_especificos !== undefined) updateData.aspectos_especificos = aspectos_especificos ? String(aspectos_especificos) : "[]";
-        if (participantes !== undefined) updateData.participantes = participantes ? String(participantes) : "[]";
         if (firma_supervisor !== undefined) {
             updateData.firma_supervisor =
                 firma_supervisor != null && String(firma_supervisor).trim().length > 0
                     ? String(firma_supervisor).trim()
-                    : null;
-        }
-        if (firma_empleado !== undefined) {
-            updateData.firma_empleado =
-                firma_empleado != null && String(firma_empleado).trim().length > 0
-                    ? String(firma_empleado).trim()
                     : null;
         }
         if (firma_responsable !== undefined) updateData.firma_responsable = firma_responsable ? String(firma_responsable) : "";
@@ -157,6 +146,7 @@ export async function PUT(
                 operation: "update",
                 where: { id: idNum },
                 data: updateData,
+                select: INDUCTION_TOUR_SAFE_SELECT,
             },
         });
 
@@ -179,10 +169,15 @@ export async function PUT(
             });
         }
 
+        if (participantes !== undefined) {
+            await replaceParticipantesForRegistro(req, idNum, participantes);
+        }
+        const [hydratedRecord] = await hydrateParticipantesForRecords(req, [{ ...(updated_record as any), id: idNum }]);
+
         return NextResponse.json({
             status: true,
             message: "Registro de inducción y recorrido actualizado correctamente",
-            data: updated_record
+            data: hydratedRecord
         }, { status: 200 });
 
     } catch (error: unknown) {
@@ -217,6 +212,7 @@ export async function DELETE(
                 table: "c_registro_induccion_recorrido",
                 operation: "findUnique",
                 where: { id: idNum },
+                select: INDUCTION_TOUR_SAFE_SELECT,
             },
         });
         if (!existing) {
@@ -249,7 +245,6 @@ export async function DELETE(
                             corpo_id: existingObj.corpo_id,
                             puesto_id: existingObj.puesto_id,
                             plaza_id: existingObj.plaza_id,
-                            empleado_id: existingObj.empleado_id,
                             fecha: fechaValue,
                             division: existingObj.division,
                             renglon_edificio: existingObj.renglon_edificio,
@@ -257,7 +252,6 @@ export async function DELETE(
                             supervisor_corporacion: existingObj.supervisor_corporacion,
                             temas_desarrollados: existingObj.temas_desarrollados,
                             aspectos_especificos: existingObj.aspectos_especificos,
-                            participantes: existingObj.participantes,
                         },
                         after: null,
                     }]),
@@ -274,6 +268,7 @@ export async function DELETE(
                 table: "c_registro_induccion_recorrido",
                 operation: "delete",
                 where: { id: idNum },
+                select: INDUCTION_TOUR_SAFE_SELECT,
             },
         });
 

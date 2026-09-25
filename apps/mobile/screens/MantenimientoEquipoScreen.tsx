@@ -19,6 +19,8 @@ import SlideMenu from '../components/SlideMenu';
 import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
+import RecordAudioButton from '@/components/RecordAudioButton';
+import AudioPreviewModal from '@/components/AudioPreviewModal';
 import { useAuth } from '../contexts/AuthContext';
 import { downloadAuthedUrlToDevice } from '@/hooks/downloadReportFileToDevice';
 import { eventBus } from '../hooks/eventBus';
@@ -49,7 +51,7 @@ import {
     applyPatchToMantenimientosArray,
     syncPuestoArticulosFragmentFromReportesList,
 } from '@/hooks/mantenimientoEquipoMainStructureSync';
-import { saveFile, getFile, deleteFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
+import { saveFile, getFile, deleteFile, getLocalFileDisplayUri, persistSignatureRef, hydrateSignatureRef, deleteSignatureLocalRef } from '@/hooks/fileStorage';
 import type { StoredFileType } from '@/hooks/fileStorage';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import {
@@ -734,6 +736,8 @@ function normalizeMantenimientoEquipoReporteItem(
     } as ArticuloPuestoMantenimientoItem;
 }
 
+const FIRMA_MANUAL_OFFLINE_MESSAGE = 'Para visualizar las firmas manuales, conéctate a internet y actualiza la lista';
+
 export default function MantenimientoEquipoScreen() {
     const navigation = useNavigation<any>();
     const { employee, refreshAccessToken, logout, accessToken } = useAuth();
@@ -849,6 +853,7 @@ export default function MantenimientoEquipoScreen() {
     const [audioFiles, setAudioFiles] = useState<ActivoFileLocal[]>([]);
     const [videoFiles, setVideoFiles] = useState<ActivoFileLocal[]>([]);
     const [activoFiles, setActivoFiles] = useState<ActivoFileRemote[]>([]);
+    const [audioPreview, setAudioPreview] = useState<{ uri: string; label: string } | null>(null);
 
     // Formulario de actualización
     const [fechaSolucion, setFechaSolucion] = useState<Date | null>(null);
@@ -907,6 +912,7 @@ export default function MantenimientoEquipoScreen() {
     const [armaDiagnostico, setArmaDiagnostico] = useState<string>('');
     const [armaArmeroNombre, setArmaArmeroNombre] = useState<string>('');
     const [armaFirma, setArmaFirma] = useState<string>('');
+    const [armaFirmaUnavailableOffline, setArmaFirmaUnavailableOffline] = useState(false);
     const [mantArmasForm, setMantArmasForm] = useState<string>('');
     /** Al editar no mostramos fotos ya subidas; conservamos aquí los nombres del servidor para el JSON si no hay foto nueva. */
     const originalMantArmasFotoNamesRef = useRef<{ antes: string | null; despues: string | null } | null>(null);
@@ -983,6 +989,7 @@ export default function MantenimientoEquipoScreen() {
 
     const [movFirmaEntrega, setMovFirmaEntrega] = useState<string>('');
     const [movFirmaRecibe, setMovFirmaRecibe] = useState<string>('');
+    const [movFirmasUnavailableOffline, setMovFirmasUnavailableOffline] = useState(false);
     const [movFirmaResponsable, setMovFirmaResponsable] = useState('');
     const [isGeneratingMovFirma, setIsGeneratingMovFirma] = useState(false);
     const [isMovSubmitting, setIsMovSubmitting] = useState(false);
@@ -1288,7 +1295,49 @@ export default function MantenimientoEquipoScreen() {
         return `data:image/png;base64,${base64Clean}`;
     };
 
+    /**
+     * `value` puede ser un data URI, una referencia local a expo-files (firmas cacheadas tras esta
+     * migración), o (legado) base64 puro sin prefijo. Intenta cada forma en orden, sin perder datos.
+     */
+    const hydrateOrWrapLegacySignature = async (value?: string | null): Promise<string> => {
+        if (!value) return '';
+        if (value.startsWith('data:')) return value;
+        const hydrated = await hydrateSignatureRef(value);
+        if (hydrated) return hydrated;
+        return formatSignatureForDisplay(value);
+    };
+
+    /** JSON de `mant_armas_form` con `firma` (data URI) -> misma forma con `firma` como referencia local. */
+    const persistMantArmasFormFirma = async (
+        json: string | null | undefined,
+        previousJson?: string | null
+    ): Promise<string | null> => {
+        if (json == null) return json ?? null;
+        let parsed: any;
+        try {
+            parsed = JSON.parse(json);
+        } catch {
+            return json;
+        }
+        if (!parsed || typeof parsed !== 'object') return json;
+        let previousFirma: string | null = null;
+        if (previousJson) {
+            try {
+                previousFirma = JSON.parse(previousJson)?.firma ?? null;
+            } catch {
+                /* noop */
+            }
+        }
+        const nextFirma = await persistSignatureRef({
+            value: parsed.firma,
+            previousRef: previousFirma,
+            prefix: 'mant_armas_firma',
+        });
+        return JSON.stringify({ ...parsed, firma: nextFirma });
+    };
+
     const getConnectionStatus = async (): Promise<boolean> => {
+        //return false;
         const networkState = await Network.getNetworkStateAsync();
     
         return (
@@ -2715,7 +2764,7 @@ export default function MantenimientoEquipoScreen() {
         resetForm();
     };
 
-    const handleActualizar = (activo: ArticuloMantenimiento) => {
+    const handleActualizar = async (activo: ArticuloMantenimiento) => {
         if (isMantenimientoSoloEvaluacionCache(activo)) {
             Alert.alert(
                 'No editable',
@@ -2787,7 +2836,21 @@ export default function MantenimientoEquipoScreen() {
                 setArmaFotoAntesLocal(null);
                 setArmaFotoDespuesLocal(null);
                 setArmaArmeroNombre(typeof parsed?.armero_nombre === 'string' ? parsed.armero_nombre : '');
-                setArmaFirma(typeof parsed?.firma === 'string' ? (formatSignatureForDisplay(parsed.firma) || parsed.firma) : '');
+                if (typeof parsed?.firma === 'string' && parsed.firma) {
+                    setArmaFirma(await hydrateOrWrapLegacySignature(parsed.firma));
+                    setArmaFirmaUnavailableOffline(false);
+                } else {
+                    setArmaFirma('');
+                    // Un mantenimiento ya registrado (con id de servidor) sin firma disponible
+                    // localmente significa que la jerarquía no la trajo (ya no viaja ahí); si además
+                    // no hay conexión para consultarla en el endpoint dedicado, se avisa.
+                    if (Number(activo.id) > 0) {
+                        const isConnected = await getConnectionStatus();
+                        setArmaFirmaUnavailableOffline(!isConnected);
+                    } else {
+                        setArmaFirmaUnavailableOffline(false);
+                    }
+                }
                 setMantArmasForm(String(raw));
             } else {
                 setEsArma(false);
@@ -2810,6 +2873,7 @@ export default function MantenimientoEquipoScreen() {
                 setArmaFotoDespuesLocal(null);
                 setArmaArmeroNombre('');
                 setArmaFirma('');
+                setArmaFirmaUnavailableOffline(false);
                 setMantArmasForm('');
             }
         } catch {
@@ -2833,6 +2897,7 @@ export default function MantenimientoEquipoScreen() {
             setArmaFotoDespuesLocal(null);
             setArmaArmeroNombre('');
             setArmaFirma('');
+            setArmaFirmaUnavailableOffline(false);
             setMantArmasForm('');
         }
 
@@ -2909,6 +2974,7 @@ export default function MantenimientoEquipoScreen() {
         setArmaDiagnostico('');
         setArmaArmeroNombre('');
         setArmaFirma('');
+        setArmaFirmaUnavailableOffline(false);
         setMantArmasForm('');
         setActivoFiles([]);
         originalMantArmasFotoNamesRef.current = null;
@@ -3033,6 +3099,10 @@ export default function MantenimientoEquipoScreen() {
             console.error('Error picking file:', error);
             Alert.alert('Error', 'No se pudo seleccionar el archivo. Intenta nuevamente.');
         }
+    };
+
+    const handleRecordedAudio = async (uri: string) => {
+        await addPickedAssetAsFile('audio', { uri, name: `grabacion_${Date.now()}.m4a`, mimeType: 'audio/m4a' });
     };
 
     const removeLocalFile = async (file: ActivoFileLocal) => {
@@ -3386,6 +3456,17 @@ export default function MantenimientoEquipoScreen() {
                 mainStructurePatch[k] = requestData[k];
             }
         }
+        // `main_structure_cache`/`articulo_mantenimiento_actions` nunca deben llevar la firma en
+        // base64: se guarda en expo-files y solo se conserva la referencia. `requestData` (enviado
+        // tal cual al servidor si hay conexión) conserva el base64 real, sin tocar.
+        let mantArmasFormLocalized: string | null = null;
+        if (esArma && mainStructurePatch.mant_armas_form) {
+            mantArmasFormLocalized = await persistMantArmasFormFirma(
+                mainStructurePatch.mant_armas_form,
+                (selectedActivo as any)?.mant_armas_form ?? null
+            );
+            mainStructurePatch.mant_armas_form = mantArmasFormLocalized;
+        }
 
         if (isConnected) {
             try {
@@ -3470,6 +3551,13 @@ export default function MantenimientoEquipoScreen() {
             // Modo offline
             const localId = selectedActivo.id_local || generateRandomId();
             const esSoloEvaluacionLocal = isMantenimientoSoloEvaluacionCache(selectedActivo);
+
+            // La firma del formulario de armas se guarda en expo-files; solo se conserva la
+            // referencia en `articulo_mantenimiento_actions`/el cache de activos (`requestData` se
+            // reutiliza para la acción encolada, así que aquí sí se reemplaza por la referencia).
+            if (esArma && mantArmasFormLocalized != null) {
+                requestData.mant_armas_form = mantArmasFormLocalized;
+            }
 
             // Registros válidos (existentes en servidor): encolar PUT para sincronizar luego
             if (Number.isFinite(Number(selectedActivo.id)) && Number(selectedActivo.id) > 0) {
@@ -3939,6 +4027,7 @@ export default function MantenimientoEquipoScreen() {
         setMovHora('');
         setMovFirmaEntrega('');
         setMovFirmaRecibe('');
+        setMovFirmasUnavailableOffline(false);
         setMovFirmaResponsable('');
         setMovEditing(null);
     };
@@ -4163,7 +4252,7 @@ export default function MantenimientoEquipoScreen() {
         setMovHora(timeToHHMMSS(new Date(horaAccion)));
     };
 
-    const startMovEditing = (m: MovimientoArticuloMantenimientoItem) => {
+    const startMovEditing = async (m: MovimientoArticuloMantenimientoItem) => {
         setMovEditing(m);
         setMovIsCreating(true);
         setMovNombreRecibe(m.nombre_persona_recibe || '');
@@ -4175,8 +4264,21 @@ export default function MantenimientoEquipoScreen() {
         setMovFecha(m.fecha ? String(m.fecha).split('T')[0] : '');
         const horaStr = String(m.hora || '');
         setMovHora(horaStr.includes('T') ? horaStr.split('T')[1]?.split('.')[0] || '' : horaStr);
-        setMovFirmaEntrega(m.firma_entrega || '');
-        setMovFirmaRecibe(m.firma_recibe || '');
+        // Las firmas pueden venir del cache como referencia local a expo-files: se hidratan a un
+        // data URI real para que el estado del formulario siga tratándolas como antes.
+        const hydratedMovFirmaEntrega = (await hydrateSignatureRef(m.firma_entrega)) || m.firma_entrega || '';
+        const hydratedMovFirmaRecibe = (await hydrateSignatureRef(m.firma_recibe)) || m.firma_recibe || '';
+        setMovFirmaEntrega(hydratedMovFirmaEntrega);
+        setMovFirmaRecibe(hydratedMovFirmaRecibe);
+        // Un movimiento ya registrado (con id de servidor) sin firma disponible localmente significa
+        // que la jerarquía no la trajo (ya no viaja ahí); si además no hay conexión para consultarla
+        // en el endpoint dedicado, se avisa en vez de invitar a dibujar una firma nueva.
+        if (Number(m.id) > 0 && (!hydratedMovFirmaEntrega || !hydratedMovFirmaRecibe)) {
+            const isConnected = await getConnectionStatus();
+            setMovFirmasUnavailableOffline(!isConnected);
+        } else {
+            setMovFirmasUnavailableOffline(false);
+        }
         setMovFirmaResponsable(m.firma_responsable || '');
     };
 
@@ -4245,6 +4347,16 @@ export default function MantenimientoEquipoScreen() {
                 }
             } else {
                 const localId = `local-mov-${Date.now()}`;
+                // Las firmas se guardan en expo-files; solo se conserva la referencia en cache/actions.
+                const firmaEntregaRefOffline = await persistSignatureRef({
+                    value: payload.firma_entrega || null,
+                    prefix: 'mov_firma_entrega',
+                });
+                const firmaRecibeRefOffline = await persistSignatureRef({
+                    value: payload.firma_recibe || null,
+                    prefix: 'mov_firma_recibe',
+                });
+                const payloadOffline = { ...payload, firma_entrega: firmaEntregaRefOffline, firma_recibe: firmaRecibeRefOffline };
                 const localItem: MovimientoArticuloMantenimientoItem = {
                     id: 0,
                     id_local: localId,
@@ -4258,8 +4370,8 @@ export default function MantenimientoEquipoScreen() {
                     recibe: payload.recibe,
                     fecha: payload.fecha,
                     hora: payload.hora,
-                    firma_entrega: payload.firma_entrega,
-                    firma_recibe: payload.firma_recibe,
+                    firma_entrega: firmaEntregaRefOffline ?? '',
+                    firma_recibe: firmaRecibeRefOffline ?? '',
                     firma_responsable: payload.firma_responsable,
                 };
                 const next = [localItem, ...movimientos];
@@ -4271,7 +4383,7 @@ export default function MantenimientoEquipoScreen() {
                     parent,
                     puestoId: resolvePuestoIdForReporte(movActivo),
                     parentKey: movActivo.key,
-                    requestData: payload,
+                    requestData: payloadOffline,
                 });
                 Alert.alert('Guardado (offline)', 'El movimiento se sincronizará cuando vuelva la conexión.');
                 setMovIsCreating(false);
@@ -4294,6 +4406,20 @@ export default function MantenimientoEquipoScreen() {
                 Alert.alert('Error', res.message || 'No se pudo actualizar el movimiento');
             }
         } else {
+            // Las firmas se guardan en expo-files; solo se conserva la referencia en cache/actions.
+            // La referencia previa (tal como estaba en el movimiento antes de este cambio) permite
+            // reemplazar/borrar el archivo correcto en vez de acumular huérfanos.
+            const firmaEntregaRefUpdate = await persistSignatureRef({
+                value: payload.firma_entrega || null,
+                previousRef: movEditing.firma_entrega ?? null,
+                prefix: 'mov_firma_entrega',
+            });
+            const firmaRecibeRefUpdate = await persistSignatureRef({
+                value: payload.firma_recibe || null,
+                previousRef: movEditing.firma_recibe ?? null,
+                prefix: 'mov_firma_recibe',
+            });
+            const payloadOffline = { ...payload, firma_entrega: firmaEntregaRefUpdate, firma_recibe: firmaRecibeRefUpdate };
             const next = movimientos.map((m) => {
                 const match = (movEditing.id_local && m.id_local === movEditing.id_local) || (!movEditing.id_local && m.id === movEditing.id);
                 if (!match) return m;
@@ -4307,15 +4433,15 @@ export default function MantenimientoEquipoScreen() {
                     recibe: payload.recibe,
                     fecha: payload.fecha,
                     hora: payload.hora,
-                    firma_entrega: payload.firma_entrega,
-                    firma_recibe: payload.firma_recibe,
+                    firma_entrega: firmaEntregaRefUpdate ?? '',
+                    firma_recibe: firmaRecibeRefUpdate ?? '',
                     firma_responsable: payload.firma_responsable,
                 };
             });
             await persistMovimientosToActivosCache(movActivo, next);
 
             if (movEditing.id_local) {
-                const updated = await updateMovCreateActionForLocalId(movEditing.id_local, payload);
+                const updated = await updateMovCreateActionForLocalId(movEditing.id_local, payloadOffline);
                 if (!updated) {
                     await upsertMovAction({
                         type: 'create',
@@ -4324,7 +4450,7 @@ export default function MantenimientoEquipoScreen() {
                         parent,
                         puestoId: resolvePuestoIdForReporte(movActivo),
                         parentKey: movActivo.key,
-                        requestData: payload,
+                        requestData: payloadOffline,
                     });
                 }
             } else {
@@ -4334,7 +4460,7 @@ export default function MantenimientoEquipoScreen() {
                     parent,
                     puestoId: resolvePuestoIdForReporte(movActivo),
                     parentKey: movActivo.key,
-                    requestData: payload,
+                    requestData: payloadOffline,
                 });
             }
 
@@ -4385,6 +4511,8 @@ export default function MantenimientoEquipoScreen() {
                         if (m.id_local || m.id === 0) {
                             const next = movimientos.filter((x) => x.id_local !== m.id_local);
                             await persistMovimientosToActivosCache(movActivo, next);
+                            if (m.firma_entrega) await deleteSignatureLocalRef(m.firma_entrega);
+                            if (m.firma_recibe) await deleteSignatureLocalRef(m.firma_recibe);
                             if (m.id_local) await removeMovActionsForLocalId(m.id_local);
                         } else {
                             const parent = { source: movActivo.source, estructuraId: movActivo.estructura_id };
@@ -4556,6 +4684,7 @@ export default function MantenimientoEquipoScreen() {
                                 setArmaDiagnostico('');
                                 setArmaArmeroNombre('');
                                 setArmaFirma('');
+                                setArmaFirmaUnavailableOffline(false);
                                 setMantArmasForm('');
                             } else {
                                 setEsArma(true);
@@ -4859,12 +4988,14 @@ export default function MantenimientoEquipoScreen() {
                         <TouchableOpacity style={styles.armasSignatureBox} onPress={openArmaSignatureModal} activeOpacity={0.85}>
                             {armaFirma ? (
                                 <Image key={`arma-firma-${armaFirma.length}`} source={{ uri: armaFirma.startsWith('data:') ? armaFirma : formatSignatureForDisplay(armaFirma) || '' }} style={styles.armasSignatureImage} resizeMode="contain" />
+                            ) : armaFirmaUnavailableOffline ? (
+                                <ThemedText style={styles.armasSignatureHint}>{FIRMA_MANUAL_OFFLINE_MESSAGE}</ThemedText>
                             ) : (
                                 <ThemedText style={styles.armasSignatureHint}>Toca aquí para firmar</ThemedText>
                             )}
                         </TouchableOpacity>
                         {armaFirma ? (
-                            <TouchableOpacity style={styles.armasClearSignature} onPress={() => setArmaFirma('')}>
+                            <TouchableOpacity style={styles.armasClearSignature} onPress={() => { setArmaFirma(''); setArmaFirmaUnavailableOffline(false); }}>
                                 <Ionicons name="trash" size={18} color="#FF3B30" />
                                 <ThemedText style={styles.armasClearSignatureText}>Eliminar firma</ThemedText>
                             </TouchableOpacity>
@@ -5256,13 +5387,16 @@ export default function MantenimientoEquipoScreen() {
 
                 <ThemedView style={styles.formGroup}>
                     <ThemedText style={styles.formLabel}>Audio</ThemedText>
-                    <TouchableOpacity
-                        style={styles.addFileButton}
-                        onPress={() => handleAddFile('audio')}
-                    >
-                        <Ionicons name="mic-outline" size={18} color="#007AFF" />
-                        <ThemedText style={styles.addFileButtonText}>Agregar audio</ThemedText>
-                    </TouchableOpacity>
+                    <ThemedView style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                        <TouchableOpacity
+                            style={styles.addFileButton}
+                            onPress={() => handleAddFile('audio')}
+                        >
+                            <Ionicons name="mic-outline" size={18} color="#007AFF" />
+                            <ThemedText style={styles.addFileButtonText}>Agregar audio</ThemedText>
+                        </TouchableOpacity>
+                        <RecordAudioButton onRecorded={handleRecordedAudio} label="Grabar audio" />
+                    </ThemedView>
                     {activoFiles.filter(f => f.type === 'audio').length > 0 && (
                         <ThemedView style={styles.filesList}>
                             {activoFiles.filter(f => f.type === 'audio').map((file) => (
@@ -5296,7 +5430,11 @@ export default function MantenimientoEquipoScreen() {
                     {audioFiles.length > 0 && (
                         <ThemedView style={styles.filesList}>
                             {audioFiles.map(file => (
-                                <ThemedView key={file.id} style={styles.fileRow}>
+                                <TouchableOpacity
+                                    key={file.id}
+                                    style={styles.fileRow}
+                                    onPress={() => setAudioPreview({ uri: file.uri || getLocalFileDisplayUri(file.localFileName || ''), label: file.name })}
+                                >
                                     <Ionicons name="musical-notes-outline" size={16} color="#007AFF" />
                                     <ThemedText numberOfLines={1} style={styles.fileName}>
                                         {file.name}
@@ -5304,7 +5442,7 @@ export default function MantenimientoEquipoScreen() {
                                     <TouchableOpacity onPress={() => void removeLocalFile(file)}>
                                         <Ionicons name="trash" size={16} color="#FF3B30" />
                                     </TouchableOpacity>
-                                </ThemedView>
+                                </TouchableOpacity>
                             ))}
                         </ThemedView>
                     )}
@@ -5758,11 +5896,15 @@ export default function MantenimientoEquipoScreen() {
                                                 <Ionicons name="trash" size={18} color="#FFFFFF" />
                                             </TouchableOpacity>
                                         </ThemedView>
+                                    ) : movFirmasUnavailableOffline ? (
+                                        <ThemedText style={styles.signatureHintMuted}>{FIRMA_MANUAL_OFFLINE_MESSAGE}</ThemedText>
                                     ) : null}
-                                    <TouchableOpacity style={styles.openSignatureButton} onPress={() => openDrawSignatureModal('entrega')}>
-                                        <Ionicons name="create-outline" size={20} color="#000000" />
-                                        <ThemedText style={styles.openSignatureButtonText}>{movFirmaEntrega ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
-                                    </TouchableOpacity>
+                                    {!movFirmasUnavailableOffline || movFirmaEntrega ? (
+                                        <TouchableOpacity style={styles.openSignatureButton} onPress={() => openDrawSignatureModal('entrega')}>
+                                            <Ionicons name="create-outline" size={20} color="#000000" />
+                                            <ThemedText style={styles.openSignatureButtonText}>{movFirmaEntrega ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
+                                        </TouchableOpacity>
+                                    ) : null}
 
                                     <ThemedText style={styles.sectionTitle}>Firma recibe (opcional)</ThemedText>
                                     {movFirmaRecibe ? (
@@ -5772,11 +5914,15 @@ export default function MantenimientoEquipoScreen() {
                                                 <Ionicons name="trash" size={18} color="#FFFFFF" />
                                             </TouchableOpacity>
                                         </ThemedView>
+                                    ) : movFirmasUnavailableOffline ? (
+                                        <ThemedText style={styles.signatureHintMuted}>{FIRMA_MANUAL_OFFLINE_MESSAGE}</ThemedText>
                                     ) : null}
-                                    <TouchableOpacity style={styles.openSignatureButton} onPress={() => openDrawSignatureModal('recibe')}>
-                                        <Ionicons name="create-outline" size={20} color="#000000" />
-                                        <ThemedText style={styles.openSignatureButtonText}>{movFirmaRecibe ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
-                                    </TouchableOpacity>
+                                    {!movFirmasUnavailableOffline || movFirmaRecibe ? (
+                                        <TouchableOpacity style={styles.openSignatureButton} onPress={() => openDrawSignatureModal('recibe')}>
+                                            <Ionicons name="create-outline" size={20} color="#000000" />
+                                            <ThemedText style={styles.openSignatureButtonText}>{movFirmaRecibe ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
+                                        </TouchableOpacity>
+                                    ) : null}
 
                                     <ThemedText style={styles.sectionTitle}>Firma responsable *</ThemedText>
                                     <ThemedView style={styles.signatureButtons}>
@@ -6068,6 +6214,13 @@ export default function MantenimientoEquipoScreen() {
                 title={cambiosTitle}
                 items={cambiosItems}
                 onClose={closeCambiosModal}
+            />
+
+            <AudioPreviewModal
+                visible={!!audioPreview}
+                onClose={() => setAudioPreview(null)}
+                sourceUri={audioPreview?.uri}
+                label={audioPreview?.label}
             />
 
 
