@@ -5,6 +5,11 @@ import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { prisma } from "../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { reportError } from "../../../utils/reportError";
+import {
+    createParticipantesForRegistro,
+    hydrateParticipantesForRecords,
+    INDUCTION_TOUR_SAFE_SELECT,
+} from "./participantesHelpers";
 
 export async function GET(req: NextRequest) {
     try {
@@ -87,12 +92,14 @@ export async function GET(req: NextRequest) {
                 where,
                 orderBy: {
                     created_at: 'desc'
-                }
+                },
+                select: INDUCTION_TOUR_SAFE_SELECT,
             },
         });
         const recordsArray = Array.isArray(records) ? records : [];
+        const recordsHydrated = await hydrateParticipantesForRecords(req, recordsArray);
 
-        const recordsWithIdLocal = recordsArray.map((record: any) => ({
+        const recordsWithIdLocal = recordsHydrated.map((record: any) => ({
             ...record,
             id_local: ""
         }));
@@ -145,7 +152,6 @@ export async function POST(req: NextRequest) {
             corpo_id,
             puesto_id,
             plaza_id,
-            empleado_id,
             fecha,
             division,
             renglon_edificio,
@@ -155,7 +161,6 @@ export async function POST(req: NextRequest) {
             aspectos_especificos,
             participantes,
             firma_supervisor,
-            firma_empleado,
             firma_responsable
         } = await req.json();
 
@@ -193,17 +198,6 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "No se pudieron derivar los IDs de la marca" }, { status: 400 });
         }
 
-        // Validar empleado_id
-        if (!empleado_id) {
-            await reportError(req, "api/induction-tour-record", "POST", 400, "empleado_id es requerido");
-            return NextResponse.json({ status: false, message: "empleado_id es requerido" }, { status: 400 });
-        }
-        const empleadoIdNum = Number(empleado_id);
-        if (Number.isNaN(empleadoIdNum) || empleadoIdNum === 0) {
-            await reportError(req, "api/induction-tour-record", "POST", 400, "empleado_id inv?lido");
-            return NextResponse.json({ status: false, message: "empleado_id inv?lido" }, { status: 400 });
-        }
-
         const fechaParsed = parseFechaInput(fecha);
 
         // Autocompletar campos desde la marca
@@ -219,21 +213,15 @@ export async function POST(req: NextRequest) {
             puesto_id: puestoId,
             plaza_id: plazaId,
             isActive: true,
-            empleado_id: empleadoIdNum,
             division: (division && String(division).trim()) ? String(division).trim() : "Otros",
             renglon_edificio: renglon_edificio ? String(renglon_edificio) : "",
             supervisor_cliente: supervisor_cliente !== undefined && supervisor_cliente !== null ? String(supervisor_cliente) : null,
             supervisor_corporacion: supervisor_corporacion ? String(supervisor_corporacion) : "",
             temas_desarrollados: temas_desarrollados ? String(temas_desarrollados) : "[]",
             aspectos_especificos: aspectos_especificos ? String(aspectos_especificos) : "[]",
-            participantes: participantes ? String(participantes) : "[]",
             firma_supervisor:
                 firma_supervisor != null && String(firma_supervisor).trim().length > 0
                     ? String(firma_supervisor).trim()
-                    : null,
-            firma_empleado:
-                firma_empleado != null && String(firma_empleado).trim().length > 0
-                    ? String(firma_empleado).trim()
                     : null,
             firma_responsable: firma_responsable ? String(firma_responsable) : "",
             created_at: createdAt.toISOString(),
@@ -250,9 +238,12 @@ export async function POST(req: NextRequest) {
                 table: "c_registro_induccion_recorrido",
                 operation: "create",
                 data: createData,
+                select: INDUCTION_TOUR_SAFE_SELECT,
             },
         });
         const newRecordObj = new_record as any;
+
+        const participantesCreated = await createParticipantesForRegistro(req, newRecordObj.id, participantes);
 
         // Registrar cambio de creaci?n
         await callDynamicPrisma({
@@ -276,7 +267,6 @@ export async function POST(req: NextRequest) {
                             corpo_id: newRecordObj.corpo_id,
                             puesto_id: newRecordObj.puesto_id,
                             plaza_id: newRecordObj.plaza_id,
-                            empleado_id: newRecordObj.empleado_id,
                             fecha: fechaParsed ? fechaParsed.toISOString() : null,
                             division: newRecordObj.division,
                             renglon_edificio: newRecordObj.renglon_edificio,
@@ -284,9 +274,8 @@ export async function POST(req: NextRequest) {
                             supervisor_corporacion: newRecordObj.supervisor_corporacion,
                             temas_desarrollados: newRecordObj.temas_desarrollados,
                             aspectos_especificos: newRecordObj.aspectos_especificos,
-                            participantes: newRecordObj.participantes,
+                            participantes: JSON.stringify(participantesCreated),
                             firma_supervisor: newRecordObj.firma_supervisor,
-                            firma_empleado: newRecordObj.firma_empleado,
                             firma_responsable: newRecordObj.firma_responsable,
                         },
                     }]),
@@ -352,16 +341,14 @@ export async function POST(req: NextRequest) {
                 corpo_id: newRecordObj.corpo_id,
                 puesto_id: newRecordObj.puesto_id,
                 plaza_id: newRecordObj.plaza_id,
-                empleado_id: newRecordObj.empleado_id,
                 fecha: newRecordObj.fecha,
                 renglon_edificio: newRecordObj.renglon_edificio,
                 supervisor_cliente: newRecordObj.supervisor_cliente,
                 supervisor_corporacion: newRecordObj.supervisor_corporacion,
                 temas_desarrollados: newRecordObj.temas_desarrollados,
                 aspectos_especificos: newRecordObj.aspectos_especificos,
-                participantes: newRecordObj.participantes,
+                participantes: JSON.stringify(participantesCreated),
                 firma_supervisor: newRecordObj.firma_supervisor,
-                firma_empleado: newRecordObj.firma_empleado,
                 division: newRecordObj.division,
                 firma_responsable: newRecordObj.firma_responsable,
                 created_at: newRecordObj.created_at,

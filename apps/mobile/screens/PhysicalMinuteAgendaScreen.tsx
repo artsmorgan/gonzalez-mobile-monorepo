@@ -20,7 +20,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import * as DocumentPicker from 'expo-document-picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { saveFile, deleteFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
+import { saveFile, deleteFile, getLocalFileDisplayUri, persistSignatureRef, hydrateSignatureRef } from '@/hooks/fileStorage';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -277,24 +277,38 @@ const safeJsonParse = <T,>(value: any, fallback: T): T => {
 };
 
 /**
- * Quita la firma (imagen base64) de cada participante antes de persistir en `evaluations_cache`.
- * El fetch por corpo trae TODOS los registros históricos del corpo en cada consulta, y cada firma
- * pesa varios KB por participante: guardarlas todas indefinidamente en AsyncStorage es lo que
- * termina llenando el almacenamiento local (SQLITE_FULL). Igual que las imágenes de la bitácora,
- * la firma queda disponible en pantalla solo mientras el registro está en memoria (recién
- * consultado); no se conserva en el caché en disco.
+ * Convierte cada `firma` (data URI dibujado) de la lista de participantes en una referencia local a
+ * expo-files, para no guardar base64 en `evaluations_cache`/`evaluations_actions`. Si un participante
+ * ya traía una referencia (sin cambios), se deja igual. `previousList` (los participantes tal como
+ * estaban guardados antes de este cambio) permite borrar el archivo huérfano cuando una firma se
+ * reemplazó o se quitó, comparando por `id_local`.
  */
-const stripFirmaFromParticipantesJson = (value: any): any => {
-  if (typeof value !== 'string' || !value) return value;
-  try {
-    const parsed = JSON.parse(value);
-    if (!Array.isArray(parsed)) return value;
-    const stripped = parsed.map((p: any) => (p && typeof p === 'object' ? { ...p, firma: null } : p));
-    return JSON.stringify(stripped);
-  } catch {
-    return value;
-  }
-};
+async function localizeParticipantesArray(list: any[], previousList?: any[] | null): Promise<any[]> {
+  if (!Array.isArray(list)) return list;
+  const prevById = Array.isArray(previousList)
+    ? new Map(previousList.map((p: any) => [String(p?.id_local ?? ''), p]))
+    : null;
+  return Promise.all(
+    list.map(async (p: any) => {
+      if (!p || typeof p !== 'object') return p;
+      const previousRef = prevById?.get(String(p.id_local ?? ''))?.firma ?? null;
+      const nextRef = await persistSignatureRef({ value: p.firma, previousRef, prefix: 'agenda_minuta_firma' });
+      return { ...p, firma: nextRef };
+    })
+  );
+}
+
+/** Inversa de `localizeParticipantesArray`: referencias locales -> data URI listo para el servidor. */
+async function hydrateParticipantesArray(list: any[]): Promise<any[]> {
+  if (!Array.isArray(list)) return list;
+  return Promise.all(
+    list.map(async (p: any) => {
+      if (!p || typeof p !== 'object' || !p.firma) return p;
+      const hydrated = await hydrateSignatureRef(p.firma);
+      return { ...p, firma: hydrated ?? null };
+    })
+  );
+}
 
 const parseAcuerdosPayload = (value: any): { items: AcuerdoItem[]; meta: AcuerdosPayload['meta'] | null } => {
   const parsed = safeJsonParse<any>(value, null);
@@ -306,9 +320,15 @@ const parseAcuerdosPayload = (value: any): { items: AcuerdoItem[]; meta: Acuerdo
   return { items: [], meta: null };
 };
 
+/**
+ * `signature` puede ser un data URI, una referencia local a expo-files (participantes cacheados
+ * tras esta migración), o (legado) base64 puro sin prefijo. Se intenta cada forma en orden.
+ */
 const formatSignatureForDisplay = (signature: string | null): string | null => {
   if (!signature) return null;
   if (signature.startsWith('data:')) return signature;
+  const localUri = getLocalFileDisplayUri(signature);
+  if (localUri) return localUri;
   return `data:image/png;base64,${signature}`;
 };
 
@@ -1131,7 +1151,11 @@ export default function PhysicalMinuteAgendaScreen() {
     setHoraInicio(parseTimeHHmm(horaInicioVal));
     setHoraFin(parseTimeHHmm(horaFinVal));
 
-    const parsedParticipantes = safeJsonParse<ParticipanteItem[]>(r.participantes, []);
+    // `r.participantes` puede traer referencias locales a expo-files (cache) en vez de base64: se
+    // hidratan aquí para que el resto del formulario (vista previa, envío en línea) siga tratando
+    // `firma` como un data URI normal, igual que antes de esta migración.
+    const parsedParticipantesRaw = safeJsonParse<any[]>(r.participantes, []);
+    const parsedParticipantes = (await hydrateParticipantesArray(parsedParticipantesRaw)) as ParticipanteItem[];
     const parsedAcuerdos = parseAcuerdosPayload(r.acuerdos).items;
     const parsedTemas = safeJsonParse<string[]>((r as any).temas_a_tratar, []);
     setParticipantes(
@@ -1570,13 +1594,23 @@ export default function PhysicalMinuteAgendaScreen() {
 
         if (data.status && Array.isArray(data.data)) {
           const merged = mergeEvaluationsCacheAgendaMinutaForCorpo(fullCache, data.data, searchCorpoIdNum);
-          // Se persiste sin las firmas de participantes (ver `stripFirmaFromParticipantesJson`).
-          // Los registros pendientes de sincronizar (`synced === false`) conservan su firma completa
-          // porque son locales y acotados; solo se recorta lo ya confirmado por el servidor.
-          const mergedForCache = merged.map((item: any) =>
-            isAgendaMinutaCacheType(item?.type) && item?.synced !== false
-              ? { ...item, participantes: stripFirmaFromParticipantesJson(item.participantes) }
-              : item
+          // La firma de cada participante se guarda en expo-files; el cache solo conserva la
+          // referencia (nunca el base64). `fullCache` (antes del merge) indica qué referencia ya
+          // existía para reemplazar/borrar el archivo correcto en vez de acumular huérfanos.
+          const prevParticipantesByKey = new Map<string, any[]>(
+            fullCache
+              .filter((it: any) => isAgendaMinutaCacheType(it?.type))
+              .map((it: any) => [String(it.id || it.id_local || ''), safeJsonParse<any[]>(it.participantes, [])])
+          );
+          const mergedForCache = await Promise.all(
+            merged.map(async (item: any) => {
+              if (!isAgendaMinutaCacheType(item?.type)) return item;
+              const key = String(item.id || item.id_local || '');
+              const previousArr = prevParticipantesByKey.get(key) ?? [];
+              const currentArr = safeJsonParse<any[]>(item.participantes, []);
+              const localizedArr = await localizeParticipantesArray(currentArr, previousArr);
+              return { ...item, participantes: JSON.stringify(localizedArr) };
+            })
           );
           await AsyncStorage.setItem('evaluations_cache', JSON.stringify(mergedForCache));
           const forList = filterAgendaFromEvaluationsCacheByCorpo(merged, searchCorpoIdNum);
@@ -1800,7 +1834,22 @@ export default function PhysicalMinuteAgendaScreen() {
       // tendría solo referencias locales (forma distinta a la metadata de servidor `{id,name}` que
       // usa la sección de imágenes del listado); después de sincronizar, el listado obtiene las
       // imágenes vía "get-image" como el resto de módulos.
-      const { imagenes: _imagenesParaSync, ...payloadForCache } = payload;
+      const { imagenes: _imagenesParaSync, ...payloadForCacheRaw } = payload;
+      // La firma de cada participante se guarda en expo-files; `evaluations_cache`/`evaluations_actions`
+      // solo conservan la referencia. `editingRecord.participantes` (tal como estaba en cache antes de
+      // este cambio) permite borrar el archivo huérfano si una firma se reemplazó o se quitó.
+      const previousParticipantesArr = editingRecord
+        ? safeJsonParse<any[]>((editingRecord as any).participantes, [])
+        : [];
+      const localizedParticipantesArr = await localizeParticipantesArray(
+        safeJsonParse<any[]>(payload.participantes, []),
+        previousParticipantesArr
+      );
+      const localizedParticipantesJson = JSON.stringify(localizedParticipantesArr);
+      const payloadForCache = { ...payloadForCacheRaw, participantes: localizedParticipantesJson };
+      // Para la cola offline (`evaluations_actions`), el payload que se sincronizará luego también
+      // debe llevar la referencia (nunca base64); se hidrata de vuelta justo antes de sincronizar.
+      const payloadForQueue = { ...payload, participantes: localizedParticipantesJson };
       const isConnected = await getConnectionStatus();
 
       if (editingRecord && hasAgendaMinutaServerId(editingRecord)) {
@@ -1812,6 +1861,17 @@ export default function PhysicalMinuteAgendaScreen() {
             logout,
           });
           if (res.status) {
+            // La respuesta del servidor puede traer las firmas en base64: se reconcilian contra los
+            // participantes ya localizados (`localizedParticipantesArr`) para que expo-files siempre
+            // corresponda al elemento ya sincronizado en cache.
+            const serverParticipantesUp = safeJsonParse<any[]>(res.data?.participantes, null as any);
+            const reconciledParticipantesUp = Array.isArray(serverParticipantesUp)
+              ? await localizeParticipantesArray(serverParticipantesUp, localizedParticipantesArr)
+              : localizedParticipantesArr;
+            const payloadForCacheReconciledUp = {
+              ...payloadForCache,
+              participantes: JSON.stringify(reconciledParticipantesUp),
+            };
             const cacheStr = await AsyncStorage.getItem('evaluations_cache');
             const cache = cacheStr ? JSON.parse(cacheStr) : [];
             const editLocalKey = getNonEmptyLocalKey(editingRecord.id_local);
@@ -1826,7 +1886,7 @@ export default function PhysicalMinuteAgendaScreen() {
               ) {
                 return {
                   ...it,
-                  ...payloadForCache,
+                  ...payloadForCacheReconciledUp,
                   id: Number(editingRecord.id),
                   id_local: editLocalKey || '',
                   synced: true,
@@ -1871,7 +1931,7 @@ export default function PhysicalMinuteAgendaScreen() {
           id: queueKey,
           action: 'update',
           type: 'agenda_minuta',
-          payload,
+          payload: payloadForQueue,
           synced: false,
           remote_id: editingRecord.id,
         });
@@ -1914,6 +1974,14 @@ export default function PhysicalMinuteAgendaScreen() {
         if (isConnected) {
           const res = await createAgendaMinuta({ requestData: payload, refreshAccessToken, logout });
           if (res.status) {
+            const serverParticipantesCreate = safeJsonParse<any[]>(res.data?.participantes, null as any);
+            const reconciledParticipantesCreate = Array.isArray(serverParticipantesCreate)
+              ? await localizeParticipantesArray(serverParticipantesCreate, localizedParticipantesArr)
+              : localizedParticipantesArr;
+            const payloadForCacheReconciledCreate = {
+              ...payloadForCache,
+              participantes: JSON.stringify(reconciledParticipantesCreate),
+            };
             const cacheStrDraft = await AsyncStorage.getItem('evaluations_cache');
             const cacheDraft = cacheStrDraft ? JSON.parse(cacheStrDraft) : [];
             const createdId = Number(res?.data?.id);
@@ -1924,7 +1992,7 @@ export default function PhysicalMinuteAgendaScreen() {
               ) {
                 return {
                   ...it,
-                  ...payloadForCache,
+                  ...payloadForCacheReconciledCreate,
                   id: Number.isFinite(createdId) && createdId > 0 ? createdId : it.id,
                   synced: true,
                   type: 'agenda_minuta',
@@ -1952,7 +2020,7 @@ export default function PhysicalMinuteAgendaScreen() {
           Alert.alert('Error', 'Registro local sin id_local');
           return;
         }
-        await mergeOrPushAgendaMinutaCreateEvaluationsActions(draftLocalId, payload);
+        await mergeOrPushAgendaMinutaCreateEvaluationsActions(draftLocalId, payloadForQueue);
 
         const cacheStrDraft = await AsyncStorage.getItem('evaluations_cache');
         const cacheDraft = cacheStrDraft ? JSON.parse(cacheStrDraft) : [];
@@ -1998,7 +2066,7 @@ export default function PhysicalMinuteAgendaScreen() {
             hora_inicio: payload.hora_inicio,
             hora_fin: payload.hora_fin,
             autor: payload.autor,
-            participantes: payload.participantes,
+            participantes: localizedParticipantesJson,
             acuerdos: payload.acuerdos,
             temas_a_tratar: payload.temas_a_tratar,
             observaciones: payload.observaciones,
@@ -2025,7 +2093,7 @@ export default function PhysicalMinuteAgendaScreen() {
       }
 
       const localId = generateRandomId();
-      await mergeOrPushAgendaMinutaCreateEvaluationsActions(localId, payload);
+      await mergeOrPushAgendaMinutaCreateEvaluationsActions(localId, payloadForQueue);
 
       const cacheStr = await AsyncStorage.getItem('evaluations_cache');
       const cache = cacheStr ? JSON.parse(cacheStr) : [];
@@ -2048,7 +2116,7 @@ export default function PhysicalMinuteAgendaScreen() {
         hora_inicio: payload.hora_inicio,
         hora_fin: payload.hora_fin,
         autor: payload.autor,
-        participantes: payload.participantes,
+        participantes: localizedParticipantesJson,
         acuerdos: payload.acuerdos,
         temas_a_tratar: payload.temas_a_tratar,
         observaciones: payload.observaciones,

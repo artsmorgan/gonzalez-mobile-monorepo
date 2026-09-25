@@ -34,6 +34,7 @@ import { useQRScanner } from '@/hooks/useQRScanner';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import SignatureScreen from 'react-native-signature-canvas';
+import { persistSignatureRef, hydrateSignatureRef, deleteSignatureLocalRef, resolveStoredSignatureDisplayUri, saveBase64File } from '@/hooks/fileStorage';
 import {
   createStaffEvaluation,
   deleteStaffEvaluation,
@@ -47,6 +48,7 @@ import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache'
 import {
   filterStaffEvaluationsCacheByCorpo,
   mergeStaffEvaluationsCacheForCorpo,
+  isStaffEvalLocalPendingRecord,
 } from '@/hooks/staffEvaluationsCacheHelpers';
 import {
   buildStaffEvaluacionForSubmit,
@@ -873,14 +875,41 @@ export default function StaffEvaluationsScreen() {
         const fullCache = await parseStaffCache();
 
         if (evalData.status && Array.isArray(evalData.evaluaciones)) {
-          const withCorpo = (evalData.evaluaciones as StaffEvaluation[])
+          const withCorpoRaw = (evalData.evaluaciones as StaffEvaluation[])
             .filter((e) => e && e.isActive !== false)
             .map((e) => ({
               ...e,
               corpo_id: e.corpo_id ?? e.sucursal_id ?? corpo_id,
             }));
+          // La firma manual llega en base64 desde el servidor; se guarda en expo-files y solo se
+          // conserva la referencia en el cache (nunca el base64).
+          const withCorpo = await Promise.all(
+            withCorpoRaw.map(async (e: any) => {
+              if (!e.firma_empleado_manual) return e;
+              try {
+                const fileName = await saveBase64File({
+                  base64: e.firma_empleado_manual,
+                  extension: 'png',
+                  type: 'image',
+                  prefix: 'staff_eval_firma_manual',
+                });
+                return { ...e, firma_empleado_manual: fileName };
+              } catch (error) {
+                console.error('Error guardando firma manual descargada en expo-files:', error);
+                return { ...e, firma_empleado_manual: null };
+              }
+            })
+          );
+          // Las evaluaciones ya sincronizadas de este corpo quedaron reemplazadas por las recién
+          // descargadas: sus archivos de firma manual locales ya son huérfanos.
+          const previouslySynced = fullCache.filter(
+            (row: any) => Number(row?.corpo_id) === Number(corpo_id) && !isStaffEvalLocalPendingRecord(row)
+          );
           const merged = mergeStaffEvaluationsCacheForCorpo(fullCache, withCorpo, corpo_id);
           await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(merged));
+          for (const prevRow of previouslySynced as any[]) {
+            if (prevRow.firma_empleado_manual) await deleteSignatureLocalRef(prevRow.firma_empleado_manual);
+          }
           const forList = filterStaffEvaluationsCacheByCorpo(merged, corpo_id) as StaffEvaluation[];
           setEvaluaciones(forList);
         } else {
@@ -1501,6 +1530,12 @@ export default function StaffEvaluationsScreen() {
     try {
       const hasConnection = await checkConnection();
       if (!hasConnection) {
+        // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions.
+        const firmaRef = await persistSignatureRef({
+          value: sig,
+          previousRef: (ev as any)?.firma_empleado_manual ?? null,
+          prefix: 'staff_eval_firma_manual',
+        });
         const actionsStr = await AsyncStorage.getItem('evaluations_staff_actions');
         let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
         if (!Array.isArray(actions)) actions = [];
@@ -1508,10 +1543,10 @@ export default function StaffEvaluationsScreen() {
           evaluationId: ev.id,
           idLocal: ev.id_local,
           field: 'firma_empleado_manual',
-          value: sig,
+          value: firmaRef,
         });
         await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(actions));
-        await patchStaffEvalSignatureInCache(ev, 'firma_empleado_manual', sig);
+        await patchStaffEvalSignatureInCache(ev, 'firma_empleado_manual', firmaRef);
         Alert.alert(
           'Modo offline',
           'Firma guardada localmente. Se sincronizará cuando haya conexión.'
@@ -1844,9 +1879,15 @@ export default function StaffEvaluationsScreen() {
         }
       } else {
         const localId = Math.random().toString(36).substring(2, 12);
+        // La firma manual se guarda en expo-files; solo se conserva la referencia en cache/actions.
+        const firmaEmpleadoManualRefOffline = await persistSignatureRef({
+          value: firmaEmpleadoManual || null,
+          prefix: 'staff_eval_firma_manual',
+        });
         const { _staffEvalFileSlots: _unusedSlots, ...bodyForQueue } = requestBody as any;
         const requestDataQueued = {
           ...bodyForQueue,
+          firma_empleado_manual: firmaEmpleadoManualRefOffline,
           evaluacion: staffEvaluacionStringForActionPayload(JSON.stringify(sectionsForPayload)),
         };
         const actionsStr = await AsyncStorage.getItem('evaluations_staff_actions');
@@ -1885,7 +1926,7 @@ export default function StaffEvaluationsScreen() {
           tipo: tipoEvaluacionRef.current,
           firma_evaluador: firmaEvaluadorHash!,
           firma_empleado: firmaEmpleadoHash ?? null,
-          firma_empleado_manual: firmaEmpleadoManual || null,
+          firma_empleado_manual: firmaEmpleadoManualRefOffline,
           id_local: localId,
           corpo_id: selectedCorpoId ?? undefined,
           empresa_id: selectedEmpresaId ?? undefined,
@@ -1953,6 +1994,7 @@ export default function StaffEvaluationsScreen() {
           const filtered = cache.filter((item) =>
             localId ? item.id_local !== localId : item.id !== ev.id
           );
+          if ((ev as any).firma_empleado_manual) await deleteSignatureLocalRef((ev as any).firma_empleado_manual);
           await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(filtered));
         }
 
@@ -1989,6 +2031,7 @@ export default function StaffEvaluationsScreen() {
         const cacheStr = await AsyncStorage.getItem('evaluations_staff_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
         const filteredCache = cache.filter((item: StaffEvaluation) => item.id !== ev.id);
+        if ((ev as any).firma_empleado_manual) await deleteSignatureLocalRef((ev as any).firma_empleado_manual);
         await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(filteredCache));
 
         const effCorpo =
@@ -2822,7 +2865,7 @@ export default function StaffEvaluationsScreen() {
             </ThemedText>
             {ev.firma_empleado_manual ? (
               <ThemedView style={styles.signaturePreviewContainer}>
-                <Image source={{ uri: ev.firma_empleado_manual }} style={styles.signaturePreview} resizeMode="contain" />
+                <Image source={{ uri: resolveStoredSignatureDisplayUri(ev.firma_empleado_manual) }} style={styles.signaturePreview} resizeMode="contain" />
               </ThemedView>
             ) : (
               <>

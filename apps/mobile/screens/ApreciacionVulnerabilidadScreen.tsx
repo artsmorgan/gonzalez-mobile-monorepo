@@ -49,7 +49,16 @@ import {
   updateApreciacionVulnerabilidad,
 } from '../hooks/apreciacionVulnerabilidadFunctions';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
-import { getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
+import {
+  getLocalFileDisplayUri,
+  saveFile,
+  persistSignatureRef,
+  hydrateSignatureRef,
+  resolveStoredSignatureDisplayUri,
+  deleteSignatureLocalRef,
+  localizeSignatureFieldInList,
+  reconcileSignatureFieldAfterSync,
+} from '@/hooks/fileStorage';
 import { buildApreciacionImagenesJsonForUpload, deleteApreciacionLocalFilesFromMeta, stripApreciacionImagesForActionPayload } from '@/hooks/apreciacionVulnerabilidadFilesSync';
 import Constants from 'expo-constants';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
@@ -105,9 +114,15 @@ async function mergeApreciacionVulnerabilidadServerIntoCache(
 
   const preserved = raw.filter((it: any) => !matchesScope(it) || apreciacionItemIsPendingLocal(it));
 
-  const scopedServer = serverList
+  const scopedServerRaw = serverList
     .filter(matchesScope)
     .map((it: any) => ({ ...it, id_local: it.id_local || '' }));
+  // El servidor devuelve `firma_solicitante` en base64: se guarda en expo-files antes de cachear.
+  const scopedServer = await localizeSignatureFieldInList(
+    scopedServerRaw,
+    'firma_solicitante',
+    'apreciacion_vuln_firma_solicitante'
+  );
 
   const merged = [...preserved, ...scopedServer] as ApreciacionVulnerabilidadItem[];
   await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(merged));
@@ -694,9 +709,15 @@ export default function ApreciacionVulnerabilidadScreen() {
         try {
           const isConnected = await getConnectionStatus();
           const all = await readApreciacionVulnerabilidadCacheFull();
+          // La firma se guarda en expo-files; se reemplaza la referencia anterior de este registro.
+          const firmaRef = await persistSignatureRef({
+            value: sig,
+            previousRef: (target as any)?.firma_solicitante ?? null,
+            prefix: 'apreciacion_vuln_firma_solicitante',
+          });
           let next = all.map((row: any) =>
             (Number(row.id) === Number(target.id) || String(row.id_local || '') === String(target.id_local || ''))
-              ? { ...row, firma_solicitante: sig }
+              ? { ...row, firma_solicitante: firmaRef }
               : row
           );
 
@@ -712,9 +733,14 @@ export default function ApreciacionVulnerabilidadScreen() {
               return;
             }
             const sr = (result as any).data;
+            // Si el servidor devuelve la firma, se reconcilia contra la referencia local ya persistida.
+            const reconciledFirma =
+              sr && typeof sr === 'object' && 'firma_solicitante' in sr
+                ? await reconcileSignatureFieldAfterSync(sr.firma_solicitante, firmaRef, 'apreciacion_vuln_firma_solicitante')
+                : firmaRef;
             next = all.map((row: any) =>
               Number(row.id) === Number(target.id)
-                ? { ...row, ...(sr && typeof sr === 'object' ? sr : {}), firma_solicitante: sr?.firma_solicitante ?? sig }
+                ? { ...row, ...(sr && typeof sr === 'object' ? sr : {}), firma_solicitante: reconciledFirma ?? firmaRef }
                 : row
             );
           } else {
@@ -725,7 +751,7 @@ export default function ApreciacionVulnerabilidadScreen() {
               if (cidx !== -1) {
                 actions[cidx] = {
                   ...actions[cidx],
-                  requestData: { ...actions[cidx].requestData, firma_solicitante: sig },
+                  requestData: { ...actions[cidx].requestData, firma_solicitante: firmaRef },
                 };
               }
             } else if (Number(target.id) > 0) {
@@ -733,14 +759,14 @@ export default function ApreciacionVulnerabilidadScreen() {
               if (uidx !== -1) {
                 actions[uidx] = {
                   ...actions[uidx],
-                  requestData: { ...actions[uidx].requestData, firma_solicitante: sig },
+                  requestData: { ...actions[uidx].requestData, firma_solicitante: firmaRef },
                 };
               } else {
                 const fidx = actions.findIndex((a: any) => a.type === 'update_solicitante_firma' && Number(a.id) === Number(target.id));
                 const entry = {
                   type: 'update_solicitante_firma',
                   id: Number(target.id),
-                  firma_solicitante: sig,
+                  firma_solicitante: firmaRef,
                 };
                 if (fidx !== -1) actions[fidx] = entry;
                 else actions.push(entry);
@@ -1211,7 +1237,9 @@ export default function ApreciacionVulnerabilidadScreen() {
     } catch {
       setMetricas([]);
     }
-    setFirmaSolicitante(it.firma_solicitante || '');
+    // `firma_solicitante` puede venir del cache como referencia local a expo-files: se hidrata a un
+    // data URI real para poder mostrarla y, si se guarda de nuevo, reenviarla tal cual.
+    setFirmaSolicitante((await hydrateSignatureRef(it.firma_solicitante)) || it.firma_solicitante || '');
     setFirmaResponsable(it.firma_responsable || '');
   };
 
@@ -1324,6 +1352,13 @@ export default function ApreciacionVulnerabilidadScreen() {
             const rawId = (res as any).id ?? (res as any).data?.id;
             const newId = Number(rawId);
             if (Number.isFinite(newId)) {
+              // El endpoint no devuelve la firma guardada: el valor recién enviado es la firma ya
+              // sincronizada, así que se persiste como referencia local a expo-files para el cache.
+              const firmaSolicitanteRefCreate = await persistSignatureRef({
+                value: payload.firma_solicitante ?? null,
+                previousRef: null,
+                prefix: 'apreciacion_vuln_firma_solicitante',
+              });
               const all = await readApreciacionVulnerabilidadCacheFull();
               const row: VulnUI = {
                 id: newId,
@@ -1340,7 +1375,7 @@ export default function ApreciacionVulnerabilidadScreen() {
                 boleta: payload.boleta,
                 metricas_vulnerablidad: payload.metricas_vulnerablidad,
                 observaciones: payload.observaciones,
-                firma_solicitante: payload.firma_solicitante,
+                firma_solicitante: firmaSolicitanteRefCreate ?? '',
                 firma_responsable: payload.firma_responsable,
               };
               const without = all.filter((x) => Number(x.id) !== newId);
@@ -1358,6 +1393,13 @@ export default function ApreciacionVulnerabilidadScreen() {
           }
         } else {
           const localId = `local-vuln-${Date.now()}`;
+          // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions.
+          const firmaSolicitanteRefOffCreate = await persistSignatureRef({
+            value: payload.firma_solicitante ?? null,
+            previousRef: null,
+            prefix: 'apreciacion_vuln_firma_solicitante',
+          });
+          const payloadForCache = { ...payload, firma_solicitante: firmaSolicitanteRefOffCreate ?? '' };
           const localItem: VulnUI = {
             id: 0,
             id_local: localId,
@@ -1373,14 +1415,14 @@ export default function ApreciacionVulnerabilidadScreen() {
             boleta: payload.boleta,
             metricas_vulnerablidad: payload.metricas_vulnerablidad,
             observaciones: payload.observaciones,
-            firma_solicitante: payload.firma_solicitante,
+            firma_solicitante: payloadForCache.firma_solicitante,
             firma_responsable: payload.firma_responsable,
           };
           const all = await readApreciacionVulnerabilidadCacheFull();
           const mergedAll = [localItem, ...all];
           await writeApreciacionVulnerabilidadCacheFull(mergedAll);
           setItems(sliceApreciacionItemsForCorpo(mergedAll, filterCorpoIdRef.current));
-          await upsertAction({ type: 'create', id: localId, requestData: payload });
+          await upsertAction({ type: 'create', id: localId, requestData: payloadForCache });
           Alert.alert('Éxito', 'Se sincronizará cuando vuelva la conexión.');
           setTimeout(async () => {
             setIsCreating(false);
@@ -1395,9 +1437,18 @@ export default function ApreciacionVulnerabilidadScreen() {
         const res = await updateApreciacionVulnerabilidad({ id: editing.id, requestData: payload, refreshAccessToken, logout });
         if (res.status) {
           await deleteApreciacionLocalFilesFromMeta(payload.apreciacion_images_meta || []);
+          // El endpoint no devuelve la firma guardada: el valor recién enviado es la firma ya
+          // sincronizada, así que se persiste como referencia vigente en expo-files (reemplazando
+          // la anterior) para el cache.
+          const firmaSolicitanteRefUpdate = await persistSignatureRef({
+            value: payload.firma_solicitante ?? null,
+            previousRef: (editing as any)?.firma_solicitante ?? null,
+            prefix: 'apreciacion_vuln_firma_solicitante',
+          });
+          const payloadForCacheUp = { ...payload, firma_solicitante: firmaSolicitanteRefUpdate ?? '' };
           const all = await readApreciacionVulnerabilidadCacheFull();
           const updated = all.map((it) =>
-            Number(it.id) === Number(editing.id) ? { ...it, ...payload, id: editing.id } : it
+            Number(it.id) === Number(editing.id) ? { ...it, ...payloadForCacheUp, id: editing.id } : it
           );
           await writeApreciacionVulnerabilidadCacheFull(updated);
           setItems(sliceApreciacionItemsForCorpo(updated, filterCorpoIdRef.current));
@@ -1411,13 +1462,20 @@ export default function ApreciacionVulnerabilidadScreen() {
           Alert.alert('Error', res.message || 'No se pudo actualizar');
         }
       } else {
+        // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions.
+        const firmaSolicitanteRefOffUpdate = await persistSignatureRef({
+          value: payload.firma_solicitante ?? null,
+          previousRef: (editing as any)?.firma_solicitante ?? null,
+          prefix: 'apreciacion_vuln_firma_solicitante',
+        });
+        const payloadForCache = { ...payload, firma_solicitante: firmaSolicitanteRefOffUpdate ?? '' };
         const all = await readApreciacionVulnerabilidadCacheFull();
         const next = all.map((it) => {
           const match =
             (editing.id_local && it.id_local === editing.id_local) ||
             (!editing.id_local && Number(it.id) === Number(editing.id));
           if (!match) return it;
-          return { ...it, ...payload };
+          return { ...it, ...payloadForCache };
         });
         await writeApreciacionVulnerabilidadCacheFull(next);
         setItems(sliceApreciacionItemsForCorpo(next, filterCorpoIdRef.current));
@@ -1430,13 +1488,13 @@ export default function ApreciacionVulnerabilidadScreen() {
           );
           const ci = docActions.findIndex((a: any) => a.type === 'create' && a.id === editing.id_local);
           if (ci !== -1) {
-            docActions[ci] = { ...docActions[ci], requestData: payload };
+            docActions[ci] = { ...docActions[ci], requestData: payloadForCache };
           } else {
-            docActions.push({ type: 'create', id: editing.id_local, requestData: payload });
+            docActions.push({ type: 'create', id: editing.id_local, requestData: payloadForCache });
           }
           await AsyncStorage.setItem('apreciacion_vulnerabilidad_actions', JSON.stringify(docActions));
         } else {
-          await upsertAction({ type: 'update', id: editing.id, requestData: payload });
+          await upsertAction({ type: 'update', id: editing.id, requestData: payloadForCache });
         }
 
         Alert.alert('Éxito', 'Los cambios se sincronizarán cuando vuelva la conexión.');
@@ -1480,6 +1538,7 @@ export default function ApreciacionVulnerabilidadScreen() {
           try {
             if (apreciacionItemIsPendingLocal(it)) {
               await deleteApreciacionLocalFilesFromMeta(extractLocalImagesMetaFromBoletaJson(it.boleta));
+              await deleteSignatureLocalRef(it.firma_solicitante);
               const all = await readApreciacionVulnerabilidadCacheFull();
               const next = it.id_local
                 ? all.filter((x) => x.id_local !== it.id_local)
@@ -1514,6 +1573,7 @@ export default function ApreciacionVulnerabilidadScreen() {
               const res = await deleteApreciacionVulnerabilidad({ id: it.id, refreshAccessToken, logout });
               if (res.status) {
                 await deleteApreciacionLocalFilesFromMeta(extractLocalImagesMetaFromBoletaJson(it.boleta));
+                await deleteSignatureLocalRef(it.firma_solicitante);
                 const all = await readApreciacionVulnerabilidadCacheFull();
                 const next = all.filter((x) => Number(x.id) !== Number(it.id));
                 await writeApreciacionVulnerabilidadCacheFull(next);
@@ -1926,7 +1986,7 @@ export default function ApreciacionVulnerabilidadScreen() {
             {it.firma_solicitante ? (
               <>
                 <ThemedView style={styles.signaturePreviewContainer}>
-                  <Image source={{ uri: it.firma_solicitante }} style={styles.signaturePreview} resizeMode="contain" />
+                  <Image source={{ uri: resolveStoredSignatureDisplayUri(it.firma_solicitante) }} style={styles.signaturePreview} resizeMode="contain" />
                 </ThemedView>
                 {false && (
                   <TouchableOpacity style={styles.signatureActionButton} onPress={() => openListFirmaSolicitanteModal(it)}>

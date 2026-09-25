@@ -1239,11 +1239,25 @@ export default function ReportesScreen() {
     setListIrResponsableSearch('');
     setListIrResponsableResults([]);
     setListIrResponsableSelected([]);
-    setListIrEmpleadoSearch('');
-    setListIrEmpleadoResults([]);
-    setListIrEmpleadoSelected([]);
     setListIrParticipanteSearch('');
     setListIrParticipanteCedulas([]);
+    setListIrParticipanteEmpSearch('');
+    setListIrParticipanteEmpResults([]);
+    setListIrParticipanteEmpSelected([]);
+    setListRigColaboradorSearch('');
+    setListRigColaboradorCedulas([]);
+    setListRigColaboradorNombreSearch('');
+    setListRigColaboradorNombres([]);
+    setListRigColaboradorEmpSearch('');
+    setListRigColaboradorEmpResults([]);
+    setListRigColaboradorEmpSelected([]);
+    setListRigColaboradorPuestoSearch('');
+    setListRigColaboradorPuestoResults([]);
+    setListRigColaboradorPuestoSelected([]);
+    setListRigCapacitadorSearch('');
+    setListRigCapacitadorCedulas([]);
+    setListRigCapacitadorNombreSearch('');
+    setListRigCapacitadorNombres([]);
     setListFechaRepDesdeD(null);
     setListFechaRepDesdeT(null);
     setListFechaRepHastaD(null);
@@ -1371,15 +1385,25 @@ export default function ReportesScreen() {
   const [listRcResponsableSearch, setListRcResponsableSearch] = useState('');
   const [listRcResponsableResults, setListRcResponsableResults] = useState<EmpleadoLite[]>([]);
   const [listRcResponsableSelected, setListRcResponsableSelected] = useState<EmpleadoLite[]>([]);
-  const [listIrEmpleadoSearch, setListIrEmpleadoSearch] = useState('');
-  const [listIrEmpleadoResults, setListIrEmpleadoResults] = useState<EmpleadoLite[]>([]);
-  const [listIrEmpleadoSelected, setListIrEmpleadoSelected] = useState<EmpleadoLite[]>([]);
   const [listIrParticipanteSearch, setListIrParticipanteSearch] = useState('');
   const [listIrParticipanteCedulas, setListIrParticipanteCedulas] = useState<string[]>([]);
+  const [listIrParticipanteEmpSearch, setListIrParticipanteEmpSearch] = useState('');
+  const [listIrParticipanteEmpResults, setListIrParticipanteEmpResults] = useState<EmpleadoLite[]>([]);
+  const [listIrParticipanteEmpSelected, setListIrParticipanteEmpSelected] = useState<EmpleadoLite[]>([]);
   const [listRigColaboradorSearch, setListRigColaboradorSearch] = useState('');
   const [listRigColaboradorCedulas, setListRigColaboradorCedulas] = useState<string[]>([]);
+  const [listRigColaboradorNombreSearch, setListRigColaboradorNombreSearch] = useState('');
+  const [listRigColaboradorNombres, setListRigColaboradorNombres] = useState<string[]>([]);
+  const [listRigColaboradorEmpSearch, setListRigColaboradorEmpSearch] = useState('');
+  const [listRigColaboradorEmpResults, setListRigColaboradorEmpResults] = useState<EmpleadoLite[]>([]);
+  const [listRigColaboradorEmpSelected, setListRigColaboradorEmpSelected] = useState<EmpleadoLite[]>([]);
+  const [listRigColaboradorPuestoSearch, setListRigColaboradorPuestoSearch] = useState('');
+  const [listRigColaboradorPuestoResults, setListRigColaboradorPuestoResults] = useState<StructureLite[]>([]);
+  const [listRigColaboradorPuestoSelected, setListRigColaboradorPuestoSelected] = useState<StructureLite[]>([]);
   const [listRigCapacitadorSearch, setListRigCapacitadorSearch] = useState('');
   const [listRigCapacitadorCedulas, setListRigCapacitadorCedulas] = useState<string[]>([]);
+  const [listRigCapacitadorNombreSearch, setListRigCapacitadorNombreSearch] = useState('');
+  const [listRigCapacitadorNombres, setListRigCapacitadorNombres] = useState<string[]>([]);
   const [listTaEmpleadoSearch, setListTaEmpleadoSearch] = useState('');
   const [listTaEmpleadoResults, setListTaEmpleadoResults] = useState<EmpleadoLite[]>([]);
   const [listTaEmpleadoSelected, setListTaEmpleadoSelected] = useState<EmpleadoLite[]>([]);
@@ -1584,15 +1608,25 @@ export default function ReportesScreen() {
   const [modalRcResponsableSearch, setModalRcResponsableSearch] = useState('');
   const [modalRcResponsableResults, setModalRcResponsableResults] = useState<EmpleadoLite[]>([]);
   const [modalRcResponsableSelected, setModalRcResponsableSelected] = useState<EmpleadoLite[]>([]);
-  const [modalIrEmpleadoSearch, setModalIrEmpleadoSearch] = useState('');
-  const [modalIrEmpleadoResults, setModalIrEmpleadoResults] = useState<EmpleadoLite[]>([]);
-  const [modalIrEmpleadoSelected, setModalIrEmpleadoSelected] = useState<EmpleadoLite[]>([]);
   const [modalIrParticipanteSearch, setModalIrParticipanteSearch] = useState('');
   const [modalIrParticipanteCedulas, setModalIrParticipanteCedulas] = useState<string[]>([]);
+  const [modalIrParticipanteEmpSearch, setModalIrParticipanteEmpSearch] = useState('');
+  const [modalIrParticipanteEmpResults, setModalIrParticipanteEmpResults] = useState<EmpleadoLite[]>([]);
+  const [modalIrParticipanteEmpSelected, setModalIrParticipanteEmpSelected] = useState<EmpleadoLite[]>([]);
   const [modalRigColaboradorSearch, setModalRigColaboradorSearch] = useState('');
   const [modalRigColaboradorCedulas, setModalRigColaboradorCedulas] = useState<string[]>([]);
+  const [modalRigColaboradorNombreSearch, setModalRigColaboradorNombreSearch] = useState('');
+  const [modalRigColaboradorNombres, setModalRigColaboradorNombres] = useState<string[]>([]);
+  const [modalRigColaboradorEmpSearch, setModalRigColaboradorEmpSearch] = useState('');
+  const [modalRigColaboradorEmpResults, setModalRigColaboradorEmpResults] = useState<EmpleadoLite[]>([]);
+  const [modalRigColaboradorEmpSelected, setModalRigColaboradorEmpSelected] = useState<EmpleadoLite[]>([]);
+  const [modalRigColaboradorPuestoSearch, setModalRigColaboradorPuestoSearch] = useState('');
+  const [modalRigColaboradorPuestoResults, setModalRigColaboradorPuestoResults] = useState<StructureLite[]>([]);
+  const [modalRigColaboradorPuestoSelected, setModalRigColaboradorPuestoSelected] = useState<StructureLite[]>([]);
   const [modalRigCapacitadorSearch, setModalRigCapacitadorSearch] = useState('');
   const [modalRigCapacitadorCedulas, setModalRigCapacitadorCedulas] = useState<string[]>([]);
+  const [modalRigCapacitadorNombreSearch, setModalRigCapacitadorNombreSearch] = useState('');
+  const [modalRigCapacitadorNombres, setModalRigCapacitadorNombres] = useState<string[]>([]);
   const [modalTaEmpleadoSearch, setModalTaEmpleadoSearch] = useState('');
   const [modalTaEmpleadoResults, setModalTaEmpleadoResults] = useState<EmpleadoLite[]>([]);
   const [modalTaEmpleadoSelected, setModalTaEmpleadoSelected] = useState<EmpleadoLite[]>([]);
@@ -1694,9 +1728,7 @@ export default function ReportesScreen() {
     | 'modalEvpEmpEval'
     | 'modalEvpEvaluador'
     | 'listIrResponsable'
-    | 'listIrEmpleado'
     | 'modalIrResponsable'
-    | 'modalIrEmpleado'
     | 'listCupResponsable'
     | 'modalCupResponsable'
     | 'listRcCapEmpleado'
@@ -1727,6 +1759,12 @@ export default function ReportesScreen() {
     | 'modalRvdVehiculo'
     | 'listMpEmpleado'
     | 'modalMpEmpleado'
+    | 'listIrParticipanteEmp'
+    | 'modalIrParticipanteEmp'
+    | 'listRigColaboradorEmp'
+    | 'modalRigColaboradorEmp'
+    | 'listRigColaboradorPuesto'
+    | 'modalRigColaboradorPuesto'
   >(null);
   const [submitReportLoading, setSubmitReportLoading] = useState(false);
 
@@ -1847,11 +1885,25 @@ export default function ReportesScreen() {
     setModalIrResponsableSearch('');
     setModalIrResponsableResults([]);
     setModalIrResponsableSelected([]);
-    setModalIrEmpleadoSearch('');
-    setModalIrEmpleadoResults([]);
-    setModalIrEmpleadoSelected([]);
     setModalIrParticipanteSearch('');
     setModalIrParticipanteCedulas([]);
+    setModalIrParticipanteEmpSearch('');
+    setModalIrParticipanteEmpResults([]);
+    setModalIrParticipanteEmpSelected([]);
+    setModalRigColaboradorSearch('');
+    setModalRigColaboradorCedulas([]);
+    setModalRigColaboradorNombreSearch('');
+    setModalRigColaboradorNombres([]);
+    setModalRigColaboradorEmpSearch('');
+    setModalRigColaboradorEmpResults([]);
+    setModalRigColaboradorEmpSelected([]);
+    setModalRigColaboradorPuestoSearch('');
+    setModalRigColaboradorPuestoResults([]);
+    setModalRigColaboradorPuestoSelected([]);
+    setModalRigCapacitadorSearch('');
+    setModalRigCapacitadorCedulas([]);
+    setModalRigCapacitadorNombreSearch('');
+    setModalRigCapacitadorNombres([]);
     setModalMutAusenteSearch('');
     setModalMutAusenteResults([]);
     setModalMutAusenteSelected([]);
@@ -2114,9 +2166,7 @@ export default function ReportesScreen() {
       | 'modalMutAusente'
       | 'modalMutReemplaza'
     | 'listIrResponsable'
-    | 'listIrEmpleado'
     | 'modalIrResponsable'
-    | 'modalIrEmpleado'
     | 'listCupResponsable'
     | 'modalCupResponsable'
     | 'listRcCapEmpleado'
@@ -2132,7 +2182,11 @@ export default function ReportesScreen() {
       | 'listSpEmpleado'
       | 'modalSpEmpleado'
       | 'listMpEmpleado'
-      | 'modalMpEmpleado',
+      | 'modalMpEmpleado'
+      | 'listIrParticipanteEmp'
+      | 'modalIrParticipanteEmp'
+      | 'listRigColaboradorEmp'
+      | 'modalRigColaboradorEmp',
   ) => {
     const ok = await getOnline();
     if (!ok) {
@@ -2173,9 +2227,7 @@ export default function ReportesScreen() {
       if (mode === 'modalMutAusente') setModalMutAusenteResults(rows);
       if (mode === 'modalMutReemplaza') setModalMutReemplazaResults(rows);
       if (mode === 'listIrResponsable') setListIrResponsableResults(rows);
-      if (mode === 'listIrEmpleado') setListIrEmpleadoResults(rows);
       if (mode === 'modalIrResponsable') setModalIrResponsableResults(rows);
-      if (mode === 'modalIrEmpleado') setModalIrEmpleadoResults(rows);
       if (mode === 'listCupResponsable') setListCupResponsableResults(rows);
       if (mode === 'modalCupResponsable') setModalCupResponsableResults(rows);
       if (mode === 'listRcCapEmpleado') setListRcCapEmpResults(rows);
@@ -2188,6 +2240,10 @@ export default function ReportesScreen() {
       if (mode === 'modalSpEmpleado') setModalSpEmpleadoResults(rows);
       if (mode === 'listMpEmpleado') setListMpEmpleadoResults(rows);
       if (mode === 'modalMpEmpleado') setModalMpEmpleadoResults(rows);
+      if (mode === 'listIrParticipanteEmp') setListIrParticipanteEmpResults(rows);
+      if (mode === 'modalIrParticipanteEmp') setModalIrParticipanteEmpResults(rows);
+      if (mode === 'listRigColaboradorEmp') setListRigColaboradorEmpResults(rows);
+      if (mode === 'modalRigColaboradorEmp') setModalRigColaboradorEmpResults(rows);
     } finally {
       setEmployeeSearchMode(null);
     }
@@ -2236,6 +2292,8 @@ export default function ReportesScreen() {
       | 'listEjecutivo'
       | 'listMutEjecutivo'
       | 'listRcCapPuesto'
+      | 'listRigColaboradorPuesto'
+      | 'modalRigColaboradorPuesto'
       | 'modalEmpresa'
       | 'modalCliente'
       | 'modalDivision'
@@ -2287,6 +2345,8 @@ export default function ReportesScreen() {
       if (mode === 'modalMutEjecutivo') setModalMutEjecutivoResults(rows);
       if (mode === 'listRcCapPuesto') setListRcCapPuestoResults(rows);
       if (mode === 'modalRcCapPuesto') setModalRcCapPuestoResults(rows);
+      if (mode === 'listRigColaboradorPuesto') setListRigColaboradorPuestoResults(rows);
+      if (mode === 'modalRigColaboradorPuesto') setModalRigColaboradorPuestoResults(rows);
     } finally {
       setEmployeeSearchMode(null);
     }
@@ -2529,12 +2589,6 @@ export default function ReportesScreen() {
     setModalRcResponsableSearch('');
   };
   const removeModalRcResponsable = (id: number) => setModalRcResponsableSelected((prev) => prev.filter((x) => x.id !== id));
-  const pickListIrEmpleado = (e: EmpleadoLite) => {
-    setListIrEmpleadoSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
-    setListIrEmpleadoResults([]);
-    setListIrEmpleadoSearch('');
-  };
-  const removeListIrEmpleado = (id: number) => setListIrEmpleadoSelected((prev) => prev.filter((x) => x.id !== id));
   const addListIrParticipanteCedula = () => {
     const t = listIrParticipanteSearch.trim().replace(/\s+/g, '');
     if (!t) {
@@ -2553,12 +2607,6 @@ export default function ReportesScreen() {
     setModalIrResponsableSearch('');
   };
   const removeModalIrResponsable = (id: number) => setModalIrResponsableSelected((prev) => prev.filter((x) => x.id !== id));
-  const pickModalIrEmpleado = (e: EmpleadoLite) => {
-    setModalIrEmpleadoSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
-    setModalIrEmpleadoResults([]);
-    setModalIrEmpleadoSearch('');
-  };
-  const removeModalIrEmpleado = (id: number) => setModalIrEmpleadoSelected((prev) => prev.filter((x) => x.id !== id));
   const addModalIrParticipanteCedula = () => {
     const t = modalIrParticipanteSearch.trim().replace(/\s+/g, '');
     if (!t) {
@@ -2582,6 +2630,17 @@ export default function ReportesScreen() {
   };
   const removeListRigColaboradorCedula = (ced: string) =>
     setListRigColaboradorCedulas((prev) => prev.filter((x) => x !== ced));
+  const addListRigColaboradorNombre = () => {
+    const t = listRigColaboradorNombreSearch.trim();
+    if (!t) {
+      Alert.alert('Colaboradores', 'Escriba un nombre.');
+      return;
+    }
+    setListRigColaboradorNombres((prev) => (prev.some((x) => x.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
+    setListRigColaboradorNombreSearch('');
+  };
+  const removeListRigColaboradorNombre = (nom: string) =>
+    setListRigColaboradorNombres((prev) => prev.filter((x) => x !== nom));
   const addListRigCapacitadorCedula = () => {
     const t = listRigCapacitadorSearch.trim().replace(/\s+/g, '');
     if (!t) {
@@ -2593,6 +2652,17 @@ export default function ReportesScreen() {
   };
   const removeListRigCapacitadorCedula = (ced: string) =>
     setListRigCapacitadorCedulas((prev) => prev.filter((x) => x !== ced));
+  const addListRigCapacitadorNombre = () => {
+    const t = listRigCapacitadorNombreSearch.trim();
+    if (!t) {
+      Alert.alert('Capacitadores', 'Escriba un nombre.');
+      return;
+    }
+    setListRigCapacitadorNombres((prev) => (prev.some((x) => x.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
+    setListRigCapacitadorNombreSearch('');
+  };
+  const removeListRigCapacitadorNombre = (nom: string) =>
+    setListRigCapacitadorNombres((prev) => prev.filter((x) => x !== nom));
 
   const addModalRigColaboradorCedula = () => {
     const t = modalRigColaboradorSearch.trim().replace(/\s+/g, '');
@@ -2605,6 +2675,17 @@ export default function ReportesScreen() {
   };
   const removeModalRigColaboradorCedula = (ced: string) =>
     setModalRigColaboradorCedulas((prev) => prev.filter((x) => x !== ced));
+  const addModalRigColaboradorNombre = () => {
+    const t = modalRigColaboradorNombreSearch.trim();
+    if (!t) {
+      Alert.alert('Colaboradores', 'Escriba un nombre.');
+      return;
+    }
+    setModalRigColaboradorNombres((prev) => (prev.some((x) => x.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
+    setModalRigColaboradorNombreSearch('');
+  };
+  const removeModalRigColaboradorNombre = (nom: string) =>
+    setModalRigColaboradorNombres((prev) => prev.filter((x) => x !== nom));
   const addModalRigCapacitadorCedula = () => {
     const t = modalRigCapacitadorSearch.trim().replace(/\s+/g, '');
     if (!t) {
@@ -2616,6 +2697,46 @@ export default function ReportesScreen() {
   };
   const removeModalRigCapacitadorCedula = (ced: string) =>
     setModalRigCapacitadorCedulas((prev) => prev.filter((x) => x !== ced));
+  const addModalRigCapacitadorNombre = () => {
+    const t = modalRigCapacitadorNombreSearch.trim();
+    if (!t) {
+      Alert.alert('Capacitadores', 'Escriba un nombre.');
+      return;
+    }
+    setModalRigCapacitadorNombres((prev) => (prev.some((x) => x.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
+    setModalRigCapacitadorNombreSearch('');
+  };
+  const removeModalRigCapacitadorNombre = (nom: string) =>
+    setModalRigCapacitadorNombres((prev) => prev.filter((x) => x !== nom));
+
+  const pickListIrParticipanteEmp = (e: EmpleadoLite) => {
+    setListIrParticipanteEmpSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setListIrParticipanteEmpResults([]);
+    setListIrParticipanteEmpSearch('');
+  };
+  const removeListIrParticipanteEmp = (id: number) =>
+    setListIrParticipanteEmpSelected((prev) => prev.filter((x) => x.id !== id));
+  const pickModalIrParticipanteEmp = (e: EmpleadoLite) => {
+    setModalIrParticipanteEmpSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setModalIrParticipanteEmpResults([]);
+    setModalIrParticipanteEmpSearch('');
+  };
+  const removeModalIrParticipanteEmp = (id: number) =>
+    setModalIrParticipanteEmpSelected((prev) => prev.filter((x) => x.id !== id));
+  const pickListRigColaboradorEmp = (e: EmpleadoLite) => {
+    setListRigColaboradorEmpSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setListRigColaboradorEmpResults([]);
+    setListRigColaboradorEmpSearch('');
+  };
+  const removeListRigColaboradorEmp = (id: number) =>
+    setListRigColaboradorEmpSelected((prev) => prev.filter((x) => x.id !== id));
+  const pickModalRigColaboradorEmp = (e: EmpleadoLite) => {
+    setModalRigColaboradorEmpSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setModalRigColaboradorEmpResults([]);
+    setModalRigColaboradorEmpSearch('');
+  };
+  const removeModalRigColaboradorEmp = (id: number) =>
+    setModalRigColaboradorEmpSelected((prev) => prev.filter((x) => x.id !== id));
 
   const pickListTaEmpleado = (e: EmpleadoLite) => {
     setListTaEmpleadoSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
@@ -2995,8 +3116,9 @@ export default function ReportesScreen() {
         if (listPuestoSelected.length) q.listIrPuestoIds = listPuestoSelected.map((x) => String(x.id)).join(',');
         if (listIrResponsableSelected.length)
           q.listIrResponsableEmpleadoIds = listIrResponsableSelected.map((x) => String(x.id)).join(',');
-        if (listIrEmpleadoSelected.length) q.listIrEmpleadoIds = listIrEmpleadoSelected.map((x) => String(x.id)).join(',');
         if (listIrParticipanteCedulas.length) q.listIrParticipanteCedulas = listIrParticipanteCedulas.join(',');
+        if (listIrParticipanteEmpSelected.length)
+          q.listIrParticipanteNombres = listIrParticipanteEmpSelected.map((e) => formatEmpleadoNombre(e)).join(',');
       } else if (modulo === MODULO_NOTAS_VOZ) {
         if (listActaDesdeD && listActaDesdeT) q.listNvCreadoDesde = combineDateAndTime(ymd(listActaDesdeD), hm(listActaDesdeT));
         if (listActaHastaD && listActaHastaT) q.listNvCreadoHasta = combineDateAndTime(ymd(listActaHastaD), hm(listActaHastaT));
@@ -3040,6 +3162,16 @@ export default function ReportesScreen() {
         if (listPuestoSelected.length) q.listRigPuestoIds = listPuestoSelected.map((x) => String(x.id)).join(',');
         if (listRigColaboradorCedulas.length) q.listRigColaboradorCedulas = listRigColaboradorCedulas.join(',');
         if (listRigCapacitadorCedulas.length) q.listRigCapacitadorCedulas = listRigCapacitadorCedulas.join(',');
+        {
+          const colNombres = [
+            ...listRigColaboradorNombres,
+            ...listRigColaboradorEmpSelected.map((e) => formatEmpleadoNombre(e)),
+          ];
+          if (colNombres.length) q.listRigColaboradorNombres = colNombres.join(',');
+        }
+        if (listRigCapacitadorNombres.length) q.listRigCapacitadorNombres = listRigCapacitadorNombres.join(',');
+        if (listRigColaboradorPuestoSelected.length)
+          q.listRigColaboradorPuestoIds = listRigColaboradorPuestoSelected.map((x) => String(x.id)).join(',');
       } else if (modulo === MODULO_TIEMPO_ALMUERZO) {
         if (listActaDesdeD && listActaDesdeT) q.listTaInicioDesde = combineDateAndTime(ymd(listActaDesdeD), hm(listActaDesdeT));
         if (listActaHastaD && listActaHastaT) q.listTaFinHasta = combineDateAndTime(ymd(listActaHastaD), hm(listActaHastaT));
@@ -3684,12 +3816,23 @@ export default function ReportesScreen() {
         }
         if (formModulo === MODULO_REGISTRO_INDUCCION_RECORRIDO) {
           if (modalIrResponsableSelected.length > 0) mf.responsableEmpleadoIds = modalIrResponsableSelected.map((e) => Number(e.id));
-          if (modalIrEmpleadoSelected.length > 0) mf.empleadoIds = modalIrEmpleadoSelected.map((e) => Number(e.id));
           if (modalIrParticipanteCedulas.length > 0) mf.participanteCedulas = [...modalIrParticipanteCedulas];
+          if (modalIrParticipanteEmpSelected.length > 0)
+            mf.participanteNombres = modalIrParticipanteEmpSelected.map((e) => formatEmpleadoNombre(e));
         }
         if (formModulo === MODULO_REGISTRO_INDUCCION_GENERAL) {
           if (modalRigColaboradorCedulas.length > 0) mf.colaboradorCedulas = [...modalRigColaboradorCedulas];
           if (modalRigCapacitadorCedulas.length > 0) mf.capacitadorCedulas = [...modalRigCapacitadorCedulas];
+          {
+            const colNombres = [
+              ...modalRigColaboradorNombres,
+              ...modalRigColaboradorEmpSelected.map((e) => formatEmpleadoNombre(e)),
+            ];
+            if (colNombres.length > 0) mf.colaboradorNombres = colNombres;
+          }
+          if (modalRigCapacitadorNombres.length > 0) mf.capacitadorNombres = [...modalRigCapacitadorNombres];
+          if (modalRigColaboradorPuestoSelected.length > 0)
+            mf.colaboradorPuestoIds = modalRigColaboradorPuestoSelected.map((x) => Number(x.id));
         }
         if (formModulo === MODULO_TIEMPO_ALMUERZO) {
           if (modalTaEmpleadoSelected.length > 0) mf.empleadoIds = modalTaEmpleadoSelected.map((e) => Number(e.id));
@@ -4213,12 +4356,23 @@ export default function ReportesScreen() {
         if (formModulo === MODULO_REGISTRO_INDUCCION_RECORRIDO) {
           if (modalIrResponsableSelected.length > 0)
             moduleFilters.responsableEmpleadoIds = modalIrResponsableSelected.map((e) => Number(e.id));
-          if (modalIrEmpleadoSelected.length > 0) moduleFilters.empleadoIds = modalIrEmpleadoSelected.map((e) => Number(e.id));
           if (modalIrParticipanteCedulas.length > 0) moduleFilters.participanteCedulas = [...modalIrParticipanteCedulas];
+          if (modalIrParticipanteEmpSelected.length > 0)
+            moduleFilters.participanteNombres = modalIrParticipanteEmpSelected.map((e) => formatEmpleadoNombre(e));
         }
         if (formModulo === MODULO_REGISTRO_INDUCCION_GENERAL) {
           if (modalRigColaboradorCedulas.length > 0) moduleFilters.colaboradorCedulas = [...modalRigColaboradorCedulas];
           if (modalRigCapacitadorCedulas.length > 0) moduleFilters.capacitadorCedulas = [...modalRigCapacitadorCedulas];
+          {
+            const colNombres = [
+              ...modalRigColaboradorNombres,
+              ...modalRigColaboradorEmpSelected.map((e) => formatEmpleadoNombre(e)),
+            ];
+            if (colNombres.length > 0) moduleFilters.colaboradorNombres = colNombres;
+          }
+          if (modalRigCapacitadorNombres.length > 0) moduleFilters.capacitadorNombres = [...modalRigCapacitadorNombres];
+          if (modalRigColaboradorPuestoSelected.length > 0)
+            moduleFilters.colaboradorPuestoIds = modalRigColaboradorPuestoSelected.map((x) => Number(x.id));
           moduleFilters.reportOutputType = formTipoReporteRef.current;
         }
         if (formModulo === MODULO_CAMBIOS_UBICACION_PUESTO && modalCupResponsableSelected.length > 0) {
@@ -6517,55 +6671,6 @@ export default function ReportesScreen() {
                             ))
                           )}
                         </ThemedView>
-                        <ThemedText style={styles.label}>Empleado del registro</ThemedText>
-                        <View style={styles.row}>
-                          <TextInput
-                            style={[styles.input, styles.inputFlex]}
-                            value={listIrEmpleadoSearch}
-                            onChangeText={setListIrEmpleadoSearch}
-                            placeholder="Código o nombre"
-                            placeholderTextColor="#999"
-                          />
-                          <TouchableOpacity
-                            style={styles.searchIconBtn}
-                            onPress={() => void runSearchEmployees(listIrEmpleadoSearch, 'listIrEmpleado')}
-                            activeOpacity={0.85}
-                            disabled={employeeSearchMode === 'listIrEmpleado'}
-                          >
-                            {employeeSearchMode === 'listIrEmpleado' ? (
-                              <ActivityIndicator size="small" color="#fff" />
-                            ) : (
-                              <Ionicons name="search" size={22} color="#fff" />
-                            )}
-                          </TouchableOpacity>
-                        </View>
-                        {listIrEmpleadoResults.length ? (
-                          <ThemedView style={styles.resultList}>
-                            {listIrEmpleadoResults.map((e) => (
-                              <TouchableOpacity key={`list-ir-e-${e.id}`} style={styles.resultItem} onPress={() => pickListIrEmpleado(e)}>
-                                <ThemedText>
-                                  {e.codigo} — {formatEmpleadoNombre(e)}
-                                </ThemedText>
-                              </TouchableOpacity>
-                            ))}
-                          </ThemedView>
-                        ) : null}
-                        <ThemedView style={styles.assignedList}>
-                          {listIrEmpleadoSelected.length === 0 ? (
-                            <ThemedText style={styles.helperText}>Opcional: uno o más empleados.</ThemedText>
-                          ) : (
-                            listIrEmpleadoSelected.map((e) => (
-                              <ThemedView key={`list-ir-e-sel-${e.id}`} style={styles.assignedUserItem}>
-                                <ThemedText style={styles.assignedUserTitle}>
-                                  {e.codigo} — {formatEmpleadoNombre(e)}
-                                </ThemedText>
-                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListIrEmpleado(e.id)}>
-                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
-                                </TouchableOpacity>
-                              </ThemedView>
-                            ))
-                          )}
-                        </ThemedView>
                         <ThemedText style={styles.label}>Participantes (cédula)</ThemedText>
                         <View style={styles.row}>
                           <TextInput
@@ -6587,6 +6692,59 @@ export default function ReportesScreen() {
                               <ThemedView key={`list-ir-p-${ced}`} style={styles.assignedUserItem}>
                                 <ThemedText style={styles.assignedUserTitle}>{ced}</ThemedText>
                                 <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListIrParticipanteCedula(ced)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                        <ThemedText style={styles.label}>Participantes (buscar empleado por nombre o cédula)</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listIrParticipanteEmpSearch}
+                            onChangeText={setListIrParticipanteEmpSearch}
+                            placeholder="Nombre completo o cédula"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity
+                            style={styles.searchIconBtn}
+                            onPress={() => void runSearchEmployees(listIrParticipanteEmpSearch, 'listIrParticipanteEmp')}
+                            activeOpacity={0.85}
+                            disabled={employeeSearchMode === 'listIrParticipanteEmp'}
+                          >
+                            {employeeSearchMode === 'listIrParticipanteEmp' ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <Ionicons name="search" size={22} color="#fff" />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                        {listIrParticipanteEmpResults.length ? (
+                          <ThemedView style={styles.resultList}>
+                            {listIrParticipanteEmpResults.map((e) => (
+                              <TouchableOpacity
+                                key={`list-ir-part-emp-${e.id}`}
+                                style={styles.resultItem}
+                                onPress={() => pickListIrParticipanteEmp(e)}
+                              >
+                                <ThemedText>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                              </TouchableOpacity>
+                            ))}
+                          </ThemedView>
+                        ) : null}
+                        <ThemedView style={styles.assignedList}>
+                          {listIrParticipanteEmpSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más empleados.</ThemedText>
+                          ) : (
+                            listIrParticipanteEmpSelected.map((e) => (
+                              <ThemedView key={`list-ir-part-emp-sel-${e.id}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListIrParticipanteEmp(e.id)}>
                                   <Ionicons name="trash-outline" size={18} color="#FF3B30" />
                                 </TouchableOpacity>
                               </ThemedView>
@@ -6841,6 +6999,33 @@ export default function ReportesScreen() {
                             ))
                           )}
                         </ThemedView>
+                        <ThemedText style={styles.label}>Colaboradores (nombre)</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listRigColaboradorNombreSearch}
+                            onChangeText={setListRigColaboradorNombreSearch}
+                            placeholder="Nombre (o parte del nombre)"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity style={styles.searchIconBtn} onPress={addListRigColaboradorNombre} activeOpacity={0.85}>
+                            <Ionicons name="add" size={22} color="#fff" />
+                          </TouchableOpacity>
+                        </View>
+                        <ThemedView style={styles.assignedList}>
+                          {listRigColaboradorNombres.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más nombres (búsqueda por semejanza).</ThemedText>
+                          ) : (
+                            listRigColaboradorNombres.map((nom) => (
+                              <ThemedView key={`list-rig-col-nom-${nom}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>{nom}</ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListRigColaboradorNombre(nom)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
                         <ThemedText style={styles.label}>Capacitadores (cédula)</ThemedText>
                         <View style={styles.row}>
                           <TextInput
@@ -6862,6 +7047,145 @@ export default function ReportesScreen() {
                               <ThemedView key={`list-rig-cap-${ced}`} style={styles.assignedUserItem}>
                                 <ThemedText style={styles.assignedUserTitle}>{ced}</ThemedText>
                                 <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListRigCapacitadorCedula(ced)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                        <ThemedText style={styles.label}>Capacitadores (nombre)</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listRigCapacitadorNombreSearch}
+                            onChangeText={setListRigCapacitadorNombreSearch}
+                            placeholder="Nombre (o parte del nombre)"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity style={styles.searchIconBtn} onPress={addListRigCapacitadorNombre} activeOpacity={0.85}>
+                            <Ionicons name="add" size={22} color="#fff" />
+                          </TouchableOpacity>
+                        </View>
+                        <ThemedView style={styles.assignedList}>
+                          {listRigCapacitadorNombres.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más nombres (búsqueda por semejanza).</ThemedText>
+                          ) : (
+                            listRigCapacitadorNombres.map((nom) => (
+                              <ThemedView key={`list-rig-cap-nom-${nom}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>{nom}</ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListRigCapacitadorNombre(nom)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                        <ThemedText style={styles.label}>Colaboradores (buscar empleado por nombre o cédula)</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listRigColaboradorEmpSearch}
+                            onChangeText={setListRigColaboradorEmpSearch}
+                            placeholder="Nombre completo o cédula"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity
+                            style={styles.searchIconBtn}
+                            onPress={() => void runSearchEmployees(listRigColaboradorEmpSearch, 'listRigColaboradorEmp')}
+                            activeOpacity={0.85}
+                            disabled={employeeSearchMode === 'listRigColaboradorEmp'}
+                          >
+                            {employeeSearchMode === 'listRigColaboradorEmp' ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <Ionicons name="search" size={22} color="#fff" />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                        {listRigColaboradorEmpResults.length ? (
+                          <ThemedView style={styles.resultList}>
+                            {listRigColaboradorEmpResults.map((e) => (
+                              <TouchableOpacity
+                                key={`list-rig-col-emp-${e.id}`}
+                                style={styles.resultItem}
+                                onPress={() => pickListRigColaboradorEmp(e)}
+                              >
+                                <ThemedText>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                              </TouchableOpacity>
+                            ))}
+                          </ThemedView>
+                        ) : null}
+                        <ThemedView style={styles.assignedList}>
+                          {listRigColaboradorEmpSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más empleados.</ThemedText>
+                          ) : (
+                            listRigColaboradorEmpSelected.map((e) => (
+                              <ThemedView key={`list-rig-col-emp-sel-${e.id}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListRigColaboradorEmp(e.id)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                        <ThemedText style={styles.label}>Puestos de los colaboradores (buscar por nombre o código)</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listRigColaboradorPuestoSearch}
+                            onChangeText={setListRigColaboradorPuestoSearch}
+                            placeholder="Código o nombre de puesto"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity
+                            style={styles.searchIconBtn}
+                            onPress={() => void runSearchActaStructure(listRigColaboradorPuestoSearch, 'puesto', 'listRigColaboradorPuesto')}
+                            activeOpacity={0.85}
+                            disabled={employeeSearchMode === 'listRigColaboradorPuesto'}
+                          >
+                            {employeeSearchMode === 'listRigColaboradorPuesto' ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <Ionicons name="search" size={22} color="#fff" />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                        {listRigColaboradorPuestoResults.length ? (
+                          <ThemedView style={styles.resultList}>
+                            {listRigColaboradorPuestoResults.map((it) => (
+                              <TouchableOpacity
+                                key={`list-rig-col-pto-${it.id}`}
+                                style={styles.resultItem}
+                                onPress={() =>
+                                  pickStructureLite(
+                                    it,
+                                    setListRigColaboradorPuestoSelected,
+                                    setListRigColaboradorPuestoResults,
+                                    setListRigColaboradorPuestoSearch
+                                  )
+                                }
+                              >
+                                <ThemedText>{formatStructureLite(it)}</ThemedText>
+                              </TouchableOpacity>
+                            ))}
+                          </ThemedView>
+                        ) : null}
+                        <ThemedView style={styles.assignedList}>
+                          {listRigColaboradorPuestoSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más puestos.</ThemedText>
+                          ) : (
+                            listRigColaboradorPuestoSelected.map((it) => (
+                              <ThemedView key={`list-rig-col-pto-sel-${it.id}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>{formatStructureLite(it)}</ThemedText>
+                                <TouchableOpacity
+                                  style={styles.removeUserButton}
+                                  onPress={() => removeStructureLite(it.id, setListRigColaboradorPuestoSelected)}
+                                >
                                   <Ionicons name="trash-outline" size={18} color="#FF3B30" />
                                 </TouchableOpacity>
                               </ThemedView>
@@ -9660,55 +9984,6 @@ export default function ReportesScreen() {
                           ))
                         )}
                       </ThemedView>
-                      <ThemedText style={styles.label}>Empleado del registro</ThemedText>
-                      <View style={styles.row}>
-                        <TextInput
-                          style={[styles.input, styles.inputFlex]}
-                          value={modalIrEmpleadoSearch}
-                          onChangeText={setModalIrEmpleadoSearch}
-                          placeholder="Código o nombre"
-                          placeholderTextColor="#999"
-                        />
-                        <TouchableOpacity
-                          style={styles.searchIconBtn}
-                          onPress={() => void runSearchEmployees(modalIrEmpleadoSearch, 'modalIrEmpleado')}
-                          activeOpacity={0.85}
-                          disabled={employeeSearchMode === 'modalIrEmpleado'}
-                        >
-                          {employeeSearchMode === 'modalIrEmpleado' ? (
-                            <ActivityIndicator size="small" color="#fff" />
-                          ) : (
-                            <Ionicons name="search" size={22} color="#fff" />
-                          )}
-                        </TouchableOpacity>
-                      </View>
-                      {modalIrEmpleadoResults.length ? (
-                        <ThemedView style={styles.resultList}>
-                          {modalIrEmpleadoResults.map((e) => (
-                            <TouchableOpacity key={`modal-ir-e-${e.id}`} style={styles.resultItem} onPress={() => pickModalIrEmpleado(e)}>
-                              <ThemedText>
-                                {e.codigo} — {formatEmpleadoNombre(e)}
-                              </ThemedText>
-                            </TouchableOpacity>
-                          ))}
-                        </ThemedView>
-                      ) : null}
-                      <ThemedView style={styles.assignedList}>
-                        {modalIrEmpleadoSelected.length === 0 ? (
-                          <ThemedText style={styles.helperText}>Opcional: uno o más empleados.</ThemedText>
-                        ) : (
-                          modalIrEmpleadoSelected.map((e) => (
-                            <ThemedView key={`modal-ir-e-sel-${e.id}`} style={styles.assignedUserItem}>
-                              <ThemedText style={styles.assignedUserTitle}>
-                                {e.codigo} — {formatEmpleadoNombre(e)}
-                              </ThemedText>
-                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalIrEmpleado(e.id)}>
-                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
-                              </TouchableOpacity>
-                            </ThemedView>
-                          ))
-                        )}
-                      </ThemedView>
                       <ThemedText style={styles.label}>Participantes (cédula)</ThemedText>
                       <View style={styles.row}>
                         <TextInput
@@ -9730,6 +10005,59 @@ export default function ReportesScreen() {
                             <ThemedView key={`modal-ir-p-${ced}`} style={styles.assignedUserItem}>
                               <ThemedText style={styles.assignedUserTitle}>{ced}</ThemedText>
                               <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalIrParticipanteCedula(ced)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                      <ThemedText style={styles.label}>Participantes (buscar empleado por nombre o cédula)</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalIrParticipanteEmpSearch}
+                          onChangeText={setModalIrParticipanteEmpSearch}
+                          placeholder="Nombre completo o cédula"
+                          placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity
+                          style={styles.searchIconBtn}
+                          onPress={() => void runSearchEmployees(modalIrParticipanteEmpSearch, 'modalIrParticipanteEmp')}
+                          activeOpacity={0.85}
+                          disabled={employeeSearchMode === 'modalIrParticipanteEmp'}
+                        >
+                          {employeeSearchMode === 'modalIrParticipanteEmp' ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Ionicons name="search" size={22} color="#fff" />
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                      {modalIrParticipanteEmpResults.length ? (
+                        <ThemedView style={styles.resultList}>
+                          {modalIrParticipanteEmpResults.map((e) => (
+                            <TouchableOpacity
+                              key={`modal-ir-part-emp-${e.id}`}
+                              style={styles.resultItem}
+                              onPress={() => pickModalIrParticipanteEmp(e)}
+                            >
+                              <ThemedText>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                            </TouchableOpacity>
+                          ))}
+                        </ThemedView>
+                      ) : null}
+                      <ThemedView style={styles.assignedList}>
+                        {modalIrParticipanteEmpSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más empleados.</ThemedText>
+                        ) : (
+                          modalIrParticipanteEmpSelected.map((e) => (
+                            <ThemedView key={`modal-ir-part-emp-sel-${e.id}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalIrParticipanteEmp(e.id)}>
                                 <Ionicons name="trash-outline" size={18} color="#FF3B30" />
                               </TouchableOpacity>
                             </ThemedView>
@@ -9980,6 +10308,33 @@ export default function ReportesScreen() {
                           ))
                         )}
                       </ThemedView>
+                      <ThemedText style={styles.label}>Colaboradores (nombre)</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalRigColaboradorNombreSearch}
+                          onChangeText={setModalRigColaboradorNombreSearch}
+                          placeholder="Nombre (o parte del nombre)"
+                          placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity style={styles.searchIconBtn} onPress={addModalRigColaboradorNombre} activeOpacity={0.85}>
+                          <Ionicons name="add" size={22} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                      <ThemedView style={styles.assignedList}>
+                        {modalRigColaboradorNombres.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más nombres (búsqueda por semejanza).</ThemedText>
+                        ) : (
+                          modalRigColaboradorNombres.map((nom) => (
+                            <ThemedView key={`modal-rig-col-nom-${nom}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>{nom}</ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalRigColaboradorNombre(nom)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
                       <ThemedText style={styles.label}>Capacitadores (cédula)</ThemedText>
                       <View style={styles.row}>
                         <TextInput
@@ -10001,6 +10356,145 @@ export default function ReportesScreen() {
                             <ThemedView key={`modal-rig-cap-${ced}`} style={styles.assignedUserItem}>
                               <ThemedText style={styles.assignedUserTitle}>{ced}</ThemedText>
                               <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalRigCapacitadorCedula(ced)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                      <ThemedText style={styles.label}>Capacitadores (nombre)</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalRigCapacitadorNombreSearch}
+                          onChangeText={setModalRigCapacitadorNombreSearch}
+                          placeholder="Nombre (o parte del nombre)"
+                          placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity style={styles.searchIconBtn} onPress={addModalRigCapacitadorNombre} activeOpacity={0.85}>
+                          <Ionicons name="add" size={22} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                      <ThemedView style={styles.assignedList}>
+                        {modalRigCapacitadorNombres.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más nombres (búsqueda por semejanza).</ThemedText>
+                        ) : (
+                          modalRigCapacitadorNombres.map((nom) => (
+                            <ThemedView key={`modal-rig-cap-nom-${nom}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>{nom}</ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalRigCapacitadorNombre(nom)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                      <ThemedText style={styles.label}>Colaboradores (buscar empleado por nombre o cédula)</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalRigColaboradorEmpSearch}
+                          onChangeText={setModalRigColaboradorEmpSearch}
+                          placeholder="Nombre completo o cédula"
+                          placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity
+                          style={styles.searchIconBtn}
+                          onPress={() => void runSearchEmployees(modalRigColaboradorEmpSearch, 'modalRigColaboradorEmp')}
+                          activeOpacity={0.85}
+                          disabled={employeeSearchMode === 'modalRigColaboradorEmp'}
+                        >
+                          {employeeSearchMode === 'modalRigColaboradorEmp' ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Ionicons name="search" size={22} color="#fff" />
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                      {modalRigColaboradorEmpResults.length ? (
+                        <ThemedView style={styles.resultList}>
+                          {modalRigColaboradorEmpResults.map((e) => (
+                            <TouchableOpacity
+                              key={`modal-rig-col-emp-${e.id}`}
+                              style={styles.resultItem}
+                              onPress={() => pickModalRigColaboradorEmp(e)}
+                            >
+                              <ThemedText>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                            </TouchableOpacity>
+                          ))}
+                        </ThemedView>
+                      ) : null}
+                      <ThemedView style={styles.assignedList}>
+                        {modalRigColaboradorEmpSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más empleados.</ThemedText>
+                        ) : (
+                          modalRigColaboradorEmpSelected.map((e) => (
+                            <ThemedView key={`modal-rig-col-emp-sel-${e.id}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalRigColaboradorEmp(e.id)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                      <ThemedText style={styles.label}>Puestos de los colaboradores (buscar por nombre o código)</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalRigColaboradorPuestoSearch}
+                          onChangeText={setModalRigColaboradorPuestoSearch}
+                          placeholder="Código o nombre de puesto"
+                          placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity
+                          style={styles.searchIconBtn}
+                          onPress={() => void runSearchActaStructure(modalRigColaboradorPuestoSearch, 'puesto', 'modalRigColaboradorPuesto')}
+                          activeOpacity={0.85}
+                          disabled={employeeSearchMode === 'modalRigColaboradorPuesto'}
+                        >
+                          {employeeSearchMode === 'modalRigColaboradorPuesto' ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Ionicons name="search" size={22} color="#fff" />
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                      {modalRigColaboradorPuestoResults.length ? (
+                        <ThemedView style={styles.resultList}>
+                          {modalRigColaboradorPuestoResults.map((it) => (
+                            <TouchableOpacity
+                              key={`modal-rig-col-pto-${it.id}`}
+                              style={styles.resultItem}
+                              onPress={() =>
+                                pickStructureLite(
+                                  it,
+                                  setModalRigColaboradorPuestoSelected,
+                                  setModalRigColaboradorPuestoResults,
+                                  setModalRigColaboradorPuestoSearch
+                                )
+                              }
+                            >
+                              <ThemedText>{formatStructureLite(it)}</ThemedText>
+                            </TouchableOpacity>
+                          ))}
+                        </ThemedView>
+                      ) : null}
+                      <ThemedView style={styles.assignedList}>
+                        {modalRigColaboradorPuestoSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más puestos.</ThemedText>
+                        ) : (
+                          modalRigColaboradorPuestoSelected.map((it) => (
+                            <ThemedView key={`modal-rig-col-pto-sel-${it.id}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>{formatStructureLite(it)}</ThemedText>
+                              <TouchableOpacity
+                                style={styles.removeUserButton}
+                                onPress={() => removeStructureLite(it.id, setModalRigColaboradorPuestoSelected)}
+                              >
                                 <Ionicons name="trash-outline" size={18} color="#FF3B30" />
                               </TouchableOpacity>
                             </ThemedView>

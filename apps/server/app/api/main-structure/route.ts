@@ -2,14 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { toZonedTime } from "date-fns-tz";
 import fs from "fs/promises";
 import path from "path";
-import {
-    loadMainStructureFragmentsFromDisk,
-    parseMainStructureBuildRequest,
-    persistMainStructureFragmentsToDisk,
-    puestoMatchesScope,
-    scopeHasFilter,
-    sucursalMatchesScope,
-} from "./mainStructureOptions";
+import { parseMainStructureBuildRequest } from "./mainStructureOptions";
 import { mergeMainStructureFragments } from "./mergeMainStructureFragments";
 import {
     fetchArticuloMantenimientos,
@@ -40,7 +33,12 @@ import {
 
 type TipoMantenimientoArticuloDTO = { id: number; nombre: string };
 
-/** Alineado con GET /api/llaves para cache offline en sucursal. */
+/**
+ * Alineado con GET /api/llaves para cache offline en sucursal.
+ * `firma_entrega`/`firma_recibe` (firmas dibujadas, base64) se excluyen de la jerarquía: no se usan
+ * para renderizarla y solo hinchan la respuesta. `firma_responsable` sí se conserva: es un hash
+ * corto (QR), no una imagen.
+ */
 function mapMovimientoLlaveForStructure(m: any) {
     return {
         id: m.id,
@@ -53,13 +51,11 @@ function mapMovimientoLlaveForStructure(m: any) {
         recibe: m.recibe,
         fecha: m.fecha,
         hora: m.hora,
-        firma_entrega: m.firma_entrega,
-        firma_recibe: m.firma_recibe,
         firma_responsable: m.firma_responsable,
     };
 }
 
-/** Alineado con GET /api/llaveros para cache offline en sucursal. */
+/** Alineado con GET /api/llaveros para cache offline en sucursal. Ver nota de firmas arriba. */
 function mapMovimientoLlaveroForStructure(m: any) {
     return {
         id: m.id,
@@ -70,8 +66,6 @@ function mapMovimientoLlaveroForStructure(m: any) {
         telefono: m.telefono,
         fecha: m.fecha,
         hora: m.hora,
-        firma_entrega: m.firma_entrega,
-        firma_recibe: m.firma_recibe,
         firma_responsable: m.firma_responsable,
     };
 }
@@ -153,6 +147,71 @@ function mapLlaveroForStructure(row: any) {
             llavero_id: l.llavero_id,
         })),
     };
+}
+
+/** `firma_conductor` (firma dibujada, base64) se excluye: no se usa en la jerarquía. */
+function mapUsoVehiculoForStructure(u: any) {
+    const { firma_conductor, ...rest } = u;
+    return rest;
+}
+
+/** `firma_mecanico` (firma dibujada, base64) se excluye: no se usa en la jerarquía. */
+function mapMantenimientoVehiculoForStructure(m: any) {
+    const { firma_mecanico, ...rest } = m;
+    return rest;
+}
+
+/**
+ * Vehículo completo para la jerarquía: mismas claves que antes (`c_usos_vehiculos_corporativos`,
+ * `c_mantenimiento_vehiculos_corporativos` y el alias `usos` que ya consume el cliente), pero con
+ * las firmas dibujadas de usos/mantenimientos excluidas.
+ */
+function mapVehiculoCorporativoForStructure(v: any) {
+    const usosSanitized = (v.c_usos_vehiculos_corporativos ?? []).map(mapUsoVehiculoForStructure);
+    const mantenimientosSanitized = (v.c_mantenimiento_vehiculos_corporativos ?? []).map(
+        mapMantenimientoVehiculoForStructure,
+    );
+    return {
+        ...v,
+        c_usos_vehiculos_corporativos: usosSanitized,
+        c_mantenimiento_vehiculos_corporativos: mantenimientosSanitized,
+        usos: usosSanitized,
+    };
+}
+
+/**
+ * `informacion_general` (bitácora de vehículos detenidos) puede traer entradas `kind: "signature"`
+ * con el dibujo en base64 en `value`: se vacía ese valor, conservando la entrada (key/label/kind).
+ */
+function stripBitacoraInformacionGeneralFirmas(b: any) {
+    const raw = b?.informacion_general;
+    if (typeof raw !== "string" || !raw) return b;
+    try {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return b;
+        const stripped = parsed.map((f: any) =>
+            f && typeof f === "object" && f.kind === "signature" ? { ...f, value: null } : f,
+        );
+        return { ...b, informacion_general: JSON.stringify(stripped) };
+    } catch {
+        return b;
+    }
+}
+
+/**
+ * `mant_armas_form` (formulario de mantenimiento de armas, en `c_articulo_mantenimiento`) puede
+ * traer un campo `firma` en base64: se vacía, conservando el resto del formulario.
+ */
+function stripMantArmasFormFirma(m: any) {
+    const raw = m?.mant_armas_form;
+    if (typeof raw !== "string" || !raw) return m;
+    try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object" || !("firma" in parsed)) return m;
+        return { ...m, mant_armas_form: JSON.stringify({ ...parsed, firma: null }) };
+    } catch {
+        return m;
+    }
 }
 
 function pushFragment(fragments: Record<string, any>, key: string, item: any) {
@@ -459,8 +518,7 @@ export async function POST(req: NextRequest) {
         }
 
         const buildRequest = parseMainStructureBuildRequest(bodyPayload);
-        const { scope, modules, mergeWithExisting } = buildRequest;
-        const scoped = scopeHasFilter(scope);
+        const { modules } = buildRequest;
         const needsHierarchy =
             modules.estructura || modules.vehiculos || modules.llaves || modules.mantenimientos;
 
@@ -594,13 +652,16 @@ export async function POST(req: NextRequest) {
         if (allPlanArticuloIds.length) mantOrConditions.push({ articulo_plan_id: { in: allPlanArticuloIds } });
         if (allAsignadoIds.length) mantOrConditions.push({ articulo_asignado_id: { in: allAsignadoIds } });
 
-        const [allMantenimientos, allMovimientos] =
+        const [allMantenimientosRaw, allMovimientos] =
             modules.mantenimientos && mantOrConditions.length > 0
                 ? await Promise.all([
                       fetchArticuloMantenimientos(req, mantOrConditions),
                       fetchMovimientosArticuloMantenimiento(req, mantOrConditions),
                   ])
                 : [[], []];
+        // `mant_armas_form` puede traer una firma dibujada embebida en base64: se excluye de la
+        // jerarquía (ver `stripMantArmasFormFirma`).
+        const allMantenimientos = allMantenimientosRaw.map(stripMantArmasFormFirma);
 
         const mantenimientosByPlanId = groupByNumberKey(
             allMantenimientos.filter((m) => m.articulo_plan_id != null),
@@ -640,7 +701,7 @@ export async function POST(req: NextRequest) {
                 : [];
         const empleadoById = new Map(empleadoRows.map((e) => [e.id, e]));
 
-        // Ensamblar fragmentos generados (solo módulos/alcance solicitados).
+        // Ensamblar fragmentos generados (jerarquía completa; solo se filtra por módulos solicitados).
         const generated: Record<string, any> = {};
         if (modules.estructura) {
             generated.divisiones = divisionRows.map((d) => ({ id: d.id, nombre: d.nombre }));
@@ -659,16 +720,7 @@ export async function POST(req: NextRequest) {
                         let pushedContrato = false;
                         const sucursales = sucursalesByContratoId.get(contrato.id) ?? [];
                         for (const sucursal of sucursales) {
-                            const hierarchyCtx = {
-                                empresaId: empresa.id,
-                                clienteId: cliente.id,
-                                divisionId: division.id,
-                                contratoId: contrato.id,
-                                sucursalId: sucursal.id,
-                            };
-                            const sucursalInScope = !scoped || sucursalMatchesScope(hierarchyCtx, scope);
-
-                            if (modules.estructura && sucursalInScope) {
+                            if (modules.estructura) {
                                 if (!pushedCliente) {
                                     pushFragment(generated, `empresa_${empresa.id}_clientes`, {
                                         id: cliente.id,
@@ -695,15 +747,11 @@ export async function POST(req: NextRequest) {
                                 });
                             }
 
-                            if (modules.vehiculos && sucursalInScope) {
-                                const vehiculos = vehiculosBySucursalId.get(sucursal.id) ?? [];
+                            if (modules.vehiculos) {
+                                const vehiculosRaw = vehiculosBySucursalId.get(sucursal.id) ?? [];
+                                const vehiculos = vehiculosRaw.map(mapVehiculoCorporativoForStructure);
                                 const vehiculoById = new Map<number, any>(vehiculos.map((v: any) => [v.id, v]));
-                                generated[`sucursal_${sucursal.id}_vehiculos_corporativos`] = vehiculos.map(
-                                    (v: any) => ({
-                                        ...v,
-                                        usos: (v.c_usos_vehiculos_corporativos ?? []).map((u: any) => ({ ...u })),
-                                    }),
-                                );
+                                generated[`sucursal_${sucursal.id}_vehiculos_corporativos`] = vehiculos;
                                 const bitacorasSucursal = bitacorasBySucursalId.get(sucursal.id) ?? [];
                                 generated[`sucursal_${sucursal.id}_bitacora_vehiculos_detenidos`] =
                                     bitacorasSucursal.map((b: any) => {
@@ -719,14 +767,14 @@ export async function POST(req: NextRequest) {
                                                 ) ?? null;
                                         }
                                         return {
-                                            ...b,
+                                            ...stripBitacoraInformacionGeneralFirmas(b),
                                             vehiculo: mapVehiculoCorporativoSummaryForBitacora(vehRaw),
                                             uso: uso ? { ...uso } : null,
                                         };
                                     });
                             }
 
-                            if (modules.llaves && sucursalInScope) {
+                            if (modules.llaves) {
                                 const llavesCorpo = llavesBySucursalId.get(sucursal.id) ?? [];
                                 const llaverosCorpo = llaverosBySucursalId.get(sucursal.id) ?? [];
                                 generated[`sucursal_${sucursal.id}_llaves`] = llavesCorpo.map(mapLlaveForStructure);
@@ -736,10 +784,7 @@ export async function POST(req: NextRequest) {
 
                             const puestos = puestosBySucursalId.get(sucursal.id) ?? [];
                             for (const puesto of puestos) {
-                                const puestoCtx = { ...hierarchyCtx, puestoId: puesto.id };
-                                const puestoInScope = !scoped || puestoMatchesScope(puestoCtx, scope);
-
-                                if (modules.estructura && puestoInScope) {
+                                if (modules.estructura) {
                                     pushFragment(generated, `sucursal_${sucursal.id}_puestos`, {
                                         id: puesto.id,
                                         nombre: `${puesto.codigo} - ${puesto.nombre}`,
@@ -751,7 +796,7 @@ export async function POST(req: NextRequest) {
                                     });
                                 }
 
-                                if ((modules.estructura || modules.mantenimientos) && puestoInScope) {
+                                if (modules.estructura || modules.mantenimientos) {
                                     let articulos_return = buildArticulosBaseForPuesto(
                                         puesto,
                                         sucursal.id,
@@ -809,7 +854,7 @@ export async function POST(req: NextRequest) {
                                     }));
                                 }
 
-                                if (modules.estructura && puestoInScope) {
+                                if (modules.estructura) {
                                     const plazas = plazasByPuestoId.get(puesto.id) ?? [];
                                     for (const plaza of plazas) {
                                         pushFragment(generated, `puesto_${puesto.id}_plazas`, {
@@ -845,19 +890,19 @@ export async function POST(req: NextRequest) {
             }
         }
 
-        const existingFragments = mergeWithExisting ? await loadMainStructureFragmentsFromDisk() : {};
-        const fragments = { ...existingFragments, ...generated };
-        const createdAt = await persistMainStructureFragmentsToDisk(fragments);
+        // La jerarquía completa se genera en el momento y se devuelve entera (nunca fragmentos
+        // parciales): no se persiste ni se lee ningún archivo en el servidor. El dispositivo es
+        // quien guarda esta colección de fragmentos (reemplazando lo que tenía).
+        const createdAt = toZonedTime(new Date(), "America/Costa_Rica").getTime();
 
-        console.log("Cache escrito en disco (atómico)", randomNumber);
+        console.log("Jerarquía generada (sin persistir en disco)", randomNumber);
 
-        // Mismo formato que main-structure.json en disco (generado en el momento, no leído del archivo).
         return NextResponse.json(
             {
                 status: true,
                 created_at: createdAt,
                 fragmentsVersion: 2,
-                fragments,
+                fragments: generated,
             },
             { status: 200 },
         );

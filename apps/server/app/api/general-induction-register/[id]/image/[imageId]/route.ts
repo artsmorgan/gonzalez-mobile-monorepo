@@ -3,6 +3,7 @@ import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessToke
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { deleteDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
 import { reportError } from "../../../../../../utils/reportError";
+import { GENERAL_INDUCTION_SAFE_SELECT } from "../../../personasHelpers";
 
 export const runtime = "nodejs";
 
@@ -31,6 +32,7 @@ export async function DELETE(
         table: "c_registro_induccion_general",
         operation: "findUnique",
         where: { id: registroId },
+        select: GENERAL_INDUCTION_SAFE_SELECT,
       },
     });
     if (!registro || (registro as any).isActive === false) {

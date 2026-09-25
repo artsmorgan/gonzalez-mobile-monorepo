@@ -111,7 +111,8 @@ export async function fetchEmpleados(empleadoIds: number[]) {
             fecha_contratacion: true,
             estado: true,
             supervisor_id: true,
-            firma_manual: true,
+            // `firma_manual` (firma dibujada, base64) nunca se incluye en la jerarquía: solo
+            // hincha la respuesta y no se usa para renderizarla.
         },
         orderBy: [{ nombre: "asc" }, { primer_apellido: "asc" }, { segundo_apellido: "asc" }, { id: "asc" }],
     });
@@ -310,8 +311,9 @@ export async function fetchMovimientosArticuloMantenimiento(req: NextRequest, ma
             recibe: true,
             fecha: true,
             hora: true,
-            firma_entrega: true,
-            firma_recibe: true,
+            // `firma_entrega`/`firma_recibe` (firmas dibujadas, base64) nunca se incluyen en la
+            // jerarquía: solo hinchan la respuesta y no se usan para renderizarla. `firma_responsable`
+            // sí se conserva: es un hash corto (QR), no una imagen.
             firma_responsable: true,
         },
     });

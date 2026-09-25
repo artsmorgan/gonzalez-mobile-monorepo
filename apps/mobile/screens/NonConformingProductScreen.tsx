@@ -14,6 +14,8 @@ import {
   View,
 } from 'react-native';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
+import RecordAudioButton from '@/components/RecordAudioButton';
+import AudioPreviewModal from '@/components/AudioPreviewModal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { resolveAppConnectivity } from '@/hooks/resolveAppConnectivity';
@@ -53,6 +55,7 @@ import {
 import {
   filterPncFromEvaluationsCacheByCorpo,
   getStablePncRowKey,
+  isPncLocalPendingRecord,
   mergeEvaluationsCachePncForCorpo,
 } from '@/hooks/nonConformingProductCacheHelpers';
 import {
@@ -63,7 +66,7 @@ import {
   NON_CONFORMING_PRODUCT_FILE_STORAGE_PREFIX,
   mapPncPickerTypeToStoredFileType,
 } from '@/hooks/nonConformingProductFilesSync';
-import { deleteFile, getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
+import { deleteFile, getLocalFileDisplayUri, saveFile, saveBase64File, persistSignatureRef, hydrateSignatureRef } from '@/hooks/fileStorage';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'NonConformingProduct'>;
@@ -252,6 +255,21 @@ const getBase64Only = (value: string | null | undefined): string => {
   return s;
 };
 
+/**
+ * `firma_persona_identifico_pnc`/`firma_persona_origino_pnc` viajan al servidor en base64 puro (sin
+ * prefijo `data:`) y ahora se guardan en `evaluations_cache`/`evaluations_actions` como referencia a
+ * expo-files. Esto la hidrata de vuelta a un data URI para el estado del formulario (que sigue
+ * tratando la firma como antes). Si `value` no es una referencia local válida, se asume base64 legado
+ * (sin prefijo) y se le agrega el prefijo en vez de perderla.
+ */
+async function hydratePncSignatureForForm(value: string | null | undefined): Promise<string> {
+  if (!value) return '';
+  if (value.startsWith('data:')) return value;
+  const hydrated = await hydrateSignatureRef(value);
+  if (hydrated) return hydrated;
+  return `data:image/png;base64,${value}`;
+}
+
 const formatSignatureForDisplay = (value: string | null | undefined): string | null => {
   if (!value) return null;
   const s = String(value);
@@ -422,6 +440,7 @@ export default function NonConformingProductScreen() {
   const [audioFiles, setAudioFiles] = useState<LocalFile[]>([]);
   const [videoFiles, setVideoFiles] = useState<LocalFile[]>([]);
   const [documentFiles, setDocumentFiles] = useState<LocalFile[]>([]);
+  const [audioPreview, setAudioPreview] = useState<{ uri: string; label: string } | null>(null);
 
   const [isPncCameraVisible, setIsPncCameraVisible] = useState(false);
   const [pncCameraPermission, requestPncCameraPermission] = useCameraPermissions();
@@ -473,6 +492,7 @@ export default function NonConformingProductScreen() {
   `;
 
   const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
     const connectivity = await resolveAppConnectivity();
     return connectivity.ok;
   };
@@ -903,11 +923,33 @@ export default function NonConformingProductScreen() {
           return;
         }
 
-        const serverItems: PncRecord[] = (Array.isArray(res.data) ? (res.data as any[]) : []).filter(
+        const serverItemsRaw: PncRecord[] = (Array.isArray(res.data) ? (res.data as any[]) : []).filter(
           (row: any) => row && row.isActive !== false
         ) as PncRecord[];
+        // Las firmas llegan en base64 desde el servidor; se guardan en expo-files y solo se
+        // conserva la referencia en el cache (nunca el base64).
+        const prevSyncedPnc = cache.filter(
+          (it: any) => it.type === 'non_conforming_product' && !isPncLocalPendingRecord(it)
+        );
+        const serverItems = await Promise.all(
+          serverItemsRaw.map(async (row: any) => ({
+            ...row,
+            firma_persona_identifico_pnc: row.firma_persona_identifico_pnc
+              ? await saveBase64File({ base64: row.firma_persona_identifico_pnc, extension: 'png', type: 'image', prefix: 'pnc_firma_identifico' })
+              : row.firma_persona_identifico_pnc,
+            firma_persona_origino_pnc: row.firma_persona_origino_pnc
+              ? await saveBase64File({ base64: row.firma_persona_origino_pnc, extension: 'png', type: 'image', prefix: 'pnc_firma_origino' })
+              : row.firma_persona_origino_pnc,
+          }))
+        );
         const nextCache = mergeEvaluationsCachePncForCorpo(cache, serverItems, corpoId);
         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(nextCache));
+        // Los registros sincronizados anteriores quedaron reemplazados por los recién descargados
+        // (o eliminados en servidor): sus archivos de firma locales ya son huérfanos.
+        for (const prevRow of prevSyncedPnc as any[]) {
+          if (prevRow.firma_persona_identifico_pnc) await deleteFile(prevRow.firma_persona_identifico_pnc).catch(() => {});
+          if (prevRow.firma_persona_origino_pnc) await deleteFile(prevRow.firma_persona_origino_pnc).catch(() => {});
+        }
         setRecords(filterPncFromEvaluationsCacheByCorpo(nextCache, corpoId) as PncRecord[]);
       } catch (e: any) {
         console.error('Error fetching PNC:', e);
@@ -1064,10 +1106,10 @@ export default function NonConformingProductScreen() {
     setResponsableCuenta(r.responsable_cuenta || '');
     setTipoServicioNoConforme(r.tipo_servicio_no_conforme || '');
     setPersonaIdentifico(r.persona_identifico_pnc || '');
-    setFirmaPersonaIdentifico(formatSignatureForDisplay(r.firma_persona_identifico_pnc) || r.firma_persona_identifico_pnc || '');
+    setFirmaPersonaIdentifico(await hydratePncSignatureForForm(r.firma_persona_identifico_pnc));
     setDescripcion(r.descripcion || '');
     setPersonaOrigino(r.persona_origino_pnc || '');
-    setFirmaPersonaOrigino(formatSignatureForDisplay(r.firma_persona_origino_pnc) || r.firma_persona_origino_pnc || '');
+    setFirmaPersonaOrigino(await hydratePncSignatureForForm(r.firma_persona_origino_pnc));
     setAccionImplementada(r.accion_implementada || '');
     setResponsableAprobar(r.responsable_aprobar || '');
 
@@ -1241,6 +1283,10 @@ export default function NonConformingProductScreen() {
       console.error('Error picking file (PNC):', e);
       Alert.alert('Error', 'No se pudo seleccionar el archivo.');
     }
+  };
+
+  const handleRecordedAudio = async (uri: string) => {
+    await addPickedPncFileAsset('audio', { uri, name: `grabacion_${Date.now()}.m4a`, mimeType: 'audio/m4a' });
   };
 
   const removeLocalFile = async (type: LocalFile['type'], id: string) => {
@@ -1662,7 +1708,21 @@ export default function NonConformingProductScreen() {
           videoFiles,
           documentFiles
         );
-        const requestDataOffline = { ...requestData, archivos: archivosPersist };
+        // Las firmas se guardan en expo-files; solo se conserva la referencia en cache/actions.
+        const firmaIdentificoRefOffline = await persistSignatureRef({
+          value: firmaPersonaIdentifico || null,
+          prefix: 'pnc_firma_identifico',
+        });
+        const firmaOriginoRefOffline = await persistSignatureRef({
+          value: firmaPersonaOrigino || null,
+          prefix: 'pnc_firma_origino',
+        });
+        const requestDataOffline = {
+          ...requestData,
+          archivos: archivosPersist,
+          firma_persona_identifico_pnc: firmaIdentificoRefOffline,
+          firma_persona_origino_pnc: firmaOriginoRefOffline,
+        };
 
         const localFiles: PncFile[] = pncCacheFilesFromArchivoEntries(archivosForCache);
 
@@ -1679,10 +1739,10 @@ export default function NonConformingProductScreen() {
           responsable_cuenta: requestData.responsable_cuenta,
           tipo_servicio_no_conforme: requestData.tipo_servicio_no_conforme,
           persona_identifico_pnc: requestData.persona_identifico_pnc,
-          firma_persona_identifico_pnc: requestData.firma_persona_identifico_pnc,
+          firma_persona_identifico_pnc: firmaIdentificoRefOffline ?? '',
           descripcion: requestData.descripcion,
           persona_origino_pnc: requestData.persona_origino_pnc,
-          firma_persona_origino_pnc: requestData.firma_persona_origino_pnc,
+          firma_persona_origino_pnc: firmaOriginoRefOffline ?? '',
           accion_implementada: requestData.accion_implementada,
           fecha_solucion: requestData.fecha_solucion,
           responsable_aprobar: requestData.responsable_aprobar,
@@ -1751,6 +1811,20 @@ export default function NonConformingProductScreen() {
 
       // offline update: borrador local → fusionar en pending create; servidor → un solo update encolado
       {
+        // Las firmas se guardan en expo-files; solo se conserva la referencia en cache/actions. El
+        // registro tal como está en cache (antes de este cambio) indica qué archivo reemplazar/borrar.
+        const recForFirma = getEditingRecord();
+        requestDataUpdate.firma_persona_identifico_pnc = await persistSignatureRef({
+          value: firmaPersonaIdentifico || null,
+          previousRef: (recForFirma as any)?.firma_persona_identifico_pnc ?? null,
+          prefix: 'pnc_firma_identifico',
+        });
+        requestDataUpdate.firma_persona_origino_pnc = await persistSignatureRef({
+          value: firmaPersonaOrigino || null,
+          previousRef: (recForFirma as any)?.firma_persona_origino_pnc ?? null,
+          prefix: 'pnc_firma_origino',
+        });
+
         if (isLocal) {
           const localKey = String(editing.id_local || editing.id || recordId);
           await mergeOrPushNonConformingProductCreateInQueue(localKey, requestDataUpdate);
@@ -1850,6 +1924,8 @@ export default function NonConformingProductScreen() {
       const cacheStr = await AsyncStorage.getItem('evaluations_cache');
       const cache = cacheStr ? JSON.parse(cacheStr) : [];
       const updatedCache = cache.filter((item: any) => !(item.type === 'non_conforming_product' && (item.id === recordId || item.id_local === recordId)));
+      if (r.firma_persona_identifico_pnc) await deleteFile(r.firma_persona_identifico_pnc as any).catch(() => {});
+      if (r.firma_persona_origino_pnc) await deleteFile(r.firma_persona_origino_pnc as any).catch(() => {});
       await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
 
       Alert.alert('Éxito', 'Registro eliminado');
@@ -1884,7 +1960,11 @@ export default function NonConformingProductScreen() {
         ))}
 
         {audioFiles.map((file) => (
-          <ThemedView key={file.id} style={[styles.fileRow, styles.fileRowTall]}>
+          <TouchableOpacity
+            key={file.id}
+            style={[styles.fileRow, styles.fileRowTall]}
+            onPress={() => setAudioPreview({ uri: file.uri || getLocalFileDisplayUri(file.storedFileName || ''), label: file.name })}
+          >
             <Ionicons name="mic-outline" size={16} color="#007AFF" style={styles.fileRowTallIcon} />
             <ThemedView style={styles.fileNameCol}>
               <ThemedText numberOfLines={1} style={styles.fileFormName}>
@@ -1894,7 +1974,7 @@ export default function NonConformingProductScreen() {
             <TouchableOpacity onPress={() => removeLocalFile('audio', file.id)}>
               <Ionicons name="trash" size={16} color="#FF3B30" />
             </TouchableOpacity>
-          </ThemedView>
+          </TouchableOpacity>
         ))}
 
         {videoFiles.map((file) => (
@@ -2080,6 +2160,11 @@ export default function NonConformingProductScreen() {
           <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('audio')}>
             <Ionicons name="mic-outline" size={20} color="#007AFF" />
           </TouchableOpacity>
+          <RecordAudioButton
+            variant="icon"
+            onRecorded={handleRecordedAudio}
+            buttonStyle={styles.fileIconButton}
+          />
           <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('video')}>
             <Ionicons name="videocam-outline" size={20} color="#007AFF" />
           </TouchableOpacity>
@@ -2588,6 +2673,13 @@ export default function NonConformingProductScreen() {
         title={cambiosTitle}
         items={cambiosItems}
         onClose={closeCambiosModal}
+      />
+
+      <AudioPreviewModal
+        visible={!!audioPreview}
+        onClose={() => setAudioPreview(null)}
+        sourceUri={audioPreview?.uri}
+        label={audioPreview?.label}
       />
 
       {QRScannerComponent}

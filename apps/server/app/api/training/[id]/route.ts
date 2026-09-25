@@ -49,7 +49,6 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             titulo,
             descripcion,
             tipo,
-            resultado,
             observaciones,
             nombre_responsable,
             cedula_responsable,
@@ -71,7 +70,6 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         if (titulo != null) updateData.titulo = titulo;
         if (descripcion != null) updateData.descripcion = descripcion;
         if (tipo != null) updateData.tipo = tipo;
-        if (resultado !== undefined) updateData.resultado = resultado;
         if (observaciones != null) updateData.observaciones = observaciones;
         if (nombre_responsable != null) updateData.nombre_responsable = nombre_responsable;
         if (cedula_responsable != null) updateData.cedula_responsable = cedula_responsable;
@@ -106,7 +104,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 },
             });
             for (const emp of empleados) {
-                const eid = parseInt(String(emp), 10);
+                const eid = typeof emp === "object" && emp !== null ? parseInt(String(emp.id), 10) : parseInt(String(emp), 10);
+                const eResultado = typeof emp === "object" && emp !== null && emp.resultado != null ? String(emp.resultado) : null;
                 if (!Number.isFinite(eid)) continue;
                 await callDynamicPrisma({
                     req,
@@ -114,7 +113,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                         action: "POST",
                         table: "e_capacitacion_empleado",
                         operation: "create",
-                        data: { capacitacion_id: id, empleado_id: eid },
+                        data: { capacitacion_id: id, empleado_id: eid, resultado: eResultado },
                     },
                 });
             }
@@ -131,7 +130,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 },
             });
             for (const p of puestos) {
-                const pid = parseInt(String(p), 10);
+                const pid = typeof p === "object" && p !== null ? parseInt(String(p.id), 10) : parseInt(String(p), 10);
+                const pResultado = typeof p === "object" && p !== null && p.resultado != null ? String(p.resultado) : null;
                 if (!Number.isFinite(pid)) continue;
                 await callDynamicPrisma({
                     req,
@@ -139,7 +139,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                         action: "POST",
                         table: "e_capacitacion_puesto",
                         operation: "create",
-                        data: { capacitacion_id: id, puesto_id: pid },
+                        data: { capacitacion_id: id, puesto_id: pid, resultado: pResultado },
                     },
                 });
             }

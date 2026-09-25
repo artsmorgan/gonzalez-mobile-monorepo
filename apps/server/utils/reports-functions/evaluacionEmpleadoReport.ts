@@ -416,6 +416,11 @@ export async function buildEvaluacionPersonalExcelConsolidado(
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Evaluaciones");
     const wsDet = wb.addWorksheet("Detalles");
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente.
+    for (const sheet of [wsMain, wsDet]) {
+        sheet.views = [{ showGridLines: false }];
+    }
     const border: Partial<ExcelJS.Borders> = {
         top: { style: "thin" },
         left: { style: "thin" },
@@ -477,7 +482,6 @@ export async function buildEvaluacionPersonalExcelConsolidado(
         cell.border = border;
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     }
-    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.columns = [
         { width: 3 },
         { width: 12 },

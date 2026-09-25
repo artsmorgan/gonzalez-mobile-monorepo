@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { reportError } from "../../../../../../utils/reportError";
+import { GENERAL_INDUCTION_SAFE_SELECT } from "../../../personasHelpers";
 
 export const runtime = "nodejs";
 
@@ -29,6 +30,7 @@ export async function GET(
         table: "c_registro_induccion_general",
         operation: "findUnique",
         where: { id },
+        select: GENERAL_INDUCTION_SAFE_SELECT,
       },
     });
     if (!record) {

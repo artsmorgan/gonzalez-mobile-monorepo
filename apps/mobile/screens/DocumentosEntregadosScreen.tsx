@@ -50,6 +50,7 @@ import {
   buildDocumentoEntregadoCacheRowFromRequest,
   getDocEntregadoCorpoId,
 } from '@/hooks/documentosEntregadosCacheHelpers';
+import { persistSignatureRef, resolveStoredSignatureDisplayUri, hydrateSignatureRef, localizeSignatureFieldInList, deleteSignatureLocalRef } from '@/hooks/fileStorage';
 
 type DocUI = DocumentoEntregadoItem & { id_local?: string };
 type DocumentTypeUI = { id: number; nombre: string };
@@ -860,12 +861,19 @@ export default function DocumentosEntregadosScreen() {
           return;
         }
 
-        const serverList = (res.data || []).map((it: any) => ({
+        const serverListRaw = (res.data || []).map((it: any) => ({
           ...it,
           corpo_id: Number(it.corpo_id ?? it.sucursal_id ?? corpoId),
           id_local: it.id_local || '',
           isActive: it.isActive !== false,
         }));
+        // El servidor devuelve `firma_representante_cliente` en base64: se guarda en expo-files
+        // antes de cachear la lista (nunca base64 crudo en AsyncStorage).
+        const serverList = await localizeSignatureFieldInList(
+          serverListRaw,
+          'firma_representante_cliente',
+          'documento_entregado_firma_cliente'
+        );
         const merged = mergeDocumentosEntregadosCacheForCorpo(fullCache, serverList, sid);
         await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(merged));
         setDocs(merged.filter((d: any) => getDocEntregadoCorpoId(d) === sid));
@@ -1070,7 +1078,9 @@ export default function DocumentosEntregadosScreen() {
     setNombreRecibe(it.nombre_oficial_recibe || '');
     setTipoDocumento(it.tipo_documento || '');
     setDescripcion(it.descripcion || '');
-    setFirmaCliente(it.firma_representante_cliente || '');
+    // `firma_representante_cliente` puede venir del cache como referencia local a expo-files: se
+    // hidrata a un data URI real para poder mostrarla y, si se guarda de nuevo, reenviarla tal cual.
+    setFirmaCliente((await hydrateSignatureRef(it.firma_representante_cliente)) || it.firma_representante_cliente || '');
     setFirmaResponsable((it as any).firma_responsable || '');
   };
 
@@ -1290,9 +1300,20 @@ export default function DocumentosEntregadosScreen() {
           const newId = (res as any).id;
           if (res.status && newId != null && Number(newId) > 0) {
             try {
+              // El endpoint no devuelve la firma guardada: el valor recién enviado es la firma ya
+              // sincronizada, así que se persiste como referencia local a expo-files para el cache.
+              const firmaClienteRefCreate = await persistSignatureRef({
+                value: payload.firma_representante_cliente ?? null,
+                previousRef: null,
+                prefix: 'documento_entregado_firma_cliente',
+              });
               const str = await AsyncStorage.getItem('documentos_entregados_cache');
               const list: any[] = str ? JSON.parse(str) : [];
-              const row = buildDocumentoEntregadoCacheRowFromRequest(payload, Number(newId), '');
+              const row = buildDocumentoEntregadoCacheRowFromRequest(
+                { ...payload, firma_representante_cliente: firmaClienteRefCreate },
+                Number(newId),
+                ''
+              );
               const next = upsertDocumentoEntregadoInCache(list, row);
               await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
               setDocs(
@@ -1309,16 +1330,23 @@ export default function DocumentosEntregadosScreen() {
           }
         } else {
           const localId = `local-doc-${Date.now()}`;
+          // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions.
+          const firmaClienteRefOffCreate = await persistSignatureRef({
+            value: payload.firma_representante_cliente ?? null,
+            previousRef: null,
+            prefix: 'documento_entregado_firma_cliente',
+          });
+          const payloadForCache = { ...payload, firma_representante_cliente: firmaClienteRefOffCreate };
           const localItem: DocUI = {
             id: 0,
             id_local: localId,
-            ...(payload as any),
+            ...(payloadForCache as any),
             isActive: true,
           } as DocUI;
           const next = [localItem, ...docs];
           setDocs(next);
           await persistDocsBranchCache(payload.corpo_id, next);
-          await upsertAction({ type: 'create', id: localId, requestData: payload });
+          await upsertAction({ type: 'create', id: localId, requestData: payloadForCache });
           Alert.alert('Éxito', 'Se sincronizará cuando vuelva la conexión.');
           setIsCreating(false);
         }
@@ -1331,9 +1359,21 @@ export default function DocumentosEntregadosScreen() {
         const res = await updateDocumentoEntregado({ id: editing.id, requestData: payload, refreshAccessToken, logout });
         if (res.status) {
           try {
+            // El endpoint no devuelve la firma guardada: el valor recién enviado es la firma ya
+            // sincronizada, así que se persiste como referencia vigente en expo-files (reemplazando
+            // la anterior) para el cache.
+            const firmaClienteRefUpdate = await persistSignatureRef({
+              value: payload.firma_representante_cliente ?? null,
+              previousRef: (editing as any)?.firma_representante_cliente ?? null,
+              prefix: 'documento_entregado_firma_cliente',
+            });
             const str = await AsyncStorage.getItem('documentos_entregados_cache');
             const list: any[] = str ? JSON.parse(str) : [];
-            const row = buildDocumentoEntregadoCacheRowFromRequest(payload, editing.id, '');
+            const row = buildDocumentoEntregadoCacheRowFromRequest(
+              { ...payload, firma_representante_cliente: firmaClienteRefUpdate },
+              editing.id,
+              ''
+            );
             const next = upsertDocumentoEntregadoInCache(list, row);
             await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
             setDocs(
@@ -1350,13 +1390,20 @@ export default function DocumentosEntregadosScreen() {
           Alert.alert('Error', res.message || 'No se pudo actualizar el documento');
         }
       } else {
+        // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions.
+        const firmaClienteRefOffUpdate = await persistSignatureRef({
+          value: payload.firma_representante_cliente ?? null,
+          previousRef: (editing as any)?.firma_representante_cliente ?? null,
+          prefix: 'documento_entregado_firma_cliente',
+        });
+        const payloadForCache = { ...payload, firma_representante_cliente: firmaClienteRefOffUpdate ?? '' };
         const next = docs.map((it) => {
           const match =
             (editing.id_local && it.id_local === editing.id_local) || (!editing.id_local && it.id === editing.id);
           if (!match) return it;
           return {
             ...it,
-            ...payload,
+            ...payloadForCache,
             id: it.id,
             id_local: it.id_local,
             isActive: (it as any).isActive !== false,
@@ -1375,13 +1422,13 @@ export default function DocumentosEntregadosScreen() {
           docActions = docActions.filter((a: any) => !(a.type === 'update' && String(a.id) === lid));
           const ci = docActions.findIndex((a: any) => a.type === 'create' && a.id === editing.id_local);
           if (ci !== -1) {
-            docActions[ci] = { ...docActions[ci], requestData: payload };
+            docActions[ci] = { ...docActions[ci], requestData: payloadForCache };
           } else {
-            docActions.push({ type: 'create', id: editing.id_local, requestData: payload });
+            docActions.push({ type: 'create', id: editing.id_local, requestData: payloadForCache });
           }
           await AsyncStorage.setItem('documentos_entregados_actions', JSON.stringify(docActions));
         } else {
-          await upsertAction({ type: 'update', id: editing.id, requestData: payload });
+          await upsertAction({ type: 'update', id: editing.id, requestData: payloadForCache });
         }
 
         Alert.alert('Éxito', 'Los cambios se sincronizarán cuando vuelva la conexión.');
@@ -1437,6 +1484,7 @@ export default function DocumentosEntregadosScreen() {
             setDocs(next);
               await persistDocsBranchCache(sid, next);
             if (it.id_local) await removeActionsForLocalId(it.id_local);
+            await deleteSignatureLocalRef(it.firma_representante_cliente);
             return;
           }
 
@@ -1449,6 +1497,7 @@ export default function DocumentosEntregadosScreen() {
                 logout,
               });
             if (res.status) {
+              await deleteSignatureLocalRef(it.firma_representante_cliente);
               Alert.alert('Éxito', 'Documento eliminado correctamente');
                 await fetchRecords();
             } else {
@@ -1579,7 +1628,7 @@ export default function DocumentosEntregadosScreen() {
             <ThemedText style={styles.sectionTitle}>Firma representante cliente</ThemedText>
             {it.firma_representante_cliente ? (
               <ThemedView style={styles.signaturePreviewContainer}>
-                <Image source={{ uri: it.firma_representante_cliente }} style={styles.signaturePreview} resizeMode="contain" />
+                <Image source={{ uri: resolveStoredSignatureDisplayUri(it.firma_representante_cliente) }} style={styles.signaturePreview} resizeMode="contain" />
               </ThemedView>
             ) : (
               <ThemedText style={styles.signatureHintMuted}>Aún no hay firma.</ThemedText>

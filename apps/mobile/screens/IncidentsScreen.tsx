@@ -20,6 +20,8 @@ import SlideMenu from '@/components/SlideMenu';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import RecordAudioButton from '@/components/RecordAudioButton';
+import AudioPreviewModal from '@/components/AudioPreviewModal';
 import { RootStackParamList } from '../App';
 import { useAuth } from '@/contexts/AuthContext';
 import authedFetch from '@/hooks/authedFetch';
@@ -38,7 +40,7 @@ import type {
   IncidentFileInput,
 } from '@/hooks/incidentsTypes';
 import { createIncident, createIncidentContribution, deleteIncident, deleteIncidentContribution, deleteIncidentContributionFile, deleteIncidentFile, listExecutives, listIncidentClassifications, listIncidentContributions, listIncidentsByCorpo, updateIncident, updateIncidentContribution } from '@/hooks/incidentsFunctions';
-import { deleteFile, getLocalFileDisplayUri, saveFile, type StoredFileType } from '@/hooks/fileStorage';
+import { deleteFile, getLocalFileDisplayUri, saveFile, saveBase64File, persistSignatureRef, hydrateSignatureRef, deleteSignatureLocalRef, resolveStoredSignatureDisplayUri, type StoredFileType } from '@/hooks/fileStorage';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { findHierarchyByPuestoIn } from '@/hooks/llavesMainStructureHelpers';
 import { filterIncidentsByCorpo, getCurrentMarcaId, getExecutivesCache, getIncidentsCache, getIncidentsClassificationsCache, INCIDENT_CONTRIBUTIONS_ACTIONS_KEY, mergeIncidentsCacheForCorpo, setExecutivesCache, setIncidentsCache, setIncidentsClassificationsCache } from '@/hooks/incidentsStorage';
@@ -316,6 +318,7 @@ export default function IncidentsScreen() {
   const [textFiles, setTextFiles] = useState<ManualFileLocal[]>([]);
   const [imageFiles, setImageFiles] = useState<ManualFileLocal[]>([]);
   const [audioFiles, setAudioFiles] = useState<ManualFileLocal[]>([]);
+  const [audioPreview, setAudioPreview] = useState<{ uri: string; label: string } | null>(null);
   const [videoFiles, setVideoFiles] = useState<ManualFileLocal[]>([]);
 
   // Cámara reutilizable (una foto por apertura, igual que ChecklistSupervisionScreen.tsx): sirve
@@ -1206,6 +1209,10 @@ export default function IncidentsScreen() {
     }
   };
 
+  const handleRecordedIncidentAudio = async (uri: string) => {
+    await addPickedIncidentFileAsset('audio', { uri, name: `grabacion_${Date.now()}.m4a`, mimeType: 'audio/m4a' });
+  };
+
   const removeLocalFile = (type: ManualFileLocal['type'], id: string) => {
     const take = (prev: ManualFileLocal[]) => prev.find((f) => f.id === id);
     let toDel: ManualFileLocal | undefined;
@@ -1872,10 +1879,31 @@ export default function IncidentsScreen() {
         // pero manteniendo aportes locales pendientes (id_local != '')
         const currentFromCache = await getIncidentAportesFromCache(inc.id);
         const pendingLocal = currentFromCache.filter((a: any) => a?.id_local && a.id_local !== '');
-        const merged = [...pendingLocal, ...res.contributions];
+        const previouslySynced = currentFromCache.filter((a: any) => !(a?.id_local && a.id_local !== ''));
+        // La firma llega en base64 desde el servidor; se guarda en expo-files y solo se conserva la
+        // referencia en el cache (nunca el base64).
+        const localizedContributions = await Promise.all(
+          res.contributions.map(async (c: any) => {
+            const raw = c?.firma_aporte_tercero;
+            if (typeof raw !== 'string' || !raw.trim()) return c;
+            try {
+              const fileName = await saveBase64File({ base64: raw, extension: 'png', type: 'image', prefix: 'incident_aporte_firma' });
+              return { ...c, firma_aporte_tercero: fileName };
+            } catch (error) {
+              console.error('Error guardando firma de aporte descargada en expo-files:', error);
+              return { ...c, firma_aporte_tercero: null };
+            }
+          })
+        );
+        const merged = [...pendingLocal, ...localizedContributions];
 
         setAportes(merged);
         await updateIncidentAportesInIncidentsCache({ id: inc.id, id_local: inc.id_local }, () => merged);
+        // Los aportes sincronizados anteriores quedaron reemplazados: sus archivos de firma locales
+        // ya son huérfanos.
+        for (const prevAporte of previouslySynced as any[]) {
+          if (prevAporte?.firma_aporte_tercero) await deleteSignatureLocalRef(prevAporte.firma_aporte_tercero);
+        }
       } else {
         Alert.alert('Error', res.message || 'No se pudieron cargar los aportes');
       }
@@ -2000,6 +2028,10 @@ export default function IncidentsScreen() {
     }
   };
 
+  const handleRecordedAporteAudio = async (uri: string) => {
+    await addPickedAporteFileAsset('audio', { uri, name: `grabacion_${Date.now()}.m4a`, mimeType: 'audio/m4a' });
+  };
+
   const removeAporteLocalFile = (type: ManualFileLocal['type'], id: string) => {
     const take = (prev: ManualFileLocal[]) => prev.find((f) => f.id === id);
     let toDel: ManualFileLocal | undefined;
@@ -2044,12 +2076,11 @@ export default function IncidentsScreen() {
   };
 
   const getContributionSignatureUri = (incidentId: number, contribution: IncidentContribution): string | null => {
-    // Leer desde firma_aporte_tercero en lugar de buscar archivo
-    // La firma se guarda tal cual como viene del SignatureScreen (con prefijo data:image/png;base64,)
-    // Igual que en DigitalSignatureScreen.tsx donde se guarda manualSignature directamente
-    const firmaBase64 = (contribution as any).firma_aporte_tercero;
-    if (firmaBase64 && typeof firmaBase64 === 'string' && firmaBase64.trim().length > 0) {
-      return firmaBase64.trim();
+    // `firma_aporte_tercero` puede ser un data URI o (tras esta migración) una referencia local a
+    // expo-files: se resuelve a una URI mostrable en cualquiera de los dos casos.
+    const firmaValue = (contribution as any).firma_aporte_tercero;
+    if (firmaValue && typeof firmaValue === 'string' && firmaValue.trim().length > 0) {
+      return resolveStoredSignatureDisplayUri(firmaValue.trim()) || null;
     }
     return null;
   };
@@ -2125,6 +2156,14 @@ export default function IncidentsScreen() {
       // EDIT aporte solo local: fusionar en el "create" pendiente (no duplicar ni encolar "update").
       if (editingAporte && editingAporte.id_local && editingAporte.id_local !== '') {
         const payloadFiles = buildAportePayloadWithSignature();
+        // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions. La
+        // referencia previa (tal como estaba el aporte antes de este cambio) permite reemplazar o
+        // borrar el archivo correcto en vez de acumular huérfanos.
+        const firmaAporteRefLocal = await persistSignatureRef({
+          value: aporteFirmaManual || null,
+          previousRef: (editingAporte as any)?.firma_aporte_tercero ?? null,
+          prefix: 'incident_aporte_firma',
+        });
         const actions = await readContributionActions();
         const idx = actions.findIndex((x: any) => x.type === 'create' && x.id === editingAporte.id_local);
         if (idx !== -1) {
@@ -2135,7 +2174,7 @@ export default function IncidentsScreen() {
               ...prev,
               aporte: texto,
               nombre_aporte: nombreAporte || null,
-              firma_aporte_tercero: aporteFirmaManual || null,
+              firma_aporte_tercero: firmaAporteRefLocal,
               rol_aporte: prev.rol_aporte || role || 'OPERATIVO',
               archivos: JSON.stringify(payloadFiles),
             },
@@ -2149,7 +2188,7 @@ export default function IncidentsScreen() {
             ...ap,
             aporte: texto,
             nombre_aporte: nombreAporte || null,
-            firma_aporte_tercero: aporteFirmaManual ?? null,
+            firma_aporte_tercero: firmaAporteRefLocal,
             files: [...payloadFiles].map((f, fidx) => ({
               id: Date.now() + Math.random() + fidx,
               id_local: `lf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -2227,7 +2266,12 @@ export default function IncidentsScreen() {
         }
 
         // Offline update (solo texto / agrega archivos) -> queue
-        // Usar la firma directamente tal como viene del SignatureScreen
+        // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions.
+        const firmaAporteRefUpdate = await persistSignatureRef({
+          value: aporteFirmaManual || null,
+          previousRef: (editingAporte as any)?.firma_aporte_tercero ?? null,
+          prefix: 'incident_aporte_firma',
+        });
         const actions = await readContributionActions();
         actions.push({
           type: 'update',
@@ -2236,14 +2280,14 @@ export default function IncidentsScreen() {
           requestData: {
             aporte: texto,
             nombre_aporte: nombreAporte || null,
-            firma_aporte_tercero: aporteFirmaManual || null,
+            firma_aporte_tercero: firmaAporteRefUpdate,
             archivos: JSON.stringify(buildAportePayloadWithSignature()),
           },
         });
         await writeContributionActions(actions);
 
         // update cache + ui
-        const updated = aportes.map((a) => (a.id === editingAporte.id ? { ...a, aporte: texto, nombre_aporte: nombreAporte || null } : a));
+        const updated = aportes.map((a) => (a.id === editingAporte.id ? { ...a, aporte: texto, nombre_aporte: nombreAporte || null, firma_aporte_tercero: firmaAporteRefUpdate } : a));
         setAportes(updated);
         await updateIncidentAportesInIncidentsCache(
           { id: selectedIncidentForAportes.id, id_local: selectedIncidentForAportes.id_local },
@@ -2293,7 +2337,11 @@ export default function IncidentsScreen() {
       }
 
       // Offline create
-      // Usar la firma directamente tal como viene del SignatureScreen (con prefijo data:image/png;base64,)
+      // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions.
+      const firmaAporteRefCreate = await persistSignatureRef({
+        value: aporteFirmaManual || null,
+        prefix: 'incident_aporte_firma',
+      });
       const localId = generateRandomId();
       const payloadFiles = buildAportePayloadWithSignature();
       const newLocal: IncidentContribution = {
@@ -2316,7 +2364,7 @@ export default function IncidentsScreen() {
           mimeType: f.mimeType,
         })),
         id_local: localId,
-        firma_aporte_tercero: aporteFirmaManual || null,
+        firma_aporte_tercero: firmaAporteRefCreate,
       } as any;
 
       const actions = await readContributionActions();
@@ -2331,7 +2379,7 @@ export default function IncidentsScreen() {
         requestData: {
           aporte: texto,
           nombre_aporte: nombreAporte || null,
-          firma_aporte_tercero: aporteFirmaManual || null,
+          firma_aporte_tercero: firmaAporteRefCreate,
           rol_aporte: role || 'OPERATIVO',
           archivos: JSON.stringify(payloadFiles),
         },
@@ -2388,9 +2436,11 @@ export default function IncidentsScreen() {
     setShowAporteComposer(true);
     setAporteText(a.aporte || '');
     setAporteNombrePersonalizado((a as any).nombre_aporte || '');
-    // Leer firma desde firma_aporte_tercero
-    const firmaUri = getContributionSignatureUri(selectedIncidentForAportes?.id || 0, a);
-    setAporteFirmaManual(firmaUri);
+    // `firma_aporte_tercero` puede ser una referencia local a expo-files: se hidrata a un data URI
+    // real (no solo una URI mostrable), porque este estado también se reenvía al servidor al guardar.
+    const firmaRaw = (a as any).firma_aporte_tercero;
+    const hydratedFirma = firmaRaw ? (await hydrateSignatureRef(firmaRaw)) || firmaRaw : null;
+    setAporteFirmaManual(hydratedFirma);
     setAporteTextFiles([]);
     setAporteImageFiles([]);
     setAporteAudioFiles([]);
@@ -2422,6 +2472,7 @@ export default function IncidentsScreen() {
           (x: any) => !(x.type === 'create' && String(x.id) === String(a.id_local))
         );
         await writeContributionActions(filtered);
+        if ((a as any).firma_aporte_tercero) await deleteSignatureLocalRef((a as any).firma_aporte_tercero);
       } else {
         actions.push({ type: 'delete', incidentId, contributionId: a.id });
         await writeContributionActions(actions);
@@ -2500,6 +2551,11 @@ export default function IncidentsScreen() {
           <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('audio')}>
             <Ionicons name="mic-outline" size={20} color="#007AFF" />
           </TouchableOpacity>
+          <RecordAudioButton
+            variant="icon"
+            onRecorded={handleRecordedIncidentAudio}
+            buttonStyle={styles.fileIconButton}
+          />
           <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('video')}>
             <Ionicons name="videocam-outline" size={20} color="#007AFF" />
           </TouchableOpacity>
@@ -2531,13 +2587,17 @@ export default function IncidentsScreen() {
 
             {/* Audio */}
             {audioFiles.map(file => (
-              <ThemedView key={file.id} style={styles.fileRow}>
+              <TouchableOpacity
+                key={file.id}
+                style={styles.fileRow}
+                onPress={() => setAudioPreview({ uri: file.uri || (file.localFileName ? getLocalFileDisplayUri(file.localFileName) : ''), label: file.name })}
+              >
                 <Ionicons name="musical-notes-outline" size={16} color="#007AFF" />
                 <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
                 <TouchableOpacity onPress={() => removeLocalFile('audio', file.id)}>
                   <Ionicons name="trash" size={16} color="#FF3B30" />
                 </TouchableOpacity>
-              </ThemedView>
+              </TouchableOpacity>
             ))}
 
             {/* Video */}
@@ -2585,6 +2645,11 @@ export default function IncidentsScreen() {
           <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddAporteFile('audio')}>
             <Ionicons name="mic-outline" size={20} color="#007AFF" />
           </TouchableOpacity>
+          <RecordAudioButton
+            variant="icon"
+            onRecorded={handleRecordedAporteAudio}
+            buttonStyle={styles.fileIconButton}
+          />
           <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddAporteFile('video')}>
             <Ionicons name="videocam-outline" size={20} color="#007AFF" />
           </TouchableOpacity>
@@ -2614,13 +2679,17 @@ export default function IncidentsScreen() {
             ))}
 
             {aporteAudioFiles.map(file => (
-              <ThemedView key={file.id} style={styles.fileRow}>
+              <TouchableOpacity
+                key={file.id}
+                style={styles.fileRow}
+                onPress={() => setAudioPreview({ uri: file.uri || (file.localFileName ? getLocalFileDisplayUri(file.localFileName) : ''), label: file.name })}
+              >
                 <Ionicons name="musical-notes-outline" size={16} color="#007AFF" />
                 <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
                 <TouchableOpacity onPress={() => removeAporteLocalFile('audio', file.id)}>
                   <Ionicons name="trash" size={16} color="#FF3B30" />
                 </TouchableOpacity>
-              </ThemedView>
+              </TouchableOpacity>
             ))}
 
             {aporteVideoFiles.map(file => (
@@ -3503,6 +3572,13 @@ export default function IncidentsScreen() {
           )}
         </ThemedView>
       </Modal>
+
+      <AudioPreviewModal
+        visible={!!audioPreview}
+        onClose={() => setAudioPreview(null)}
+        sourceUri={audioPreview?.uri}
+        label={audioPreview?.label}
+      />
 
       <AppFooter />
       <SlideMenu isVisible={isMenuVisible} onClose={handleMenuClose} onHomePress={handleHomePress} currentRoute="Incidents" />

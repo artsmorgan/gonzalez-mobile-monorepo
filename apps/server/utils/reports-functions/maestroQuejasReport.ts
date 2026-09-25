@@ -312,7 +312,8 @@ export async function buildMaestroQuejasExcelConsolidado(
         cell.border = border;
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     });
-    wsMain.views = [{ state: "frozen", ySplit: 12 }];
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel, así solo se ven los bordes que dibujamos manualmente.
+    wsMain.views = [{ showGridLines: false }];
     const colWidths = [
         8, 26, 22, 18, 24, 24, 22, 22, 14, 12, 14, 22, 18, 20, 20, 14, 14, 14, 16, 12, 14, 24, 40, 18, 14, 14, 32, 28, 12, 28, 16, 20, 36,
     ];

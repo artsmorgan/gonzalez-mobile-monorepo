@@ -13,10 +13,12 @@ import {
   Dimensions,
 } from 'react-native';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
+import EmployeeSearchModal, { type EmployeeSearchHit } from '@/components/EmployeeSearchModal';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import SignatureScreen from "react-native-signature-canvas";
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
+import { persistSignatureRef, hydrateSignatureRef, deleteSignatureLocalRef, saveBase64File, getLocalFileDisplayUri } from '@/hooks/fileStorage';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
@@ -76,7 +78,6 @@ interface InductionTourRecord {
   corpo_id?: number | null;
   puesto_id?: number | null;
   plaza_id?: number | null;
-  empleado_id?: number | null;
   division?: string | null;
   renglon_edificio: string | null;
   supervisor_cliente: string | null;
@@ -85,7 +86,6 @@ interface InductionTourRecord {
   aspectos_especificos: string | null;
   participantes: string | null;
   firma_supervisor: string | null;
-  firma_empleado?: string | null;
   firma_responsable?: string | null;
   created_at: string;
   synced?: boolean;
@@ -125,20 +125,6 @@ type MainStructureContrato = { id: number; nombre: string; sucursales?: MainStru
 type MainStructureDivision = { id: number; nombre: string; contratos?: MainStructureContrato[] };
 type MainStructureCliente = { id: number; nombre: string; division?: MainStructureDivision[] };
 type MainStructureEmpresa = { id: number; nombre: string; clientes?: MainStructureCliente[] };
-
-interface FirmaEmpleadoData {
-  sessionId: string;
-  empleadoId: string;
-  latitud: string;
-  longitud: string;
-  timestamp: string;
-  empleadoDetalle?: {
-    nombre: string;
-    primer_apellido: string;
-    segundo_apellido: string;
-    cedula_empleado: string;
-  };
-}
 
 const TEMAS_PREDEFINIDOS = [
   "Revisión de los documentos del expediente del aspirante.",
@@ -368,20 +354,6 @@ export default function InductionTourRecordScreen() {
   const [roleName, setRoleName] = useState<string | null>(null);
   const [deletingRecordKey, setDeletingRecordKey] = useState<string | null>(null);
 
-  // Empleado selection states
-  const [selectedEmpleadoId, setSelectedEmpleadoId] = useState<number | null>(null);
-  const empleadoIdRef = useRef<number | null>(null);
-
-  // Firma empleado states
-  const [firmaEmpleado, setFirmaEmpleado] = useState<FirmaEmpleadoData | null>(null);
-  const [firmaEmpleadoHash, setFirmaEmpleadoHash] = useState<string | null>(null);
-  const [firmaEmpleadoManual, setFirmaEmpleadoManual] = useState<string | null>(null);
-  const [firmaEmpleadoWarning, setFirmaEmpleadoWarning] = useState<string | null>(null);
-  const [isFirmaEmpleadoManualModalVisible, setIsFirmaEmpleadoManualModalVisible] = useState(false);
-  const [isReadingFirmaEmpleadoManual, setIsReadingFirmaEmpleadoManual] = useState(false);
-  const signatureEmpleadoRef = useRef<any>(null);
-  const [signatureEmpleadoKey, setSignatureEmpleadoKey] = useState(0);
-
   // IDs de current_marca para inicialización
   const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
   const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
@@ -415,6 +387,7 @@ export default function InductionTourRecordScreen() {
   const [temasDesarrollados, setTemasDesarrollados] = useState<TemaDesarrollado[]>([]);
   const [aspectosEspecificos, setAspectosEspecificos] = useState<AspectoEspecifico[]>([]);
   const [participantes, setParticipantes] = useState<Participante[]>([]);
+  const [participanteSearchIndex, setParticipanteSearchIndex] = useState<number | null>(null);
   const [firmaSupervisor, setFirmaSupervisor] = useState<string | null>(null);
   const [firmaResponsableHash, setFirmaResponsableHash] = useState<string>('');
   const [isGeneratingFirmaResponsable, setIsGeneratingFirmaResponsable] = useState(false);
@@ -473,6 +446,7 @@ export default function InductionTourRecordScreen() {
   `;
 
   const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
     const connectivity = await resolveAppConnectivity();
     return connectivity.ok;
   };
@@ -558,6 +532,60 @@ export default function InductionTourRecordScreen() {
     return `data:image/png;base64,${signature}`;
   };
 
+  /**
+   * `value` puede ser un data URI, una referencia local a expo-files (firmas cacheadas tras esta
+   * migración), o (legado) base64 puro sin prefijo. Intenta cada forma en orden, sin perder datos.
+   */
+  const hydrateOrWrapLegacySignature = async (value?: string | null): Promise<string | null> => {
+    if (!value) return null;
+    if (value.startsWith('data:')) return value;
+    const hydrated = await hydrateSignatureRef(value);
+    if (hydrated) return hydrated;
+    return formatSignatureForDisplay(value);
+  };
+
+  /**
+   * Firmas del registro (`participantes[].firma`, `firma_supervisor`) recibidas del servidor en
+   * base64: se guardan en expo-files y solo se conserva la referencia en el cache (nunca el base64).
+   */
+  const localizeInductionTourServerRow = async (d: any): Promise<any> => {
+    let participantesForCache: string | null = d.participantes ?? null;
+    try {
+      const parsedParticipantes =
+        typeof d.participantes === 'string' ? JSON.parse(d.participantes) : d.participantes;
+      if (Array.isArray(parsedParticipantes)) {
+        const localizedParticipantes = await Promise.all(
+          parsedParticipantes.map(async (p: any) => {
+            if (!p?.firma) return p;
+            const fileName = await saveBase64File({
+              base64: p.firma,
+              extension: 'png',
+              type: 'image',
+              prefix: 'induction_tour_participante_firma',
+            });
+            return { ...p, firma: fileName };
+          })
+        );
+        participantesForCache = JSON.stringify(localizedParticipantes);
+      }
+    } catch {
+      /* noop */
+    }
+    const firmaSupervisorForCache = d.firma_supervisor
+      ? await saveBase64File({
+          base64: d.firma_supervisor,
+          extension: 'png',
+          type: 'image',
+          prefix: 'induction_tour_firma_supervisor',
+        })
+      : d.firma_supervisor;
+    return {
+      ...d,
+      participantes: participantesForCache,
+      firma_supervisor: firmaSupervisorForCache,
+    };
+  };
+
   const decodeFirmaHash = (hash?: string | null) => {
     try {
       if (!hash || String(hash).trim().length === 0) return null;
@@ -600,142 +628,6 @@ export default function InductionTourRecordScreen() {
       console.error('Error scanning firma_responsable:', e);
       Alert.alert('Error', 'No se pudo escanear el código QR');
     }
-  };
-
-  // Funciones para manejo de empleado y firma del empleado
-  const onEmpleadoSelected = (id: number | null) => {
-    setSelectedEmpleadoId(id);
-    empleadoIdRef.current = id;
-    if (!id) {
-      setFirmaEmpleadoWarning(null);
-      return;
-    }
-
-    if (firmaEmpleado?.empleadoId && String(firmaEmpleado.empleadoId) !== String(id)) {
-      const emp = formEmpleados.find((e: MainStructureEmpleado) => e.id === id);
-      setFirmaEmpleadoWarning(
-        `La firma corresponde al empleado ID ${firmaEmpleado.empleadoId}, pero el empleado seleccionado es ${emp?.nombre || 'otro'}.`
-      );
-    } else {
-      setFirmaEmpleadoWarning(null);
-    }
-  };
-
-  const handleScanFirmaEmpleado = async () => {
-    try {
-      const qrData = await scanQR();
-      if (!qrData) return;
-
-      try {
-        const decoded = atob(qrData);
-        const parts = decoded.split(':');
-        if (parts.length !== 5) {
-          Alert.alert('Error', 'El QR no tiene la estructura esperada');
-          return;
-        }
-        const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
-
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-        let empleadoDetalle: FirmaEmpleadoData['empleadoDetalle'] = undefined;
-        const isConnected = await getConnectionStatus();
-        if (isConnected && apiUrl) {
-          const response = await authedFetch({
-            url: `${apiUrl}/api/empleados/${empleadoId}`,
-            init: {
-              method: 'GET',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-            },
-            refreshAccessToken,
-            logout,
-          });
-          if (!response) return;
-
-          if (response.ok) {
-            const empleadoData = await response.json();
-            empleadoDetalle = {
-              nombre: empleadoData.nombre,
-              primer_apellido: empleadoData.primer_apellido,
-              segundo_apellido: empleadoData.segundo_apellido,
-              cedula_empleado: empleadoData.cedula,
-            };
-          }
-        }
-
-        setFirmaEmpleado({
-          sessionId,
-          empleadoId,
-          latitud,
-          longitud,
-          timestamp,
-          empleadoDetalle,
-        });
-        setFirmaEmpleadoHash(qrData);
-
-        if (selectedEmpleadoId) {
-          if (String(selectedEmpleadoId) !== String(empleadoId)) {
-            const empleadoSel = formEmpleados.find((e: MainStructureEmpleado) => e.id === selectedEmpleadoId);
-            setFirmaEmpleadoWarning(
-              `La firma corresponde al empleado ID ${empleadoId}, pero el empleado seleccionado es ${empleadoSel?.nombre || 'otro'}.`
-            );
-          } else {
-            setFirmaEmpleadoWarning(null);
-          }
-        } else {
-          setFirmaEmpleadoWarning(null);
-        }
-      } catch (err) {
-        console.error('Error decoding employee signature QR:', err);
-        Alert.alert('Error', 'El QR escaneado no es válido');
-      }
-    } catch (error) {
-      console.error('Error scanning QR for employee signature:', error);
-      Alert.alert('Error', 'No se pudo escanear la firma del empleado');
-    }
-  };
-
-  const openFirmaEmpleadoManualModal = () => {
-    setIsReadingFirmaEmpleadoManual(false);
-    setSignatureEmpleadoKey((k) => k + 1);
-    setIsFirmaEmpleadoManualModalVisible(true);
-  };
-
-  const closeFirmaEmpleadoManualModal = () => {
-    setIsFirmaEmpleadoManualModalVisible(false);
-    setIsReadingFirmaEmpleadoManual(false);
-  };
-
-  const clearFirmaEmpleadoManualInModal = () => {
-    try {
-      signatureEmpleadoRef.current?.clearSignature?.();
-    } catch { }
-    setIsReadingFirmaEmpleadoManual(false);
-    setSignatureEmpleadoKey((k) => k + 1);
-  };
-
-  const acceptFirmaEmpleadoManual = () => {
-    try {
-      setIsReadingFirmaEmpleadoManual(true);
-      signatureEmpleadoRef.current?.readSignature?.();
-    } catch {
-      setIsReadingFirmaEmpleadoManual(false);
-      Alert.alert('Error', 'No se pudo leer la firma. Intenta nuevamente.');
-    }
-  };
-
-  const handleFirmaEmpleadoManualRead = (signature: string) => {
-    const sig = String(signature || '').trim();
-    if (!sig || sig.length < 10) {
-      Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
-      setIsReadingFirmaEmpleadoManual(false);
-      return;
-    }
-
-    // Guardar la firma tal como viene del SignatureScreen (ya incluye el prefijo data:image/png;base64,)
-    setFirmaEmpleadoManual(sig);
-    setIsReadingFirmaEmpleadoManual(false);
-    closeFirmaEmpleadoManualModal();
   };
 
   const safeParseJsonArray = <T,>(value?: string | null): T[] => {
@@ -1020,11 +912,6 @@ export default function InductionTourRecordScreen() {
     return puesto?.plazas || [];
   }, [formPuestos, formPuestoId]);
 
-  const formEmpleados = useMemo(() => {
-    const plaza = formPlazas.find((p: MainStructurePlaza) => p.id === formPlazaId);
-    return plaza?.empleados || [];
-  }, [formPlazas, formPlazaId]);
-
   const fetchRecords = useCallback(async (listOpts?: { corpoId?: number | null }) => {
     try {
       setIsLoading(true);
@@ -1143,7 +1030,6 @@ export default function InductionTourRecordScreen() {
     (v: HierarchyPickerValues) => {
       const divisionChanged = v.divisionId !== formDivisionId;
       const empresaOrClienteChanged = v.empresaId !== formEmpresaId || v.clienteId !== formClienteId;
-      const plazaChanged = v.plazaId !== formPlazaId;
 
       setFormEmpresaId(v.empresaId);
       setFormClienteId(v.clienteId);
@@ -1160,14 +1046,6 @@ export default function InductionTourRecordScreen() {
       }
 
       setFormPlazaId(v.plazaId ?? null);
-      if (plazaChanged) {
-        setSelectedEmpleadoId(null);
-        empleadoIdRef.current = null;
-        setFirmaEmpleado(null);
-        setFirmaEmpleadoHash(null);
-        setFirmaEmpleadoManual(null);
-        setFirmaEmpleadoWarning(null);
-      }
     },
     [formDivisionId, formEmpresaId, formClienteId, formPlazaId, applyFormDivisionSideEffects]
   );
@@ -1221,13 +1099,6 @@ export default function InductionTourRecordScreen() {
     setFormCorpoId(null);
     setFormPuestoId(null);
     setFormPlazaId(null);
-    // Resetear empleado y firma
-    setSelectedEmpleadoId(null);
-    empleadoIdRef.current = null;
-    setFirmaEmpleado(null);
-    setFirmaEmpleadoHash(null);
-    setFirmaEmpleadoManual(null);
-    setFirmaEmpleadoWarning(null);
     // Cargar temas predefinidos
     const temasPredefinidos: TemaDesarrollado[] = TEMAS_PREDEFINIDOS.map(tema => ({
       tema: tema,
@@ -1263,11 +1134,6 @@ export default function InductionTourRecordScreen() {
       setFormCorpoId(numOrNull(marca.corpo?.id ?? marca.corpo_id));
       setFormPuestoId(numOrNull(marca.puesto?.id ?? marca.puesto_id));
       setFormPlazaId(numOrNull(marca.plaza?.id ?? marca.plaza_id));
-      const empFromMarca = numOrNull(marca.empleado?.id ?? marca.empleado_id);
-      if (empFromMarca != null) {
-        setSelectedEmpleadoId(empFromMarca);
-        empleadoIdRef.current = empFromMarca;
-      }
     } catch (e) {
       console.error('applyCurrentMarcaToFormHierarchy (InductionTour):', e);
     }
@@ -1285,7 +1151,7 @@ export default function InductionTourRecordScreen() {
     await resetForm();
   };
 
-  const startEditing = (record: InductionTourRecord) => {
+  const startEditing = async (record: InductionTourRecord) => {
     setIsCreating(false);
     let temasArray: TemaDesarrollado[] = [];
     let aspectosArray: AspectoEspecifico[] = [];
@@ -1317,6 +1183,15 @@ export default function InductionTourRecordScreen() {
         participantesArray = [];
       }
     }
+    // Las firmas de participantes pueden venir del cache como referencia local a expo-files: se
+    // hidratan a un data URI real, porque este estado también se reenvía al servidor al guardar.
+    participantesArray = await Promise.all(
+      participantesArray.map(async (p: any) => {
+        if (!p?.firma) return p;
+        const hydrated = await hydrateOrWrapLegacySignature(p.firma);
+        return { ...p, firma: hydrated };
+      })
+    );
 
     const recordAny = record as any;
     const empresaIdRaw = recordAny.empresa_id != null ? Number(recordAny.empresa_id) : null;
@@ -1325,13 +1200,12 @@ export default function InductionTourRecordScreen() {
     const corpoIdRaw = recordAny.corpo_id != null ? Number(recordAny.corpo_id) : null;
     const puestoIdRaw = recordAny.puesto_id != null ? Number(recordAny.puesto_id) : null;
     const plazaIdRaw = recordAny.plaza_id != null ? Number(recordAny.plaza_id) : null;
-    const empleadoIdRaw = recordAny.empleado_id != null ? Number(recordAny.empleado_id) : null;
 
     const divisionName = record.division || 'Otros';
     const tree = Array.isArray(structure) ? structure : [];
     const path =
-      tree.length && (empleadoIdRaw != null || plazaIdRaw != null)
-        ? findHierarchyByEmpleadoYPlaza(tree, empleadoIdRaw, plazaIdRaw)
+      tree.length && plazaIdRaw != null
+        ? findHierarchyByEmpleadoYPlaza(tree, null, plazaIdRaw)
         : null;
 
     if (path) {
@@ -1413,31 +1287,9 @@ export default function InductionTourRecordScreen() {
     setTemasDesarrollados(temasArray);
     setAspectosEspecificos(aspectosArray);
     setParticipantes(participantesArray);
-    setFirmaSupervisor(formatSignatureForDisplay(record.firma_supervisor));
+    setFirmaSupervisor(await hydrateOrWrapLegacySignature(record.firma_supervisor));
     setFirmaResponsableHash(record.firma_responsable || '');
 
-    // Cargar empleado_id y firma_empleado si existen
-    if (recordAny.empleado_id) {
-      const empId = Number(recordAny.empleado_id);
-      setSelectedEmpleadoId(empId);
-      empleadoIdRef.current = empId;
-    } else {
-      setSelectedEmpleadoId(null);
-      empleadoIdRef.current = null;
-    }
-
-    // firma_empleado ahora contiene la firma manual dibujada (no el hash QR)
-    if (recordAny.firma_empleado) {
-      setFirmaEmpleadoManual(formatSignatureForDisplay(recordAny.firma_empleado));
-    } else {
-      setFirmaEmpleadoManual(null);
-    }
-
-    // Limpiar estados de QR ya que no se guarda
-    setFirmaEmpleado(null);
-    setFirmaEmpleadoHash(null);
-
-    setFirmaEmpleadoWarning(null);
     setExpandedTemaIndices(temasArray.map((_, i) => i));
     setExpandedAspectoIndices(aspectosArray.map((_, i) => i));
     setExpandedParticipanteIndices(participantesArray.map((_, i) => i));
@@ -1562,6 +1414,14 @@ export default function InductionTourRecordScreen() {
     setParticipantes(newParticipantes);
   };
 
+  const handleParticipanteEmployeeSelect = (hit: EmployeeSearchHit) => {
+    if (participanteSearchIndex == null) return;
+    const nombre = hit.title.replace(/\s*\([^)]*\)\s*$/, '').trim() || hit.title;
+    setParticipantes((prev) =>
+      prev.map((p, i) => (i === participanteSearchIndex ? { ...p, nombre_completo: nombre, cedula: hit.cedula } : p))
+    );
+  };
+
   const removeParticipante = (index: number) => {
     Alert.alert(
       'Confirmar',
@@ -1639,7 +1499,6 @@ export default function InductionTourRecordScreen() {
     }
     if (!formDivisionId) return 'División es obligatoria';
     if (!firmaResponsableHash || !firmaResponsableHash.trim()) return 'Firma responsable (QR/Generar) es obligatoria';
-    if (!selectedEmpleadoId || !empleadoIdRef.current) return 'Empleado es obligatorio';
     return null;
   };
 
@@ -1678,7 +1537,6 @@ export default function InductionTourRecordScreen() {
         corpo_id: formCorpoId,
         puesto_id: formPuestoId || null,
         plaza_id: formPlazaId,
-        empleado_id: empleadoIdRef.current,
         fecha: formatDateForRequest(fecha) || null,
         division: division.trim(),
         renglon_edificio: renglonEdificio.trim() || null,
@@ -1696,7 +1554,6 @@ export default function InductionTourRecordScreen() {
               )
             : null,
         firma_supervisor: getBase64Only(firmaSupervisor),
-        firma_empleado: firmaEmpleadoManual ? String(firmaEmpleadoManual).trim() : '',
         firma_responsable: firmaResponsableHash.trim(),
       };
 
@@ -1716,8 +1573,9 @@ export default function InductionTourRecordScreen() {
               const cid = Number(d.corpo_id);
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               const cache = cacheStr ? JSON.parse(cacheStr) : [];
+              const dLocalized = await localizeInductionTourServerRow(d);
               const serverRow: InductionTourRecord = {
-                ...d,
+                ...dLocalized,
                 id: d.id,
                 id_local: '',
                 type: 'induction_tour_record',
@@ -1741,13 +1599,35 @@ export default function InductionTourRecordScreen() {
       } else {
         const localId = generateRandomId();
 
+        // Las firmas se guardan en expo-files; solo se conserva la referencia en cache/actions.
+        const firmaSupervisorRefOffline = await persistSignatureRef({
+          value: firmaSupervisor || null,
+          prefix: 'induction_tour_firma_supervisor',
+        });
+        const participantesRefOffline = await Promise.all(
+          participantes.map(async (p) => ({
+            ...p,
+            firma: await persistSignatureRef({
+              value: p.firma || null,
+              prefix: 'induction_tour_participante_firma',
+            }),
+          }))
+        );
+        const participantesJsonOffline =
+          participantesRefOffline.length > 0 ? JSON.stringify(participantesRefOffline) : null;
+        const requestDataOffline = {
+          ...requestData,
+          participantes: participantesJsonOffline,
+          firma_supervisor: firmaSupervisorRefOffline,
+        };
+
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
         const actions = actionsStr ? JSON.parse(actionsStr) : [];
         actions.push({
           id: localId,
           action: 'create',
           type: 'induction_tour_record',
-          payload: requestData,
+          payload: requestDataOffline,
           synced: false,
         });
         await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
@@ -1770,22 +1650,12 @@ export default function InductionTourRecordScreen() {
           supervisor_corporacion: supervisorCorporacion.trim() || null,
           temas_desarrollados: temasDesarrollados.length > 0 ? JSON.stringify(temasDesarrollados) : null,
           aspectos_especificos: aspectosEspecificos.length > 0 ? JSON.stringify(aspectosEspecificos) : null,
-          participantes:
-            participantes.length > 0
-              ? JSON.stringify(
-                  participantes.map((p) => ({
-                    ...p,
-                    firma: getBase64Only(p.firma),
-                  }))
-                )
-              : null,
-          firma_supervisor: getBase64Only(firmaSupervisor),
+          participantes: participantesJsonOffline,
+          firma_supervisor: firmaSupervisorRefOffline,
           firma_responsable: firmaResponsableHash.trim(),
           created_at: new Date(horaAccion).toISOString(),
           synced: false,
         };
-        (newRecordCache as any).empleado_id = empleadoIdRef.current;
-        (newRecordCache as any).firma_empleado = firmaEmpleadoManual ? String(firmaEmpleadoManual).trim() : '';
         (newRecordCache as any).empresa_id = formEmpresaId;
         (newRecordCache as any).cliente_id = formClienteId;
         (newRecordCache as any).contrato_id = formContratoId;
@@ -1820,7 +1690,6 @@ export default function InductionTourRecordScreen() {
     }
     if (!formDivisionId) return 'División es obligatoria';
     if (!firmaResponsableHash || !firmaResponsableHash.trim()) return 'Firma responsable (QR/Generar) es obligatoria';
-    if (!selectedEmpleadoId || !empleadoIdRef.current) return 'Empleado es obligatorio';
     return null;
   };
 
@@ -1858,7 +1727,6 @@ export default function InductionTourRecordScreen() {
         corpo_id: formCorpoId,
         puesto_id: formPuestoId || null,
         plaza_id: formPlazaId,
-        empleado_id: empleadoIdRef.current,
         fecha: formatDateForRequest(fecha) || null,
         division: division.trim(),
         renglon_edificio: renglonEdificio.trim() || null,
@@ -1876,7 +1744,6 @@ export default function InductionTourRecordScreen() {
               )
             : null,
         firma_supervisor: getBase64Only(firmaSupervisor),
-        firma_empleado: firmaEmpleadoManual ? String(firmaEmpleadoManual).trim() : '',
         firma_responsable: firmaResponsableHash.trim(),
       };
 
@@ -1894,6 +1761,7 @@ export default function InductionTourRecordScreen() {
           try {
             if (result.data) {
               const d = result.data as any;
+              const dLocalized = await localizeInductionTourServerRow(d);
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
                 const cache = JSON.parse(cacheStr);
@@ -1902,7 +1770,7 @@ export default function InductionTourRecordScreen() {
                   if (String(item.id) === String(recordId) || String(item.id_local) === String(recordId)) {
                     return {
                       ...item,
-                      ...d,
+                      ...dLocalized,
                       id: d.id ?? item.id,
                       type: 'induction_tour_record',
                       synced: true,
@@ -1926,6 +1794,49 @@ export default function InductionTourRecordScreen() {
           Alert.alert('Error', result.message || 'Error al actualizar el registro de inducción y recorrido');
         }
       } else {
+        // Las firmas se guardan en expo-files; solo se conserva la referencia en cache/actions. La
+        // referencia previa (tal como estaba el registro en cache antes de este cambio) permite
+        // reemplazar/borrar el archivo correcto en vez de acumular huérfanos.
+        const cacheStrForFirma = await AsyncStorage.getItem('evaluations_cache');
+        const cacheForFirma = cacheStrForFirma ? JSON.parse(cacheStrForFirma) : [];
+        const previousCachedRow = cacheForFirma.find(
+          (item: any) =>
+            item.type === 'induction_tour_record' && (item.id === recordId || item.id_local === recordId)
+        );
+        let previousParticipantes: any[] = [];
+        try {
+          const parsedPrev =
+            typeof previousCachedRow?.participantes === 'string'
+              ? JSON.parse(previousCachedRow.participantes)
+              : previousCachedRow?.participantes;
+          if (Array.isArray(parsedPrev)) previousParticipantes = parsedPrev;
+        } catch {
+          /* noop */
+        }
+        const prevParticipanteById = new Map(
+          previousParticipantes.map((p: any, i: number) => [String(p.cedula || p.nombre_completo || i), p])
+        );
+        const participantesRefOffline = await Promise.all(
+          participantes.map(async (p, i) => ({
+            ...p,
+            firma: await persistSignatureRef({
+              value: p.firma || null,
+              previousRef: prevParticipanteById.get(String(p.cedula || p.nombre_completo || i))?.firma ?? null,
+              prefix: 'induction_tour_participante_firma',
+            }),
+          }))
+        );
+        const firmaSupervisorRefOffline = await persistSignatureRef({
+          value: firmaSupervisor || null,
+          previousRef: previousCachedRow?.firma_supervisor ?? null,
+          prefix: 'induction_tour_firma_supervisor',
+        });
+        const requestDataOffline = {
+          ...requestData,
+          participantes: participantesRefOffline.length > 0 ? JSON.stringify(participantesRefOffline) : null,
+          firma_supervisor: firmaSupervisorRefOffline,
+        };
+
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
         let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
 
@@ -1946,7 +1857,7 @@ export default function InductionTourRecordScreen() {
           if (idx !== -1) {
             actions[idx] = {
               ...actions[idx],
-              payload: { ...(actions[idx].payload || {}), ...requestData },
+              payload: { ...(actions[idx].payload || {}), ...requestDataOffline },
               synced: false,
             };
           } else {
@@ -1958,7 +1869,7 @@ export default function InductionTourRecordScreen() {
               type: 'induction_tour_record',
               payload: {
                 marca_id: currentMarcaData?.id,
-                ...requestData,
+                ...requestDataOffline,
                 id_local: recordId,
               },
               synced: false,
@@ -1973,7 +1884,7 @@ export default function InductionTourRecordScreen() {
             id: recordId,
             action: 'update',
             type: 'induction_tour_record',
-            payload: requestData,
+            payload: requestDataOffline,
             synced: false,
           });
           await AsyncStorage.setItem('evaluations_actions', JSON.stringify(filtered));
@@ -1986,7 +1897,7 @@ export default function InductionTourRecordScreen() {
             if ((item.id === recordId || item.id_local === recordId) && item.type === 'induction_tour_record') {
               return {
                 ...item,
-                ...requestData,
+                ...requestDataOffline,
                 synced: false,
               };
             }
@@ -2248,39 +2159,6 @@ export default function InductionTourRecordScreen() {
     );
   };
 
-  // Función helper para obtener el nombre del empleado desde la estructura
-  const getEmpleadoNombre = useCallback((empleadoId: number | string | null | undefined): string => {
-    if (!empleadoId || !structure || structure.length === 0) return 'N/A';
-
-    const empId = Number(empleadoId);
-    if (Number.isNaN(empId)) return 'N/A';
-
-    // Buscar el empleado en toda la estructura
-    for (const empresa of structure) {
-      for (const cliente of empresa.clientes || []) {
-        for (const division of cliente.division || []) {
-          for (const contrato of division.contratos || []) {
-            for (const sucursal of contrato.sucursales || []) {
-              for (const puesto of sucursal.puestos || []) {
-                for (const plaza of puesto.plazas || []) {
-                  const empleado = plaza.empleados?.find((emp: MainStructureEmpleado) => emp.id === empId);
-                  if (empleado) {
-                    const nombre = empleado.nombre || '';
-                    const primerApellido = empleado.primer_apellido || '';
-                    const segundoApellido = empleado.segundo_apellido || '';
-                    const nombreCompleto = `${nombre} ${primerApellido} ${segundoApellido}`.trim();
-                    return nombreCompleto || empleado.cedula || 'N/A';
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-    return 'N/A';
-  }, [structure]);
-
   const renderRecordList = () => {
     if (isLoading) {
       return (
@@ -2311,16 +2189,13 @@ export default function InductionTourRecordScreen() {
       <ThemedView style={styles.listContainer}>
         {records.map((record) => {
           const itemKey = String(record.id || record.id_local || '');
-          const recordAny = record as any;
-          const empleadoId = recordAny.empleado_id;
-          const empleadoNombre = getEmpleadoNombre(empleadoId);
 
           return (
             <ThemedView key={record.id || record.id_local} style={styles.listItem}>
               <ThemedView style={styles.listItemHeader}>
                 <ThemedView style={styles.listItemContent}>
                   <ThemedText style={styles.listItemTitle}>
-                    {empleadoNombre}
+                    {record.renglon_edificio || 'Inducción y recorrido'}
                   </ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>
                     División: {record.division || 'N/A'}
@@ -2592,6 +2467,18 @@ export default function InductionTourRecordScreen() {
 
         {isExpanded && (
           <ThemedView style={styles.participanteContent}>
+            {/* Buscar empleado en la jerarquía */}
+            <ThemedView style={styles.formGroup}>
+              <TouchableOpacity
+                style={styles.signatureButton}
+                onPress={() => setParticipanteSearchIndex(index)}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="search" size={20} color="#007AFF" />
+                <ThemedText style={styles.signatureButtonText}>Buscar empleado</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+
             {/* Nombre completo */}
             <ThemedView style={styles.formGroup}>
               <ThemedText style={styles.formLabel}>Nombre Completo</ThemedText>
@@ -2738,47 +2625,6 @@ export default function InductionTourRecordScreen() {
                     pickerStyle={styles.picker}
                     fieldGroupStyle={styles.formGroup}
                   />
-
-                  {/* Empleado */}
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>Empleado *</ThemedText>
-                    <View style={styles.pickerContainer}>
-                      <Picker
-                        enabled={formPlazaId !== null}
-                        selectedValue={selectedEmpleadoId ?? 0}
-                        onValueChange={(value) => onEmpleadoSelected(value ? Number(value) : null)}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label={formPlazaId ? 'Seleccionar empleado...' : 'Seleccione plaza primero'} value={0} color="#000000" />
-                        {formEmpleados.map((emp: MainStructureEmpleado) => (
-                          <Picker.Item key={emp.id} label={`${emp.nombre || ''} ${emp.primer_apellido || ''} ${emp.segundo_apellido || ''} - ${emp.cedula}`} value={emp.id} color="#000000"   />
-                        ))}
-                      </Picker>
-                    </View>
-                  </ThemedView>
-
-                  {/* Firma del empleado */}
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>Firma del empleado (Opcional)</ThemedText>
-                    {firmaEmpleadoManual ? (
-                      <ThemedView style={styles.signaturePreviewContainer}>
-                        <Image source={{ uri: firmaEmpleadoManual }} style={styles.signaturePreview} resizeMode="contain" />
-                        <TouchableOpacity style={styles.removeSignatureButton} onPress={() => setFirmaEmpleadoManual(null)}>
-                          <Ionicons name="trash" size={18} color="#FFFFFF" />
-                        </TouchableOpacity>
-                      </ThemedView>
-                    ) : null}
-                    <TouchableOpacity
-                      style={[styles.openSignatureButton, formPlazaId === null && styles.disabledButton]}
-                      onPress={openFirmaEmpleadoManualModal}
-                      disabled={formPlazaId === null}
-                    >
-                      <Ionicons name="create-outline" size={20} color={formPlazaId === null ? "#999" : "#000000"} />
-                      <ThemedText style={[styles.openSignatureButtonText, formPlazaId === null && styles.disabledText]}>
-                        {firmaEmpleadoManual ? 'Modificar firma' : formPlazaId ? 'Dibujar firma' : 'Seleccione plaza primero'}
-                      </ThemedText>
-                    </TouchableOpacity>
-                  </ThemedView>
                 </>
               )}
 
@@ -2959,9 +2805,9 @@ export default function InductionTourRecordScreen() {
                   {isSubmitting ? (
                     <ActivityIndicator size="small" color="#FFFFFF" />
                   ) : (
-                    <ThemedView style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <ThemedView style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'transparent' }}>
                       {getActionIcon('confirm')}
-                      <ThemedText style={{ color: '#FFFFFF', fontWeight: '600', marginLeft: 8 }}>Aceptar</ThemedText>
+                      <ThemedText style={{ color: '#FFFFFF', fontWeight: '600', marginLeft: 8, backgroundColor: 'transparent' }}>Aceptar</ThemedText>
                     </ThemedView>
                   )}
                 </TouchableOpacity>
@@ -3072,7 +2918,7 @@ export default function InductionTourRecordScreen() {
               </TouchableOpacity>
 
               <TouchableOpacity style={styles.modalAcceptButton} onPress={acceptSignature}>
-                <Ionicons name="checkmark" size={20} color="#000000" />
+                <Ionicons name="checkmark" size={20} color="#FFFFFF" />
                 <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
               </TouchableOpacity>
             </ThemedView>
@@ -3087,60 +2933,11 @@ export default function InductionTourRecordScreen() {
         onClose={closeCambiosModal}
       />
 
-      {/* Modal de firma manual del empleado */}
-      <Modal
-        visible={isFirmaEmpleadoManualModalVisible}
-        animationType="fade"
-        transparent
-        onRequestClose={closeFirmaEmpleadoManualModal}
-      >
-        <View style={styles.modalOverlay}>
-          <ThemedView style={styles.modalContainer}>
-            <ThemedView style={styles.modalHeader}>
-              <ThemedText style={styles.modalTitle}>Firma manual del empleado</ThemedText>
-              <TouchableOpacity onPress={closeFirmaEmpleadoManualModal}>
-                <Ionicons name="close" size={24} color="#000000" />
-              </TouchableOpacity>
-            </ThemedView>
-            <View style={styles.modalSignatureContainer}>
-              <SignatureScreen
-                ref={signatureEmpleadoRef}
-                onOK={handleFirmaEmpleadoManualRead}
-                onEmpty={() => {
-                  setIsReadingFirmaEmpleadoManual(false);
-                  Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
-                }}
-                descriptionText=""
-                clearText=""
-                confirmText=""
-                webStyle={`
-                  .m-signature-pad--footer {display: none; margin: 0px;}
-                  .m-signature-pad {box-shadow: none; border: none;}
-                  body,html {width: 100%; height: 100%; background: #ffffff;}
-                `}
-                key={signatureEmpleadoKey}
-              />
-            </View>
-            <ThemedView style={styles.modalActions}>
-              <TouchableOpacity style={styles.modalClearButton} onPress={clearFirmaEmpleadoManualInModal}>
-                <Ionicons name="trash" size={20} color="#000000" />
-                <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalAcceptButton, isReadingFirmaEmpleadoManual && { opacity: 0.7 }]}
-                onPress={acceptFirmaEmpleadoManual}
-                disabled={isReadingFirmaEmpleadoManual}
-              >
-                {isReadingFirmaEmpleadoManual ? (
-                  <ActivityIndicator size="small" color="#000000" />
-                ) : (
-                  <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
-                )}
-              </TouchableOpacity>
-            </ThemedView>
-          </ThemedView>
-        </View>
-      </Modal>
+      <EmployeeSearchModal
+        visible={participanteSearchIndex !== null}
+        onClose={() => setParticipanteSearchIndex(null)}
+        onSelect={handleParticipanteEmployeeSelect}
+      />
 
       {QRScannerComponent}
 

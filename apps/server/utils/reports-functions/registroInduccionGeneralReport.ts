@@ -45,7 +45,10 @@ const DOCX_SIG_H = 88;
 
 export type RegistroInduccionGeneralModuleFilters = ActaEntregaModuleFilters & {
     colaboradorCedulas?: string[];
+    colaboradorNombres?: string[];
+    colaboradorPuestoIds?: number[];
     capacitadorCedulas?: string[];
+    capacitadorNombres?: string[];
 };
 
 export type RegistroInduccionGeneralOrderKey =
@@ -65,6 +68,19 @@ function toValidIds(v: unknown): number[] {
 function parseCedulas(v: unknown): string[] {
     if (!Array.isArray(v)) return [];
     return [...new Set(v.map((x) => String(x ?? "").trim().replace(/\s+/g, "")).filter((s) => s.length > 0))];
+}
+
+function parseNombres(v: unknown): string[] {
+    if (!Array.isArray(v)) return [];
+    return [...new Set(v.map((x) => String(x ?? "").trim()).filter((s) => s.length > 0))];
+}
+
+function normalizeSearchText(s: string): string {
+    return s
+        .trim()
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, "");
 }
 
 function parseBoundaryDate(s: string | undefined | null): Date | null {
@@ -184,6 +200,7 @@ type PersonaParsed = {
     nombre?: string;
     cedula?: string;
     puesto_text?: string;
+    puesto_id?: number | null;
     firma?: string | null;
     firma_data_uri?: string | null;
 };
@@ -194,6 +211,8 @@ function normalizePersonaEntry(p: unknown): PersonaParsed | null {
     const nombre = String(o.nombre ?? o.nombre_completo ?? o.name ?? "").trim();
     const cedula = String(o.cedula ?? o.cedula_identidad ?? "").trim();
     const puesto_text = String(o.puesto_text ?? o.puesto ?? "").trim();
+    const puestoIdNum = Number(o.puesto_id);
+    const puesto_id = Number.isFinite(puestoIdNum) && puestoIdNum > 0 ? puestoIdNum : null;
     const firmaRaw = o.firma ?? o.firma_data_uri ?? null;
     const firma = firmaRaw != null && String(firmaRaw).trim() !== "" ? String(firmaRaw) : null;
     if (!nombre && !cedula && !puesto_text && !firma) return null;
@@ -201,6 +220,7 @@ function normalizePersonaEntry(p: unknown): PersonaParsed | null {
         nombre,
         cedula,
         puesto_text,
+        puesto_id,
         firma,
         firma_data_uri: normalizeSignatureDataUri(firma),
     };
@@ -266,10 +286,37 @@ function rowMatchesCedulas(jsonRaw: string | null | undefined, needles: string[]
     const cedulas = arr
         .map((p) => String(p?.cedula ?? "").trim().replace(/\s+/g, ""))
         .filter((c) => c.length > 0);
+    // Semejanza = la cédula guardada contiene lo buscado (no al revés: si lo buscado contuviera
+    // al dato guardado, una cédula corta/mal cargada calzaría con cualquier búsqueda que la contenga).
     return needles.some((needle) => {
         const n = needle.trim().replace(/\s+/g, "").toLowerCase();
         if (!n) return false;
-        return cedulas.some((c) => c.toLowerCase().includes(n) || n.includes(c.toLowerCase()));
+        return cedulas.some((c) => c.toLowerCase().includes(n));
+    });
+}
+
+/** Como `rowMatchesCedulas`, pero también acepta needles de nombre completo (coincide por cédula O nombre). */
+function rowMatchesPersonasSearch(jsonRaw: string | null | undefined, cedulaNeedles: string[], nombreNeedles: string[]): boolean {
+    if (!cedulaNeedles.length && !nombreNeedles.length) return true;
+    if (cedulaNeedles.length && rowMatchesCedulas(jsonRaw, cedulaNeedles)) return true;
+    if (!nombreNeedles.length) return false;
+    const arr = safeParsePersonas(jsonRaw);
+    const nombres = arr.map((p) => normalizeSearchText(String(p?.nombre ?? ""))).filter((n) => n.length > 0);
+    return nombreNeedles.some((needle) => {
+        const n = normalizeSearchText(needle);
+        if (!n) return false;
+        return nombres.some((nom) => nom.includes(n));
+    });
+}
+
+/** Coincide si algún colaborador de la fila tiene `puesto_id` en el conjunto solicitado. */
+function rowMatchesColaboradorPuestoIds(jsonRaw: string | null | undefined, puestoIds: number[]): boolean {
+    if (!puestoIds.length) return true;
+    const arr = safeParsePersonas(jsonRaw);
+    const set = new Set(puestoIds);
+    return arr.some((p: any) => {
+        const pid = Number(p?.puesto_id);
+        return Number.isFinite(pid) && pid > 0 && set.has(pid);
     });
 }
 
@@ -277,11 +324,17 @@ export function normalizeRegistroInduccionGeneralFilters(raw: unknown): Registro
     const base = normalizeActaEntregaFilters(raw);
     const o = raw != null && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
     const col = parseCedulas(o.colaboradorCedulas);
+    const colNom = parseNombres(o.colaboradorNombres);
+    const colPuestos = toValidIds(o.colaboradorPuestoIds);
     const cap = parseCedulas(o.capacitadorCedulas);
+    const capNom = parseNombres(o.capacitadorNombres);
     return {
         ...base,
         ...(col.length ? { colaboradorCedulas: col } : {}),
+        ...(colNom.length ? { colaboradorNombres: colNom } : {}),
+        ...(colPuestos.length ? { colaboradorPuestoIds: colPuestos } : {}),
         ...(cap.length ? { capacitadorCedulas: cap } : {}),
+        ...(capNom.length ? { capacitadorNombres: capNom } : {}),
     };
 }
 
@@ -290,6 +343,8 @@ export function hasRegistroInduccionGeneralListModuleFiltersContent(f: RegistroI
     if (f.empresaIds?.length || f.clienteIds?.length || f.divisionIds?.length) return true;
     if (f.contratoIds?.length || f.corpoIds?.length || f.puestoIds?.length) return true;
     if (f.colaboradorCedulas?.length || f.capacitadorCedulas?.length) return true;
+    if (f.colaboradorNombres?.length || f.colaboradorPuestoIds?.length) return true;
+    if (f.capacitadorNombres?.length) return true;
     return false;
 }
 
@@ -330,6 +385,27 @@ export function filtersMatchRegistroInduccionGeneralListQuery(
             if (!setS.has(String(c).toLowerCase().trim())) return false;
         }
     }
+    const ln = listModuleFilters.colaboradorNombres ?? [];
+    const sn = saved.colaboradorNombres ?? [];
+    if (ln.length) {
+        if (!sn.length) return false;
+        const setN = new Set(sn.map((x) => normalizeSearchText(String(x))));
+        for (const c of ln) {
+            const k = normalizeSearchText(String(c));
+            if (!k || !setN.has(k)) return false;
+        }
+    }
+    const lkn = listModuleFilters.capacitadorNombres ?? [];
+    const skn = saved.capacitadorNombres ?? [];
+    if (lkn.length) {
+        if (!skn.length) return false;
+        const setKN = new Set(skn.map((x) => normalizeSearchText(String(x))));
+        for (const c of lkn) {
+            const k = normalizeSearchText(String(c));
+            if (!k || !setKN.has(k)) return false;
+        }
+    }
+    if (!overlaps(listModuleFilters.colaboradorPuestoIds ?? undefined, saved.colaboradorPuestoIds ?? undefined)) return false;
     return true;
 }
 
@@ -353,17 +429,71 @@ export async function queryRegistroInduccionGeneralRows(
     if (filters.corpoIds?.length) where.corpo_id = { in: filters.corpoIds };
     if (filters.puestoIds?.length) where.puesto_id = { in: filters.puestoIds };
 
+    // `select` explícito: `colaboradores`/`capacitadores` ya no existen como columnas (ver
+    // `c_colaboradores_induccion_general`/`c_capacitadores_induccion_general` más abajo) y no deben
+    // pedirse aquí, o la consulta vía `callDynamicPrisma` falla con "column ... does not exist".
     let rows = await prisma.c_registro_induccion_general.findMany({
         where,
         orderBy: { id: "desc" },
         take: 50_000,
+        select: {
+            id: true,
+            empresa_id: true,
+            cliente_id: true,
+            corpo_id: true,
+            division: true,
+            fecha: true,
+            temas_a_tratar: true,
+            firma_responsable: true,
+            created_at: true,
+            created_by: true,
+            division_id: true,
+            contrato_id: true,
+            puesto_id: true,
+            isActive: true,
+        },
     });
 
-    if (filters.colaboradorCedulas?.length) {
-        rows = rows.filter((r) => rowMatchesCedulas(r.colaboradores, filters.colaboradorCedulas!));
+    // `colaboradores`/`capacitadores` (LongText JSON) fueron reemplazados por las tablas
+    // `c_colaboradores_induccion_general`/`c_capacitadores_induccion_general`; se reconstruyen aquí
+    // como strings JSON para no tocar el resto de este archivo, que los lee de `r.colaboradores`/`r.capacitadores`.
+    const rowIdsForPersonas = [...new Set(rows.map((r: any) => Number(r.id)).filter((n) => Number.isFinite(n)))];
+    const [colabRows, capRows] = rowIdsForPersonas.length
+        ? await Promise.all([
+              prisma.c_colaboradores_induccion_general.findMany({ where: { registro_id: { in: rowIdsForPersonas } } }),
+              prisma.c_capacitadores_induccion_general.findMany({ where: { registro_id: { in: rowIdsForPersonas } } }),
+          ])
+        : [[], []];
+    const colabByRegistro = new Map<number, any[]>();
+    for (const c of colabRows as any[]) {
+        const rid = Number(c.registro_id);
+        if (!colabByRegistro.has(rid)) colabByRegistro.set(rid, []);
+        colabByRegistro.get(rid)!.push({ nombre: c.nombre, cedula: c.cedula, puesto_text: c.puesto_text, puesto_id: c.puesto_id, firma: c.firma });
     }
-    if (filters.capacitadorCedulas?.length) {
-        rows = rows.filter((r) => rowMatchesCedulas(r.capacitadores, filters.capacitadorCedulas!));
+    const capByRegistro = new Map<number, any[]>();
+    for (const c of capRows as any[]) {
+        const rid = Number(c.registro_id);
+        if (!capByRegistro.has(rid)) capByRegistro.set(rid, []);
+        capByRegistro.get(rid)!.push({ nombre: c.nombre, cedula: c.cedula, firma: c.firma });
+    }
+    rows = rows.map((r: any) => ({
+        ...r,
+        colaboradores: JSON.stringify(colabByRegistro.get(Number(r.id)) ?? []),
+        capacitadores: JSON.stringify(capByRegistro.get(Number(r.id)) ?? []),
+    }));
+
+    if (filters.colaboradorCedulas?.length || filters.colaboradorNombres?.length) {
+        rows = rows.filter((r) =>
+            rowMatchesPersonasSearch(r.colaboradores, filters.colaboradorCedulas ?? [], filters.colaboradorNombres ?? [])
+        );
+    }
+    if (filters.colaboradorPuestoIds?.length) {
+        rows = rows.filter((r) => rowMatchesColaboradorPuestoIds(r.colaboradores, filters.colaboradorPuestoIds!));
+    }
+    if (filters.capacitadorCedulas?.length || filters.capacitadorNombres?.length) {
+        rows = rows.filter((r) =>
+            rowMatchesPersonasSearch(r.capacitadores, filters.capacitadorCedulas ?? [], filters.capacitadorNombres ?? [])
+        );
     }
 
     const ids = <T>(vals: T[]) => [...new Set(vals.map((x: any) => Number(x)).filter((n) => Number.isFinite(n) && n > 0))];
@@ -638,6 +768,11 @@ export async function buildRegistroInduccionGeneralExcelConsolidado(
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Inducción general");
     const wsDet = wb.addWorksheet("Detalles");
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente.
+    for (const sheet of [wsMain, wsDet]) {
+        sheet.views = [{ showGridLines: false }];
+    }
     const anchorT = new Map<number, number>();
     const anchorC = new Map<number, number>();
     const anchorK = new Map<number, number>();
@@ -711,8 +846,6 @@ export async function buildRegistroInduccionGeneralExcelConsolidado(
         c.border = borderThin;
         c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     });
-    wsMain.views = [{ state: "frozen", ySplit: 12 }];
-
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
         row.eachCell((cell, colNumber) => {
             if (colNumber === 1) return;

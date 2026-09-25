@@ -577,7 +577,11 @@ export async function buildActaEntregaExcelBufferByType(
         c.border = borderThin;
     });
     main.getRow(1).height = 28;
-    main.views = [{ state: "frozen", ySplit: 1 }];
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente.
+    for (const sheet of [main, details]) {
+        sheet.views = [{ showGridLines: false }];
+    }
     /** Anchos amplios y sin agrupación de columnas: el filtrado va en la fila de encabezado (autoFilter). */
     main.columns = [
         { width: 12 },

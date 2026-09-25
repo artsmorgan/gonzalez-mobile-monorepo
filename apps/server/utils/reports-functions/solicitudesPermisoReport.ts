@@ -530,6 +530,11 @@ export async function buildSolicitudesPermisoExcelConsolidado(
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Solicitudes de permiso");
     const wsDet = wb.addWorksheet("Detalles");
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente.
+    for (const sheet of [wsMain, wsDet]) {
+        sheet.views = [{ showGridLines: false }];
+    }
     const anchorsById = new Map<number, DetalleAnchors>();
 
     const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
@@ -606,7 +611,6 @@ export async function buildSolicitudesPermisoExcelConsolidado(
         cell.border = borderThin;
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     }
-    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.columns = [{ width: 3 }, ...headers.map(() => ({ width: 18 }))];
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {

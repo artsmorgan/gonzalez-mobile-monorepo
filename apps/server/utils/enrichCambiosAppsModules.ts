@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { NextRequest } from "next/server";
-import { callDynamicPrisma } from "./callDynamicPrisma";
+import { prisma } from "./prismaClient";
 
 export type EnrichedCambioField = {
   prop: string;
@@ -631,23 +631,22 @@ function collectIdsFromCambios(rows: any[]): IdCollector {
   return collector;
 }
 
+/**
+ * Estas tablas de catálogo/estructura (a diferencia de `c_cambios_apps_modules`, que sí es de solo
+ * lectura vía la API dinámica del app móvil) no existen en el schema de esa API dinámica — se
+ * resuelven aquí con el cliente Prisma directo del servidor, igual que ya hace esta misma ruta para
+ * `c_empleado` en `cambios-apps-modules/route.ts`.
+ */
 async function findManyNames(
-  req: NextRequest,
-  table: string,
+  table: keyof typeof prisma,
   ids: number[],
   labelFn: (row: any) => string,
 ): Promise<Map<number, string>> {
   const map = new Map<number, string>();
   if (ids.length === 0) return map;
-  const rows = await callDynamicPrisma({
-    req,
-    data: {
-      action: "GET",
-      table,
-      operation: "findMany",
-      where: { id: { in: ids } },
-    },
-  });
+  const delegate = prisma[table] as { findMany: (args: any) => Promise<any[]> } | undefined;
+  if (!delegate?.findMany) return map;
+  const rows = await delegate.findMany({ where: { id: { in: ids } } });
   const list = Array.isArray(rows) ? rows : [];
   for (const row of list) {
     const id = Number(row?.id);
@@ -657,39 +656,39 @@ async function findManyNames(
   return map;
 }
 
-async function loadLookups(req: NextRequest, collector: IdCollector): Promise<LookupMaps> {
+async function loadLookups(collector: IdCollector): Promise<LookupMaps> {
   const [empresa, cliente, division, contrato, corpo, puesto, empleado, articuloNomenclador, categoria, ejecutivoCuenta, plaza, vehiculoCorporativo] = await Promise.all([
-    findManyNames(req, "e_estructura_empresa", [...collector.empresa], (r) => String(r?.nombre ?? "").trim() || `Empresa #${r.id}`),
-    findManyNames(req, "e_estructura_cliente", [...collector.cliente], (r) => String(r?.nombre ?? "").trim() || `Cliente #${r.id}`),
-    findManyNames(req, "n_division", [...collector.division], (r) => String(r?.nombre ?? "").trim() || `División #${r.id}`),
-    findManyNames(req, "e_estructura_contrato", [...collector.contrato], (r) => String(r?.nombre ?? "").trim() || `Contrato #${r.id}`),
-    findManyNames(req, "e_estructura_sucursal", [...collector.corpo], (r) => {
+    findManyNames("e_estructura_empresa", [...collector.empresa], (r) => String(r?.nombre ?? "").trim() || `Empresa #${r.id}`),
+    findManyNames("e_estructura_cliente", [...collector.cliente], (r) => String(r?.nombre ?? "").trim() || `Cliente #${r.id}`),
+    findManyNames("n_division", [...collector.division], (r) => String(r?.nombre ?? "").trim() || `División #${r.id}`),
+    findManyNames("e_estructura_contrato", [...collector.contrato], (r) => String(r?.nombre ?? "").trim() || `Contrato #${r.id}`),
+    findManyNames("e_estructura_sucursal", [...collector.corpo], (r) => {
       const nro = r?.nro_sucursal != null ? String(r.nro_sucursal).trim() : "";
       const nombre = String(r?.nombre ?? "").trim();
       if (nro && nombre) return `${nro} - ${nombre}`;
       return nombre || nro || `Corpo #${r.id}`;
     }),
-    findManyNames(req, "e_estructura_puesto", [...collector.puesto], (r) => {
+    findManyNames("e_estructura_puesto", [...collector.puesto], (r) => {
       const codigo = r?.codigo != null ? String(r.codigo).trim() : "";
       const nombre = String(r?.nombre ?? "").trim();
       if (codigo && nombre) return `${codigo} - ${nombre}`;
       return nombre || codigo || `Puesto #${r.id}`;
     }),
-    findManyNames(req, "c_empleado", [...collector.empleado], (r) => {
+    findManyNames("c_empleado", [...collector.empleado], (r) => {
       const nombre = [r?.nombre, r?.primer_apellido, r?.segundo_apellido].filter(Boolean).join(" ").trim();
       const cedula = r?.cedula ? ` (${r.cedula})` : "";
       return (nombre || `Empleado #${r.id}`) + cedula;
     }),
-    findManyNames(req, "n_articulo_corpo_puesto", [...collector.articuloNomenclador], (r) => String(r?.nombre ?? "").trim() || `Artículo #${r.id}`),
-    findManyNames(req, "n_novedades_categoria", [...collector.categoria], (r) => String(r?.nombre ?? "").trim() || `Categoría #${r.id}`),
-    findManyNames(req, "n_ejecutivo_cuenta", [...collector.ejecutivoCuenta], (r) => String(r?.nombre ?? "").trim() || `Ejecutivo #${r.id}`),
-    findManyNames(req, "e_estructura_plazas", [...collector.plaza], (r) => {
+    findManyNames("n_articulo_corpo_puesto", [...collector.articuloNomenclador], (r) => String(r?.nombre ?? "").trim() || `Artículo #${r.id}`),
+    findManyNames("n_novedades_categoria", [...collector.categoria], (r) => String(r?.nombre ?? "").trim() || `Categoría #${r.id}`),
+    findManyNames("n_ejecutivo_cuenta", [...collector.ejecutivoCuenta], (r) => String(r?.nombre ?? "").trim() || `Ejecutivo #${r.id}`),
+    findManyNames("e_estructura_plazas", [...collector.plaza], (r) => {
       const codigo = r?.codigo_plaza != null ? String(r.codigo_plaza).trim() : "";
       const nombre = String(r?.nombre ?? "").trim();
       if (codigo && nombre) return `${codigo} - ${nombre}`;
       return nombre || codigo || `Plaza #${r.id}`;
     }),
-    findManyNames(req, "c_vehiculos_corporativos", [...collector.vehiculoCorporativo], (r) => {
+    findManyNames("c_vehiculos_corporativos", [...collector.vehiculoCorporativo], (r) => {
       const placa = String(r?.placa ?? "").trim();
       const modelo = String(r?.modelo ?? "").trim();
       if (placa && modelo) return `${placa} - ${modelo}`;
@@ -1559,7 +1558,7 @@ export async function enrichCambiosAppsModulesRows(
   }
 
   const collector = collectIdsFromCambios(rows);
-  const lookups = await loadLookups(req, collector);
+  const lookups = await loadLookups(collector);
 
   return rows.map((row) => {
     let parsed: any[] = [];

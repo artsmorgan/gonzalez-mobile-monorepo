@@ -810,7 +810,8 @@ export async function buildAccionesPersonalesExcelConsolidado(
         c.fill = hdrFill;
         c.border = borderThin;
     });
-    ws.views = [{ state: "frozen", ySplit: 12 }];
+    // Fondo blanco: se oculta la cuadrícula de Excel para que solo se vean los bordes dibujados manualmente.
+    ws.views = [{ showGridLines: false }];
     ws.columns = [{ width: 3 }, ...headers.map(() => ({ width: 22, outlineLevel: 1 }))];
 
     for (const r of rows) {

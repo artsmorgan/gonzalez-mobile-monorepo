@@ -470,7 +470,6 @@ function parseListModuleFilters(searchParams: URLSearchParams): any {
         ["listIrCorpoIds", "corpoIds"],
         ["listIrPuestoIds", "puestoIds"],
         ["listIrResponsableEmpleadoIds", "responsableEmpleadoIds"],
-        ["listIrEmpleadoIds", "empleadoIds"],
     ];
     for (const [paramKey, outKey] of mapIrIds) {
         const raw = searchParams.get(paramKey);
@@ -488,6 +487,14 @@ function parseListModuleFilters(searchParams: URLSearchParams): any {
             .map((s) => s.trim().replace(/\s+/g, ""))
             .filter((s) => s.length > 0);
         if (ceds.length > 0) out.participanteCedulas = [...new Set(ceds)];
+    }
+    const irPartNom = searchParams.get("listIrParticipanteNombres");
+    if (irPartNom && irPartNom.trim() !== "") {
+        const noms = irPartNom
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0);
+        if (noms.length > 0) out.participanteNombres = [...new Set(noms)];
     }
 
     const nvDesde = searchParams.get("listNvCreadoDesde");
@@ -591,6 +598,22 @@ function parseListModuleFilters(searchParams: URLSearchParams): any {
             .filter((s) => s.length > 0);
         if (ceds.length > 0) out.colaboradorCedulas = [...new Set(ceds)];
     }
+    const rigColNom = searchParams.get("listRigColaboradorNombres");
+    if (rigColNom && rigColNom.trim() !== "") {
+        const noms = rigColNom
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0);
+        if (noms.length > 0) out.colaboradorNombres = [...new Set(noms)];
+    }
+    const rigColPuestoIds = searchParams.get("listRigColaboradorPuestoIds");
+    if (rigColPuestoIds && rigColPuestoIds.trim() !== "") {
+        const ids = rigColPuestoIds
+            .split(",")
+            .map((s) => Number(s.trim()))
+            .filter((n) => Number.isFinite(n) && n > 0);
+        if (ids.length > 0) out.colaboradorPuestoIds = [...new Set(ids)];
+    }
     const rigCap = searchParams.get("listRigCapacitadorCedulas");
     if (rigCap && rigCap.trim() !== "") {
         const ceds = rigCap
@@ -598,6 +621,14 @@ function parseListModuleFilters(searchParams: URLSearchParams): any {
             .map((s) => s.trim().replace(/\s+/g, ""))
             .filter((s) => s.length > 0);
         if (ceds.length > 0) out.capacitadorCedulas = [...new Set(ceds)];
+    }
+    const rigCapNom = searchParams.get("listRigCapacitadorNombres");
+    if (rigCapNom && rigCapNom.trim() !== "") {
+        const noms = rigCapNom
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0);
+        if (noms.length > 0) out.capacitadorNombres = [...new Set(noms)];
     }
 
     const mpDesde = searchParams.get("listMpCreadoDesde");

@@ -48,6 +48,14 @@ import { createMovimientoLlave, deleteMovimientoLlave, updateMovimientoLlave } f
 import { createLlavero, deleteLlavero, listLlaveros, LlaveroItem, updateLlavero } from '../hooks/llaverosFunctions';
 import { createMovimientoLlavero, deleteMovimientoLlavero, updateMovimientoLlavero } from '../hooks/movimientosLlaverosFunctions';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import {
+  persistSignatureRef,
+  hydrateSignatureRef,
+  resolveStoredSignatureDisplayUri,
+  deleteSignatureLocalRef,
+  localizeSignatureFieldInList,
+} from '@/hooks/fileStorage';
+import { localizeMovimientosFirmas } from '@/hooks/llavesCacheHelpers';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 
@@ -139,24 +147,40 @@ function resolveListCorpoIdFromSnap(snap: MarcaSnapshot | null, filterSucursalId
   return snap?.marcaCorpoId ?? null;
 }
 
-const normalizeLlavesList = (arr: any[]): LlaveUI[] =>
-  (arr || [])
-    .filter((it: any) => it == null || it.isActive !== false)
-    .map((it: any) => ({
-    ...it,
-    id_local: it.id_local || '',
-    movimientos: (it.movimientos || []).map((m: any) => ({ ...m, id_local: m.id_local || '' })),
-  }));
+const normalizeLlavesList = async (arr: any[]): Promise<LlaveUI[]> =>
+  Promise.all(
+    (arr || [])
+      .filter((it: any) => it == null || it.isActive !== false)
+      .map(async (it: any) => ({
+        ...it,
+        id_local: it.id_local || '',
+        movimientos: await localizeMovimientosFirmas(
+          (it.movimientos || []).map((m: any) => ({ ...m, id_local: m.id_local || '' })),
+          null,
+          'mov_llave_firma_entrega',
+          'mov_llave_firma_recibe'
+        ),
+      }))
+  );
 
-const normalizeLlaverosList = (arr: any[]): LlaveroUI[] =>
-  (arr || [])
-    .filter((it: any) => it == null || it.isActive !== false)
-    .map((it: any) => ({
-    ...it,
-    id_local: it.id_local || '',
-    movimientos: (it.movimientos || []).map((m: any) => ({ ...m, id_local: m.id_local || '' })),
-    llaves: (it.llaves || []).map((l: any) => ({ ...l })),
-  }));
+const normalizeLlaverosList = async (arr: any[]): Promise<LlaveroUI[]> =>
+  Promise.all(
+    (arr || [])
+      .filter((it: any) => it == null || it.isActive !== false)
+      .map(async (it: any) => ({
+        ...it,
+        id_local: it.id_local || '',
+        movimientos: await localizeMovimientosFirmas(
+          (it.movimientos || []).map((m: any) => ({ ...m, id_local: m.id_local || '' })),
+          null,
+          'mov_llavero_firma_entrega',
+          'mov_llavero_firma_recibe'
+        ),
+        llaves: (it.llaves || []).map((l: any) => ({ ...l })),
+      }))
+  );
+
+const FIRMA_MANUAL_OFFLINE_MESSAGE = 'Para visualizar las firmas manuales, conéctate a internet y actualiza la lista';
 
 export default function LlavesScreen() {
   const navigation = useNavigation<any>();
@@ -250,6 +274,7 @@ export default function LlavesScreen() {
   const [showLlaveroMovHoraPicker, setShowLlaveroMovHoraPicker] = useState(false);
   const [llaveroMovFirmaEntrega, setLlaveroMovFirmaEntrega] = useState('');
   const [llaveroMovFirmaRecibe, setLlaveroMovFirmaRecibe] = useState('');
+  const [llaveroMovFirmasUnavailableOffline, setLlaveroMovFirmasUnavailableOffline] = useState(false);
   const [llaveroMovFirmaResponsable, setLlaveroMovFirmaResponsable] = useState('');
   const [isGeneratingLlaveroMovFirma, setIsGeneratingLlaveroMovFirma] = useState(false);
 
@@ -277,6 +302,7 @@ export default function LlavesScreen() {
 
   const [movFirmaEntrega, setMovFirmaEntrega] = useState('');
   const [movFirmaRecibe, setMovFirmaRecibe] = useState('');
+  const [movFirmasUnavailableOffline, setMovFirmasUnavailableOffline] = useState(false);
   const [movFirmaResponsable, setMovFirmaResponsable] = useState('');
   const [isGeneratingMovFirma, setIsGeneratingMovFirma] = useState(false);
 
@@ -796,7 +822,7 @@ export default function LlavesScreen() {
 
       const tree = await readMainStructureTree();
       const rawOff = getSucursalDataFromTree(tree, listCorpoId).llaves;
-      const offlineList = normalizeLlavesList(rawOff);
+      const offlineList = await normalizeLlavesList(rawOff);
 
       const isConnected = await getConnectionStatus();
       if (!isConnected) {
@@ -813,7 +839,7 @@ export default function LlavesScreen() {
         });
 
         if (res.status) {
-        const serverList = normalizeLlavesList(res.data || []);
+        const serverList = await normalizeLlavesList(res.data || []);
         setLlaves((prev) => {
           const localOnly = prev.filter((l) => l.id_local && Number(l.corpo_id) === Number(listCorpoId));
           const combined = [...localOnly, ...serverList];
@@ -860,10 +886,10 @@ export default function LlavesScreen() {
 
       const tree0 = await readMainStructureTree();
       let rawOff = getSucursalDataFromTree(tree0, listCorpoId).llaves;
-      let baseLlaves = normalizeLlavesList(rawOff);
+      let baseLlaves = await normalizeLlavesList(rawOff);
       const rawLlaverosOff = getSucursalDataFromTree(tree0, listCorpoId).llaveros;
       const offlineLlaveros = enrichLlaveroLlavesLinks(
-        normalizeLlaverosList(rawLlaverosOff).map(mapLlaveroApiRow),
+        (await normalizeLlaverosList(rawLlaverosOff)).map(mapLlaveroApiRow),
         baseLlaves
       );
 
@@ -884,17 +910,18 @@ export default function LlavesScreen() {
         if (res.status) {
         const tree1 = await readMainStructureTree();
         rawOff = getSucursalDataFromTree(tree1, listCorpoId).llaves;
-        baseLlaves = normalizeLlavesList(rawOff);
+        baseLlaves = await normalizeLlavesList(rawOff);
+        const serverListLlaveros = (await normalizeLlaverosList(res.data || [])).map(mapLlaveroApiRow);
+        const baseLlavesForUpdater = baseLlaves;
 
         setLlaveros((prev) => {
           const localOnly = prev.filter((l) => l.id_local && Number(l.corpo_id) === Number(listCorpoId));
-          const serverList = normalizeLlaverosList(res.data || []).map(mapLlaveroApiRow);
-          const combined = [...localOnly, ...serverList];
+          const combined = [...localOnly, ...serverListLlaveros];
           const forStruct = normalizeLlaveroLinksForStructure(JSON.parse(JSON.stringify(combined)));
           void persistCorpoLlaverosInMainStructure(listCorpoId, forStruct).then(() => {
             void readMainStructureTree().then(setStructure);
           });
-          return enrichLlaveroLlavesLinks(combined, baseLlaves);
+          return enrichLlaveroLlavesLinks(combined, baseLlavesForUpdater);
         });
         } else {
           setError(res.message || 'Error al cargar llaveros');
@@ -1233,6 +1260,7 @@ export default function LlavesScreen() {
     setMovHora('');
     setMovFirmaEntrega('');
     setMovFirmaRecibe('');
+    setMovFirmasUnavailableOffline(false);
     setMovFirmaResponsable('');
     setMovEditing(null);
   };
@@ -1418,7 +1446,7 @@ export default function LlavesScreen() {
     setMovHora(timeToHHMMSS(new Date(horaAccion)));
   };
 
-  const startMovEditing = (m: MovimientoUI) => {
+  const startMovEditing = async (m: MovimientoUI) => {
     setMovEditing(m);
     setMovIsCreating(true);
     setMovNombreRecibe(m.nombre_persona_recibe || '');
@@ -1427,8 +1455,21 @@ export default function LlavesScreen() {
     setMovTelefono(m.telefono || '');
     setMovFecha(m.fecha ? String(m.fecha).split('T')[0] : '');
     setMovHora(normalizeTimeValue(String(m.hora || '')));
-    setMovFirmaEntrega(m.firma_entrega || '');
-    setMovFirmaRecibe(m.firma_recibe || '');
+    // Las firmas pueden venir del cache como referencia local a expo-files: se hidratan a un data
+    // URI real para poder mostrarlas y, si se guardan de nuevo, reenviarlas tal cual.
+    const hydratedMovFirmaEntrega = (await hydrateSignatureRef(m.firma_entrega)) || m.firma_entrega || '';
+    const hydratedMovFirmaRecibe = (await hydrateSignatureRef(m.firma_recibe)) || m.firma_recibe || '';
+    setMovFirmaEntrega(hydratedMovFirmaEntrega);
+    setMovFirmaRecibe(hydratedMovFirmaRecibe);
+    // Un movimiento ya registrado (con id de servidor) sin firma disponible localmente significa
+    // que la jerarquía no la trajo (ya no viaja ahí); si además no hay conexión para consultarla en
+    // el endpoint dedicado, se avisa en vez de invitar a dibujar una firma nueva.
+    if (Number(m.id) > 0 && (!hydratedMovFirmaEntrega || !hydratedMovFirmaRecibe)) {
+      const isConnected = await getConnectionStatus();
+      setMovFirmasUnavailableOffline(!isConnected);
+    } else {
+      setMovFirmasUnavailableOffline(false);
+    }
     setMovFirmaResponsable(m.firma_responsable || '');
   };
 
@@ -1477,6 +1518,22 @@ export default function LlavesScreen() {
         }
       } else {
         const localId = `local-mov-${Date.now()}`;
+        // Las firmas se guardan en expo-files; solo se conserva la referencia en cache/actions.
+        const firmaEntregaRefOffCreate = await persistSignatureRef({
+          value: payload.firma_entrega ?? null,
+          previousRef: null,
+          prefix: 'mov_llave_firma_entrega',
+        });
+        const firmaRecibeRefOffCreate = await persistSignatureRef({
+          value: payload.firma_recibe ?? null,
+          previousRef: null,
+          prefix: 'mov_llave_firma_recibe',
+        });
+        const payloadForCache = {
+          ...payload,
+          firma_entrega: firmaEntregaRefOffCreate ?? '',
+          firma_recibe: firmaRecibeRefOffCreate ?? '',
+        };
         const localItem: MovimientoUI = {
           id: 0,
           id_local: localId,
@@ -1488,8 +1545,8 @@ export default function LlavesScreen() {
           telefono: payload.telefono,
           fecha: payload.fecha,
           hora: payload.hora,
-          firma_entrega: payload.firma_entrega,
-          firma_recibe: payload.firma_recibe,
+          firma_entrega: payloadForCache.firma_entrega,
+          firma_recibe: payloadForCache.firma_recibe,
           firma_responsable: payload.firma_responsable,
         };
         const next = [localItem, ...movimientos];
@@ -1500,7 +1557,7 @@ export default function LlavesScreen() {
             id_local: localId,
           llaveId: movLlave.id || 0,
           llaveLocalId: movLlave.id_local || '',
-          requestData: payload,
+          requestData: payloadForCache,
         });
         Alert.alert('Guardado (offline)', 'El movimiento se sincronizará cuando vuelva la conexión.');
         setMovIsCreating(false);
@@ -1527,6 +1584,22 @@ export default function LlavesScreen() {
         Alert.alert('Error', res.message || 'No se pudo actualizar el movimiento');
       }
     } else {
+      // Las firmas se guardan en expo-files; se reemplaza la referencia anterior del movimiento.
+      const firmaEntregaRefOffUpdate = await persistSignatureRef({
+        value: payload.firma_entrega ?? null,
+        previousRef: (movEditing as any)?.firma_entrega ?? null,
+        prefix: 'mov_llave_firma_entrega',
+      });
+      const firmaRecibeRefOffUpdate = await persistSignatureRef({
+        value: payload.firma_recibe ?? null,
+        previousRef: (movEditing as any)?.firma_recibe ?? null,
+        prefix: 'mov_llave_firma_recibe',
+      });
+      const payloadForCache = {
+        ...payload,
+        firma_entrega: firmaEntregaRefOffUpdate ?? '',
+        firma_recibe: firmaRecibeRefOffUpdate ?? '',
+      };
       const next = movimientos.map((m) => {
           const match =
             (movEditing.id_local && m.id_local === movEditing.id_local) ||
@@ -1534,21 +1607,21 @@ export default function LlavesScreen() {
         if (!match) return m;
         return {
           ...m,
-          nombre_persona_recibe: payload.nombre_persona_recibe,
-          nombre_persona_entrega: payload.nombre_persona_entrega,
-          departamento: payload.departamento,
-          telefono: payload.telefono,
-          fecha: payload.fecha,
-          hora: payload.hora,
-          firma_entrega: payload.firma_entrega,
-          firma_recibe: payload.firma_recibe,
-          firma_responsable: payload.firma_responsable,
+          nombre_persona_recibe: payloadForCache.nombre_persona_recibe,
+          nombre_persona_entrega: payloadForCache.nombre_persona_entrega,
+          departamento: payloadForCache.departamento,
+          telefono: payloadForCache.telefono,
+          fecha: payloadForCache.fecha,
+          hora: payloadForCache.hora,
+          firma_entrega: payloadForCache.firma_entrega,
+          firma_recibe: payloadForCache.firma_recibe,
+          firma_responsable: payloadForCache.firma_responsable,
         };
       });
       await persistMovimientosToLlavesCache(movLlave, next);
 
       if (movEditing.id_local) {
-        const updated = await updateMovCreateActionForLocalId(movEditing.id_local, payload);
+        const updated = await updateMovCreateActionForLocalId(movEditing.id_local, payloadForCache);
         if (!updated) {
           await upsertMovAction({
             type: 'create',
@@ -1556,7 +1629,7 @@ export default function LlavesScreen() {
               id_local: movEditing.id_local,
             llaveId: movLlave.id || 0,
             llaveLocalId: movLlave.id_local || '',
-            requestData: payload,
+            requestData: payloadForCache,
           });
         }
       } else {
@@ -1565,7 +1638,7 @@ export default function LlavesScreen() {
           id: movEditing.id,
           llaveId: movLlave.id || 0,
           llaveLocalId: movLlave.id_local || '',
-          requestData: payload,
+          requestData: payloadForCache,
         });
       }
 
@@ -1608,6 +1681,8 @@ export default function LlavesScreen() {
             const next = movimientos.filter((x) => x.id_local !== m.id_local);
             await persistMovimientosToLlavesCache(movLlave, next);
             if (m.id_local) await removeMovActionsForLocalId(m.id_local);
+            await deleteSignatureLocalRef(m.firma_entrega);
+            await deleteSignatureLocalRef(m.firma_recibe);
             return;
           }
 
@@ -2008,7 +2083,7 @@ export default function LlavesScreen() {
             const hE = await resolveHierarchyForRecord();
             if (hE?.corpo_id && Number.isFinite(sid) && sid > 0) {
               const tree0 = await readMainStructureTree();
-              const baseLlaves = normalizeLlavesList(getSucursalDataFromTree(tree0, hE.corpo_id).llaves);
+              const baseLlaves = await normalizeLlavesList(getSucursalDataFromTree(tree0, hE.corpo_id).llaves);
               const row: LlaveroUI = {
                 id: sid,
                 id_local: '',
@@ -2285,6 +2360,7 @@ export default function LlavesScreen() {
     setLlaveroMovHora('');
     setLlaveroMovFirmaEntrega('');
     setLlaveroMovFirmaRecibe('');
+    setLlaveroMovFirmasUnavailableOffline(false);
     setLlaveroMovFirmaResponsable('');
     setLlaveroMovEditing(null);
   };
@@ -2362,7 +2438,7 @@ export default function LlavesScreen() {
     setLlaveroMovHora(timeToHHMMSS(new Date(horaAccion)));
   };
 
-  const startLlaveroMovEditing = (m: MovimientoLlaveroUI) => {
+  const startLlaveroMovEditing = async (m: MovimientoLlaveroUI) => {
     setLlaveroMovEditing(m);
     setLlaveroMovIsCreating(true);
     setLlaveroMovNombreRecibe(m.nombre_persona_recibe || '');
@@ -2371,8 +2447,21 @@ export default function LlavesScreen() {
     setLlaveroMovTelefono(m.telefono || '');
     setLlaveroMovFecha(m.fecha ? String(m.fecha).split('T')[0] : '');
     setLlaveroMovHora(normalizeTimeValue(String(m.hora || '')));
-    setLlaveroMovFirmaEntrega(m.firma_entrega || '');
-    setLlaveroMovFirmaRecibe(m.firma_recibe || '');
+    // Las firmas pueden venir del cache como referencia local a expo-files: se hidratan a un data
+    // URI real para poder mostrarlas y, si se guardan de nuevo, reenviarlas tal cual.
+    const hydratedLlaveroMovFirmaEntrega = (await hydrateSignatureRef(m.firma_entrega)) || m.firma_entrega || '';
+    const hydratedLlaveroMovFirmaRecibe = (await hydrateSignatureRef(m.firma_recibe)) || m.firma_recibe || '';
+    setLlaveroMovFirmaEntrega(hydratedLlaveroMovFirmaEntrega);
+    setLlaveroMovFirmaRecibe(hydratedLlaveroMovFirmaRecibe);
+    // Un movimiento ya registrado (con id de servidor) sin firma disponible localmente significa
+    // que la jerarquía no la trajo (ya no viaja ahí); si además no hay conexión para consultarla en
+    // el endpoint dedicado, se avisa en vez de invitar a dibujar una firma nueva.
+    if (Number(m.id) > 0 && (!hydratedLlaveroMovFirmaEntrega || !hydratedLlaveroMovFirmaRecibe)) {
+      const isConnected = await getConnectionStatus();
+      setLlaveroMovFirmasUnavailableOffline(!isConnected);
+    } else {
+      setLlaveroMovFirmasUnavailableOffline(false);
+    }
     setLlaveroMovFirmaResponsable(m.firma_responsable || '');
   };
 
@@ -2477,6 +2566,22 @@ export default function LlavesScreen() {
         }
       } else {
         const localId = `local-mov-llavero-${Date.now()}`;
+        // Las firmas se guardan en expo-files; solo se conserva la referencia en cache/actions.
+        const firmaEntregaRefOffCreate = await persistSignatureRef({
+          value: payload.firma_entrega ?? null,
+          previousRef: null,
+          prefix: 'mov_llavero_firma_entrega',
+        });
+        const firmaRecibeRefOffCreate = await persistSignatureRef({
+          value: payload.firma_recibe ?? null,
+          previousRef: null,
+          prefix: 'mov_llavero_firma_recibe',
+        });
+        const payloadForCache = {
+          ...payload,
+          firma_entrega: firmaEntregaRefOffCreate ?? '',
+          firma_recibe: firmaRecibeRefOffCreate ?? '',
+        };
         const localItem: MovimientoLlaveroUI = {
           id: 0,
           id_local: localId,
@@ -2488,8 +2593,8 @@ export default function LlavesScreen() {
           telefono: payload.telefono,
           fecha: payload.fecha,
           hora: payload.hora,
-          firma_entrega: payload.firma_entrega,
-          firma_recibe: payload.firma_recibe,
+          firma_entrega: payloadForCache.firma_entrega,
+          firma_recibe: payloadForCache.firma_recibe,
           firma_responsable: payload.firma_responsable,
         };
         const next = [localItem, ...llaveroMovimientos];
@@ -2500,7 +2605,7 @@ export default function LlavesScreen() {
             id_local: localId,
           llaveroId: movLlavero.id || 0,
           llaveroLocalId: movLlavero.id_local || '',
-          requestData: payload,
+          requestData: payloadForCache,
         });
         Alert.alert('Guardado (offline)', 'El movimiento se sincronizará cuando vuelva la conexión.');
         setLlaveroMovIsCreating(false);
@@ -2527,20 +2632,36 @@ export default function LlavesScreen() {
         Alert.alert('Error', res.message || 'No se pudo actualizar el movimiento');
       }
     } else {
+      // Las firmas se guardan en expo-files; se reemplaza la referencia anterior del movimiento.
+      const firmaEntregaRefOffUpdate = await persistSignatureRef({
+        value: payload.firma_entrega ?? null,
+        previousRef: (llaveroMovEditing as any)?.firma_entrega ?? null,
+        prefix: 'mov_llavero_firma_entrega',
+      });
+      const firmaRecibeRefOffUpdate = await persistSignatureRef({
+        value: payload.firma_recibe ?? null,
+        previousRef: (llaveroMovEditing as any)?.firma_recibe ?? null,
+        prefix: 'mov_llavero_firma_recibe',
+      });
+      const payloadForCache = {
+        ...payload,
+        firma_entrega: firmaEntregaRefOffUpdate ?? '',
+        firma_recibe: firmaRecibeRefOffUpdate ?? '',
+      };
       const next = llaveroMovimientos.map((m) => {
         const match = (llaveroMovEditing.id_local && m.id_local === llaveroMovEditing.id_local) || (!llaveroMovEditing.id_local && m.id === llaveroMovEditing.id);
         if (!match) return m;
         return {
           ...m,
-          nombre_persona_recibe: payload.nombre_persona_recibe,
-          nombre_persona_entrega: payload.nombre_persona_entrega,
-          departamento: payload.departamento,
-          telefono: payload.telefono,
-          fecha: payload.fecha,
-          hora: payload.hora,
-          firma_entrega: payload.firma_entrega,
-          firma_recibe: payload.firma_recibe,
-          firma_responsable: payload.firma_responsable,
+          nombre_persona_recibe: payloadForCache.nombre_persona_recibe,
+          nombre_persona_entrega: payloadForCache.nombre_persona_entrega,
+          departamento: payloadForCache.departamento,
+          telefono: payloadForCache.telefono,
+          fecha: payloadForCache.fecha,
+          hora: payloadForCache.hora,
+          firma_entrega: payloadForCache.firma_entrega,
+          firma_recibe: payloadForCache.firma_recibe,
+          firma_responsable: payloadForCache.firma_responsable,
         };
       });
       await persistMovimientosToLlaverosCache(movLlavero, next);
@@ -2551,14 +2672,14 @@ export default function LlavesScreen() {
             id_local: llaveroMovEditing.id_local,
           llaveroId: movLlavero.id || 0,
           llaveroLocalId: movLlavero.id_local || '',
-          requestData: payload,
+          requestData: payloadForCache,
         });
       } else {
         await upsertLlaveroMovAction({
           type: 'update',
           id: llaveroMovEditing.id,
           llaveroId: movLlavero.id || 0,
-          requestData: payload,
+          requestData: payloadForCache,
         });
       }
       Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
@@ -2598,6 +2719,8 @@ export default function LlavesScreen() {
             const next = llaveroMovimientos.filter((x) => x.id_local !== m.id_local);
             await persistMovimientosToLlaverosCache(movLlavero, next);
             if (m.id_local) await removeLlaveroMovActionsForLocalId(m.id_local);
+            await deleteSignatureLocalRef(m.firma_entrega);
+            await deleteSignatureLocalRef(m.firma_recibe);
             return;
           }
 
@@ -2892,14 +3015,14 @@ export default function LlavesScreen() {
   /** Llaves de esa sucursal en main_structure; si hay red, se enriquece con API sin mutar el listado principal ni disparar re-renders en bucle. */
   const loadLlavesForLlaveroForm = useCallback(async (listCorpoId: number): Promise<LlaveUI[]> => {
     const tree0 = await readMainStructureTree();
-    const fromTree = normalizeLlavesList(getSucursalDataFromTree(tree0, listCorpoId).llaves);
+    const fromTree = await normalizeLlavesList(getSucursalDataFromTree(tree0, listCorpoId).llaves);
     const isConnected = await getConnectionStatus();
     if (!isConnected) return fromTree;
     try {
       const { refreshAccessToken: r, logout: l } = authFetchRef.current;
       const res = await listLlaves({ corpoId: listCorpoId, refreshAccessToken: r, logout: l });
       if (res.status && Array.isArray(res.data)) {
-        const serverList = normalizeLlavesList(res.data);
+        const serverList = await normalizeLlavesList(res.data);
         const serverIds = new Set(serverList.map((ll) => Number(ll.id)).filter((n) => Number.isFinite(n) && n > 0));
         const localOnly = fromTree.filter(
           (ll) => ll.id_local && (!ll.id || ll.id === 0 || !serverIds.has(Number(ll.id)))
@@ -3935,11 +4058,15 @@ export default function LlavesScreen() {
                       <Ionicons name="trash" size={18} color="#FFFFFF" />
                     </TouchableOpacity>
                   </ThemedView>
+                ) : movFirmasUnavailableOffline ? (
+                  <ThemedText style={styles.signatureHintMuted}>{FIRMA_MANUAL_OFFLINE_MESSAGE}</ThemedText>
                 ) : null}
-                <TouchableOpacity style={styles.openSignatureButton} onPress={() => openDrawSignatureModal('entrega')}>
-                  <Ionicons name="create-outline" size={20} color="#000000" />
-                  <ThemedText style={styles.openSignatureButtonText}>{movFirmaEntrega ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
-                </TouchableOpacity>
+                {!movFirmasUnavailableOffline || movFirmaEntrega ? (
+                  <TouchableOpacity style={styles.openSignatureButton} onPress={() => openDrawSignatureModal('entrega')}>
+                    <Ionicons name="create-outline" size={20} color="#000000" />
+                    <ThemedText style={styles.openSignatureButtonText}>{movFirmaEntrega ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
+                  </TouchableOpacity>
+                ) : null}
 
                 <ThemedText style={styles.sectionTitle}>Firma recibe (Opcional)</ThemedText>
                 {movFirmaRecibe ? (
@@ -3949,11 +4076,15 @@ export default function LlavesScreen() {
                       <Ionicons name="trash" size={18} color="#FFFFFF" />
                     </TouchableOpacity>
                   </ThemedView>
+                ) : movFirmasUnavailableOffline ? (
+                  <ThemedText style={styles.signatureHintMuted}>{FIRMA_MANUAL_OFFLINE_MESSAGE}</ThemedText>
                 ) : null}
-                <TouchableOpacity style={styles.openSignatureButton} onPress={() => openDrawSignatureModal('recibe')}>
-                  <Ionicons name="create-outline" size={20} color="#000000" />
-                  <ThemedText style={styles.openSignatureButtonText}>{movFirmaRecibe ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
-                </TouchableOpacity>
+                {!movFirmasUnavailableOffline || movFirmaRecibe ? (
+                  <TouchableOpacity style={styles.openSignatureButton} onPress={() => openDrawSignatureModal('recibe')}>
+                    <Ionicons name="create-outline" size={20} color="#000000" />
+                    <ThemedText style={styles.openSignatureButtonText}>{movFirmaRecibe ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
+                  </TouchableOpacity>
+                ) : null}
 
                 <ThemedText style={styles.sectionTitle}>Firma responsable *</ThemedText>
                 <ThemedView style={styles.signatureButtons}>
@@ -4297,11 +4428,15 @@ export default function LlavesScreen() {
                       <Ionicons name="trash" size={18} color="#FFFFFF" />
                     </TouchableOpacity>
                   </ThemedView>
+                ) : llaveroMovFirmasUnavailableOffline ? (
+                  <ThemedText style={styles.signatureHintMuted}>{FIRMA_MANUAL_OFFLINE_MESSAGE}</ThemedText>
                 ) : null}
-                <TouchableOpacity style={styles.openSignatureButton} onPress={() => openDrawSignatureModal('entrega')}>
-                  <Ionicons name="create-outline" size={20} color="#000000" />
-                  <ThemedText style={styles.openSignatureButtonText}>{llaveroMovFirmaEntrega ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
-                </TouchableOpacity>
+                {!llaveroMovFirmasUnavailableOffline || llaveroMovFirmaEntrega ? (
+                  <TouchableOpacity style={styles.openSignatureButton} onPress={() => openDrawSignatureModal('entrega')}>
+                    <Ionicons name="create-outline" size={20} color="#000000" />
+                    <ThemedText style={styles.openSignatureButtonText}>{llaveroMovFirmaEntrega ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
+                  </TouchableOpacity>
+                ) : null}
 
                 <ThemedText style={styles.sectionTitle}>Firma recibe (Opcional)</ThemedText>
                 {llaveroMovFirmaRecibe ? (
@@ -4311,11 +4446,15 @@ export default function LlavesScreen() {
                       <Ionicons name="trash" size={18} color="#FFFFFF" />
                     </TouchableOpacity>
                   </ThemedView>
+                ) : llaveroMovFirmasUnavailableOffline ? (
+                  <ThemedText style={styles.signatureHintMuted}>{FIRMA_MANUAL_OFFLINE_MESSAGE}</ThemedText>
                 ) : null}
-                <TouchableOpacity style={styles.openSignatureButton} onPress={() => openDrawSignatureModal('recibe')}>
-                  <Ionicons name="create-outline" size={20} color="#000000" />
-                  <ThemedText style={styles.openSignatureButtonText}>{llaveroMovFirmaRecibe ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
-                </TouchableOpacity>
+                {!llaveroMovFirmasUnavailableOffline || llaveroMovFirmaRecibe ? (
+                  <TouchableOpacity style={styles.openSignatureButton} onPress={() => openDrawSignatureModal('recibe')}>
+                    <Ionicons name="create-outline" size={20} color="#000000" />
+                    <ThemedText style={styles.openSignatureButtonText}>{llaveroMovFirmaRecibe ? 'Modificar firma' : 'Agregar firma'}</ThemedText>
+                  </TouchableOpacity>
+                ) : null}
 
                 <ThemedText style={styles.sectionTitle}>Firma responsable *</ThemedText>
                 <ThemedView style={styles.signatureButtons}>

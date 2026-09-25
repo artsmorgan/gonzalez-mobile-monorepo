@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { reportError } from "../../../../../utils/reportError";
+import { hydrateParticipantesForRecords, INDUCTION_TOUR_SAFE_SELECT } from "../../participantesHelpers";
 
 export async function GET(
     req: NextRequest,
@@ -32,12 +33,14 @@ export async function GET(
                 },
                 orderBy: {
                     created_at: 'desc'
-                }
+                },
+                select: INDUCTION_TOUR_SAFE_SELECT,
             },
         });
 
         const recordsArray = Array.isArray(records) ? records : [];
-        const recordsWithIdLocal = recordsArray.map((record: any) => ({
+        const recordsHydrated = await hydrateParticipantesForRecords(req, recordsArray);
+        const recordsWithIdLocal = recordsHydrated.map((record: any) => ({
             ...record,
             id_local: ""
         }));

@@ -124,7 +124,6 @@ export async function GET(req: NextRequest) {
             titulo: string,
             descripcion: string,
             tipo: string,
-            resultado: string,
             observaciones: string,
             responsable: { nombre: string, cedula: string },
             firma_responsable: string,
@@ -139,8 +138,8 @@ export async function GET(req: NextRequest) {
                 extension: string;
                 url: string;
             }[],
-            empleados: { id: number, nombre: string, cedula: string }[],
-            puestos: { id: number, nombre: string }[],
+            empleados: { id: number, nombre: string, cedula: string, resultado: string | null }[],
+            puestos: { id: number, nombre: string, resultado: string | null }[],
             id_local: string,
         }[] = [];
 
@@ -196,7 +195,7 @@ export async function GET(req: NextRequest) {
                 },
             });
             const empleadosArray = Array.isArray(empleados) ? empleados : [];
-            const all_empleados: { id: number, nombre: string, cedula: string }[] = [];
+            const all_empleados: { id: number, nombre: string, cedula: string, resultado: string | null }[] = [];
             for (const empleado of empleadosArray) {
                 const empleadoObj = empleado as any;
                 const empleado_data = await prisma.c_empleado.findUnique({ where: { id: empleadoObj.empleado_id } });
@@ -205,7 +204,8 @@ export async function GET(req: NextRequest) {
                     all_empleados.push({
                         id: empleadoObj.empleado_id,
                         nombre: (empleadoDataObj.nombre || "") + " " + (empleadoDataObj.primer_apellido || "") + " " + (empleadoDataObj.segundo_apellido || ""),
-                        cedula: empleadoDataObj.cedula
+                        cedula: empleadoDataObj.cedula,
+                        resultado: empleadoObj.resultado ?? null
                     });
                 }
             }
@@ -220,7 +220,7 @@ export async function GET(req: NextRequest) {
                 },
             });
             const puestosArray = Array.isArray(puestos) ? puestos : [];
-            const all_puestos: { id: number, nombre: string }[] = [];
+            const all_puestos: { id: number, nombre: string, resultado: string | null }[] = [];
             for (const puesto of puestosArray) {
                 const puestoObj = puesto as any;
                 const puesto_data = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoObj.puesto_id } });
@@ -228,7 +228,8 @@ export async function GET(req: NextRequest) {
                     const puestoDataObj = puesto_data as any;
                     all_puestos.push({
                         id: puestoObj.puesto_id,
-                        nombre: puestoDataObj.nombre
+                        nombre: puestoDataObj.nombre,
+                        resultado: puestoObj.resultado ?? null
                     });
                 }
             }
@@ -289,7 +290,6 @@ export async function GET(req: NextRequest) {
                 titulo: capacitacionObj.titulo,
                 descripcion: capacitacionObj.descripcion,
                 tipo: capacitacionObj.tipo,
-                resultado: capacitacionObj.resultado || "No disponible",
                 observaciones: capacitacionObj.observaciones,
                 responsable: {
                     nombre: capacitacionObj.nombre_responsable,
@@ -333,7 +333,6 @@ export async function POST(req: NextRequest) {
             titulo,
             descripcion,
             tipo,
-            resultado, // Opcional
             observaciones,
             nombre_responsable,
             cedula_responsable,
@@ -380,6 +379,11 @@ export async function POST(req: NextRequest) {
             !Number.isFinite(puestoJerId)) {
             await reportError(req, "api/training", "POST", 400, "Datos incompletos");
             return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 400 });
+        }
+
+        if ((!Array.isArray(empleados) || empleados.length === 0) && (!Array.isArray(puestos) || puestos.length === 0)) {
+            await reportError(req, "api/training", "POST", 400, "Debe incluir al menos un empleado o un puesto");
+            return NextResponse.json({ status: false, message: "Debe incluir al menos un empleado o un puesto" }, { status: 400 });
         }
 
         const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
@@ -452,7 +456,6 @@ export async function POST(req: NextRequest) {
                     titulo: titulo,
                     descripcion: descripcion,
                     tipo: tipo,
-                    resultado: resultado,
                     observaciones: observaciones,
                     nombre_responsable: nombre_responsable,
                     cedula_responsable: cedula_responsable,
@@ -470,7 +473,10 @@ export async function POST(req: NextRequest) {
         const hour = fechaValue.toISOString().split("T")[1].split(".")[0];
 
         for (const emp of empleados) {
-            const empleado_data = await prisma.c_empleado.findUnique({ where: { id: parseInt(emp) } });
+            const empId = typeof emp === "object" && emp !== null ? parseInt(String(emp.id), 10) : parseInt(String(emp), 10);
+            const empResultado = typeof emp === "object" && emp !== null && emp.resultado != null ? String(emp.resultado) : null;
+            if (!Number.isFinite(empId)) continue;
+            const empleado_data = await prisma.c_empleado.findUnique({ where: { id: empId } });
             if (!empleado_data) {
                 continue;
             }
@@ -482,17 +488,21 @@ export async function POST(req: NextRequest) {
                     operation: "create",
                     data: {
                         capacitacion_id: capacitacionObj.id,
-                        empleado_id: parseInt(emp)
+                        empleado_id: empId,
+                        resultado: empResultado
                     }
                 }
             });
 
             const desc = `Has recibido la capacitación ${capacitacionObj.titulo} en la sucursal ${corpoObj.nombre} de ${clienteObj.nombre} el día ${date} a las ${hour}`;
-            await sendNotificationByEmployee(req, effectiveCorpoIdPost, [marcaObj.empleadoFijo_id], "Capacitación recibida", desc, [parseInt(emp)]);
+            await sendNotificationByEmployee(req, effectiveCorpoIdPost, [marcaObj.empleadoFijo_id], "Capacitación recibida", desc, [empId]);
         }
 
         for (const puesto of puestos) {
-            const puesto_data = await prisma.e_estructura_puesto.findUnique({ where: { id: parseInt(puesto) } });
+            const puestoId = typeof puesto === "object" && puesto !== null ? parseInt(String(puesto.id), 10) : parseInt(String(puesto), 10);
+            const puestoResultado = typeof puesto === "object" && puesto !== null && puesto.resultado != null ? String(puesto.resultado) : null;
+            if (!Number.isFinite(puestoId)) continue;
+            const puesto_data = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoId } });
             if (!puesto_data) {
                 continue;
             }
@@ -504,7 +514,8 @@ export async function POST(req: NextRequest) {
                     operation: "create",
                     data: {
                         capacitacion_id: capacitacionObj.id,
-                        puesto_id: parseInt(puesto)
+                        puesto_id: puestoId,
+                        resultado: puestoResultado
                     }
                 }
             });

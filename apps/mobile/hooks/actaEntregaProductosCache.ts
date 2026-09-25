@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { reconcileSignatureFieldAfterSync } from './fileStorage';
 
 export const ACTA_ENTREGA_PRODUCTOS_CACHE_KEY = 'acta_entrega_productos_cache';
 
@@ -31,8 +32,13 @@ export function stripActaEntregaPrismaJoins(row: any): any {
   return rest;
 }
 
-/** Registro ya en servidor: sin id_local de cola; adjuntos alineados con el GET de lista. */
-export function normalizeSyncedActaEntregaRecord(record: any): any {
+/**
+ * Registro ya en servidor: sin id_local de cola; adjuntos alineados con el GET de lista.
+ * `firma_entrega`/`firma_recibe` llegan del servidor en base64: se reconcilian contra la referencia
+ * local ya persistida (`previous`, si se conoce) para que expo-files siempre corresponda al
+ * elemento ya sincronizado en cache, en vez de guardar el base64 crudo.
+ */
+export async function normalizeSyncedActaEntregaRecord(record: any, previous?: any): Promise<any> {
   if (record?.type !== 'acta_entrega_producto') return record;
   const recordClean = stripActaEntregaPrismaJoins(record);
   const { imagenes: _payloadImagenes, ...recordNoPayloadFiles } = recordClean;
@@ -44,11 +50,23 @@ export function normalizeSyncedActaEntregaRecord(record: any): any {
     Number.isFinite(Number(id)) &&
     Number(id) > 0;
   if (!hasServerId) return recordNoPayloadFiles;
+  const reconciledFirmaEntrega = await reconcileSignatureFieldAfterSync(
+    recordNoPayloadFiles.firma_entrega,
+    previous?.firma_entrega ?? null,
+    'acta_entrega_firma_entrega'
+  );
+  const reconciledFirmaRecibe = await reconcileSignatureFieldAfterSync(
+    recordNoPayloadFiles.firma_recibe,
+    previous?.firma_recibe ?? null,
+    'acta_entrega_firma_recibe'
+  );
   return {
     ...recordNoPayloadFiles,
     id_local: '',
     synced: true,
     images: normalizeActaEntregaImagesForCache(recordNoPayloadFiles.images),
+    firma_entrega: reconciledFirmaEntrega !== undefined ? reconciledFirmaEntrega : recordNoPayloadFiles.firma_entrega,
+    firma_recibe: reconciledFirmaRecibe !== undefined ? reconciledFirmaRecibe : recordNoPayloadFiles.firma_recibe,
   };
 }
 
@@ -92,9 +110,15 @@ export async function mergeActaEntregaServerIntoCache(serverRecords: any[], scop
     if (it.synced === false) return true;
     return false;
   });
+  const previousById = new Map(raw.map((it: any) => [String(it?.id ?? ''), it]));
 
-  const fromServer = serverRecords.map((r) =>
-    normalizeSyncedActaEntregaRecord({ ...r, type: 'acta_entrega_producto', synced: true }),
+  const fromServer = await Promise.all(
+    serverRecords.map((r) =>
+      normalizeSyncedActaEntregaRecord(
+        { ...r, type: 'acta_entrega_producto', synced: true },
+        previousById.get(String(r?.id ?? ''))
+      ),
+    ),
   );
 
   await writeActaEntregaProductosCache([...preserved, ...fromServer]);
@@ -170,30 +194,35 @@ export async function applyActaEntregaCreateSyncFromServer(
   const sid = data.id != null && String(data.id).trim() !== '' ? data.id : undefined;
 
   const cache = await readActaEntregaProductosCache();
-  let matched = false;
-  const next = cache.map((item: any) => {
-    if (item.type !== 'acta_entrega_producto') return item;
+  let matchedItem: any = null;
+  for (const item of cache) {
+    if (item.type !== 'acta_entrega_producto') continue;
     const il = item.id_local != null && String(item.id_local).trim() !== '' ? String(item.id_local) : '';
-    if (il !== aid) return item;
-    matched = true;
-    return normalizeSyncedActaEntregaRecord({
-      ...item,
-      ...data,
-      type: 'acta_entrega_producto',
-      synced: true,
-      id: sid != null ? sid : item.id,
-      id_local: sid != null ? '' : (item.id_local ?? ''),
-      images: normalizeActaEntregaImagesForCache(
-        Array.isArray(data.images) ? data.images : (item.images ?? []),
-      ),
-    });
-  });
-
-  if (matched) {
+    if (il === aid) {
+      matchedItem = item;
+      break;
+    }
+  }
+  if (matchedItem) {
+    const normalized = await normalizeSyncedActaEntregaRecord(
+      {
+        ...matchedItem,
+        ...data,
+        type: 'acta_entrega_producto',
+        synced: true,
+        id: sid != null ? sid : matchedItem.id,
+        id_local: sid != null ? '' : (matchedItem.id_local ?? ''),
+        images: normalizeActaEntregaImagesForCache(
+          Array.isArray(data.images) ? data.images : (matchedItem.images ?? []),
+        ),
+      },
+      matchedItem
+    );
+    const next = cache.map((item: any) => (item === matchedItem ? normalized : item));
     await writeActaEntregaProductosCache(next);
   } else {
     await upsertActaEntregaInCache(
-      normalizeSyncedActaEntregaRecord({
+      await normalizeSyncedActaEntregaRecord({
         ...(fallbackPayload || {}),
         ...data,
         id_local: sid != null ? '' : String(offlineQueueId ?? ''),
@@ -201,7 +230,7 @@ export async function applyActaEntregaCreateSyncFromServer(
         synced: true,
         id: sid != null ? sid : (data.id ?? ''),
         images: normalizeActaEntregaImagesForCache(Array.isArray(data.images) ? data.images : []),
-      }),
+      }, fallbackPayload),
     );
   }
 
@@ -229,21 +258,21 @@ export async function applyActaEntregaUpdateSyncFromServer(
   const dataRaw = resultData && typeof resultData === 'object' ? resultData : {};
   const data = stripActaEntregaPrismaJoins(dataRaw);
   const cache = await readActaEntregaProductosCache();
-  let matched = false;
-  const next = cache.map((item: any) => {
-    if (item.type !== 'acta_entrega_producto') return item;
-    if (String(item.id) !== idStr) return item;
-    matched = true;
-    return normalizeSyncedActaEntregaRecord({
-      ...item,
+  const matchedItem = cache.find((item: any) => item.type === 'acta_entrega_producto' && String(item.id) === idStr);
+  if (!matchedItem) return;
+  const normalized = await normalizeSyncedActaEntregaRecord(
+    {
+      ...matchedItem,
       ...data,
       type: 'acta_entrega_producto',
       images: normalizeActaEntregaImagesForCache(
-        Array.isArray(data.images) ? data.images : (item.images ?? []),
+        Array.isArray(data.images) ? data.images : (matchedItem.images ?? []),
       ),
-    });
-  });
-  if (matched) await writeActaEntregaProductosCache(next);
+    },
+    matchedItem
+  );
+  const next = cache.map((item: any) => (item === matchedItem ? normalized : item));
+  await writeActaEntregaProductosCache(next);
 }
 
 export async function upsertActaEntregaInCache(record: any): Promise<void> {
@@ -266,7 +295,7 @@ export async function upsertActaEntregaInCache(record: any): Promise<void> {
   const raw = { ...record, type: 'acta_entrega_producto' };
   const entry =
     raw.synced === true || (raw.id != null && Number(raw.id) > 0 && !String(raw.id).startsWith('local-'))
-      ? normalizeSyncedActaEntregaRecord(raw)
+      ? await normalizeSyncedActaEntregaRecord(raw, idx >= 0 ? cache[idx] : undefined)
       : raw;
   if (idx >= 0) {
     cache[idx] = { ...cache[idx], ...entry };

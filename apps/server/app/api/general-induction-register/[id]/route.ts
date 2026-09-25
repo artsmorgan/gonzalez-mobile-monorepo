@@ -5,6 +5,12 @@ import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../utils/hydratePreexistentIncludes";
 import { reportError } from "../../../../utils/reportError";
+import {
+  hydratePersonasForRecords,
+  replaceCapacitadoresForRegistro,
+  replaceColaboradoresForRegistro,
+  GENERAL_INDUCTION_SAFE_SELECT,
+} from "../personasHelpers";
 
 const GENERAL_INDUCTION_ESTRUCTURA_INCLUDE = {
   e_estructura_empresa: { select: { nombre: true, codigo: true } },
@@ -111,6 +117,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         table: "c_registro_induccion_general",
         operation: "findUnique",
         where: { id: idNum },
+        select: GENERAL_INDUCTION_SAFE_SELECT,
       },
     });
     if (!existing) {
@@ -161,8 +168,6 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       }
     }
     if (temas_a_tratar !== undefined) updateData.temas_a_tratar = ensureStringJson(temas_a_tratar, "[]");
-    if (colaboradores !== undefined) updateData.colaboradores = ensureStringJson(colaboradores, "[]");
-    if (capacitadores !== undefined) updateData.capacitadores = ensureStringJson(capacitadores, "[]");
     if (firma_responsable !== undefined) updateData.firma_responsable = String(firma_responsable);
 
     // Registrar cambios (solo campos actualizados, incluyendo firma_responsable)
@@ -198,11 +203,19 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         operation: "update",
         where: { id: idNum },
         data: updateData,
+        select: GENERAL_INDUCTION_SAFE_SELECT,
       },
     });
     const { preexistentSpecs: updatePreexistentSpecs } = splitIncludeByTableGroup(GENERAL_INDUCTION_ESTRUCTURA_INCLUDE);
     await hydratePreexistentRelations(updated, updatePreexistentSpecs);
     const updatedObj = updated as any;
+
+    if (colaboradores !== undefined) {
+      await replaceColaboradoresForRegistro(req, idNum, colaboradores);
+    }
+    if (capacitadores !== undefined) {
+      await replaceCapacitadoresForRegistro(req, idNum, capacitadores);
+    }
 
     // Guardar nuevas imágenes (si vienen)
     let imagesParsed: GeneralInductionImageInput[] = [];
@@ -246,11 +259,12 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         table: "c_registro_induccion_general",
         operation: "findUnique",
         where: { id: idNum },
-        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
+        select: { ...GENERAL_INDUCTION_SAFE_SELECT, ...(sameGroupInclude || {}) },
       },
     });
     await hydratePreexistentRelations(fullRecord, preexistentSpecs);
-    const fullRecordObj = fullRecord as any;
+    const [fullRecordHydrated] = await hydratePersonasForRecords(req, [fullRecord as any]);
+    const fullRecordObj = fullRecordHydrated as any;
     const baseUrl = req.nextUrl.origin;
 
     if (cambiosArr.length > 0) {
@@ -320,6 +334,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         table: "c_registro_induccion_general",
         operation: "findUnique",
         where: { id: idNum },
+        select: GENERAL_INDUCTION_SAFE_SELECT,
       },
     });
     if (!existing) {
@@ -351,8 +366,6 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
               division: existingObj.division,
               fecha: fechaValue,
               temas_a_tratar: existingObj.temas_a_tratar,
-              colaboradores: existingObj.colaboradores,
-              capacitadores: existingObj.capacitadores,
             },
             after: null,
           }]),
@@ -369,6 +382,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         table: "c_registro_induccion_general",
         operation: "delete",
         where: { id: idNum },
+        select: GENERAL_INDUCTION_SAFE_SELECT,
       },
     });
 

@@ -20,6 +20,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
+import RecordAudioButton from '@/components/RecordAudioButton';
+import AudioPreviewModal from '@/components/AudioPreviewModal';
 import { useNavigation, useFocusEffect, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
@@ -84,6 +86,7 @@ interface Sucursal {
 interface Puesto {
   id: number;
   nombre: string;
+  resultado?: string | null;
 }
 
 interface Empleado {
@@ -91,6 +94,7 @@ interface Empleado {
   nombre: string;
   cedula: string;
   fecha_contratacion: string;
+  resultado?: string | null;
 }
 
 interface EmpleadoList {
@@ -140,7 +144,6 @@ interface Training {
   titulo: string;
   descripcion: string;
   tipo: string;
-  resultado: string | null;
   observaciones: string;
   responsable: Responsable;
   firma_responsable: string;
@@ -153,10 +156,12 @@ interface Training {
     id: number;
     nombre: string;
     cedula: string;
+    resultado?: string | null;
   }>;
   puestos: Array<{
     id: number;
     nombre: string;
+    resultado?: string | null;
   }>;
   id_local: string;
   /** Sucursal explícita en caché / offline (p. ej. al filtrar contra el corpo del filtro) */
@@ -468,6 +473,7 @@ export default function TrainingsScreen() {
   const [puestoSearchModalVisible, setPuestoSearchModalVisible] = useState(false);
   /** Nuevos archivos: persistidos con `fileStorage` (mismo criterio que acta-entrega). */
   const [pendingTrainingFiles, setPendingTrainingFiles] = useState<TrainingFileQueueMeta[]>([]);
+  const [audioPreview, setAudioPreview] = useState<{ uri: string; label: string } | null>(null);
   const [editingTraining, setEditingTraining] = useState<Training | null>(null);
   const [decodedFirmas, setDecodedFirmas] = useState<Map<number, FirmaData>>(new Map());
 
@@ -479,7 +485,6 @@ export default function TrainingsScreen() {
   const cedulaResponsableRef = useRef('');
 
   // Form dropdowns
-  const [selectedResultado, setSelectedResultado] = useState<string>('');
 
   // Location state
 
@@ -963,7 +968,6 @@ export default function TrainingsScreen() {
     setSelectedTipo('Presencial');
     setSelectedEmpleados([]);
     setSelectedPuestos([]);
-    setSelectedResultado('');
     setFirmaResponsable(null);
     setPendingTrainingFiles([]);
 
@@ -993,7 +997,6 @@ export default function TrainingsScreen() {
     setSelectedTipo('Presencial');
     setSelectedEmpleados([]);
     setSelectedPuestos([]);
-    setSelectedResultado('');
     setFirmaResponsable(null);
     setPendingTrainingFiles([]);
   };
@@ -1004,6 +1007,18 @@ export default function TrainingsScreen() {
 
   const removePuesto = (puestoId: number) => {
     setSelectedPuestos(selectedPuestos.filter(p => p.id !== puestoId));
+  };
+
+  const setEmpleadoResultado = (empleadoId: number, resultado: string) => {
+    setSelectedEmpleados((prev) =>
+      prev.map((e) => (e.id === empleadoId ? { ...e, resultado: resultado || null } : e))
+    );
+  };
+
+  const setPuestoResultado = (puestoId: number, resultado: string) => {
+    setSelectedPuestos((prev) =>
+      prev.map((p) => (p.id === puestoId ? { ...p, resultado: resultado || null } : p))
+    );
   };
 
   const openCamera = async () => {
@@ -1166,6 +1181,27 @@ export default function TrainingsScreen() {
     } catch (e) {
       console.error('pickTrainingFileByType', kind, e);
       Alert.alert('Error', 'No se pudo adjuntar el archivo. Intenta de nuevo.');
+    }
+  };
+
+  const handleRecordedTrainingAudio = async (uri: string) => {
+    try {
+      const on = `grabacion_${Date.now()}.m4a`;
+      const fileName = await saveFile({
+        uri,
+        originalName: on,
+        extension: 'm4a',
+        type: 'audio',
+        prefix: 'capacitacion',
+      });
+      const id = Math.random().toString(36).substring(2, 12);
+      setPendingTrainingFiles((prev) => [
+        ...prev,
+        { id, localFileName: fileName, extension: 'm4a', originalName: on },
+      ]);
+    } catch (e) {
+      console.error('handleRecordedTrainingAudio', e);
+      Alert.alert('Error', 'No se pudo guardar la grabación. Intenta de nuevo.');
     }
   };
 
@@ -1386,8 +1422,10 @@ export default function TrainingsScreen() {
     const matchesDescripcion = !filterDescripcion ||
       training.descripcion.toLowerCase().includes(filterDescripcion.toLowerCase());
 
-    const matchesResultado = !filterResultado ||
-      (training.resultado && training.resultado.toLowerCase().includes(filterResultado.toLowerCase()));
+    const resultadoNeedle = filterResultado.trim().toLowerCase();
+    const matchesResultado = !resultadoNeedle ||
+      (training.empleados?.some((e) => e.resultado?.toLowerCase().includes(resultadoNeedle)) ?? false) ||
+      (training.puestos?.some((p) => p.resultado?.toLowerCase().includes(resultadoNeedle)) ?? false);
 
     const matchesObservaciones = !filterObservaciones ||
       (training.observaciones && training.observaciones.toLowerCase().includes(filterObservaciones.toLowerCase()));
@@ -1412,8 +1450,8 @@ export default function TrainingsScreen() {
       Alert.alert('Error', 'Debes completar la jerarquía Empresa → Sucursal → Puesto');
       return false;
     }
-    if (selectedPuestos.length === 0) {
-      Alert.alert('Error', 'Debes seleccionar al menos un puesto');
+    if (selectedPuestos.length === 0 && selectedEmpleados.length === 0) {
+      Alert.alert('Error', 'Debes seleccionar al menos un puesto o un empleado');
       return false;
     }
     if (!tituloRef.current.trim()) {
@@ -1474,16 +1512,16 @@ export default function TrainingsScreen() {
     cedulaResponsableRef.current = t.responsable.cedula;
     setFechaCapacitacion(t.fecha.split('T')[0] || t.fecha);
     setSelectedTipo((t.tipo as 'Presencial' | 'Virtual') || 'Presencial');
-    setSelectedResultado(t.resultado && t.resultado !== 'No disponible' ? t.resultado : '');
     setSelectedEmpleados(
       t.empleados.map((e) => ({
         id: e.id,
         nombre: e.nombre,
         cedula: e.cedula,
         fecha_contratacion: '',
+        resultado: e.resultado ?? null,
       }))
     );
-    setSelectedPuestos(t.puestos.map((p) => ({ id: p.id, nombre: p.nombre })));
+    setSelectedPuestos(t.puestos.map((p) => ({ id: p.id, nombre: p.nombre, resultado: p.resultado ?? null })));
     setPendingTrainingFiles([]);
     const firmaFromList = decodedFirmas.get(t.id);
     const firmaParsed = firmaFromList ?? parseFirmaBase64ToFirmaData(t.firma_responsable);
@@ -1558,14 +1596,13 @@ export default function TrainingsScreen() {
         titulo: tituloRef.current,
         descripcion: descripcionRef.current,
         tipo: selectedTipo,
-        resultado: selectedResultado || null,
         observaciones: observacionesRef.current.trim() !== '' ? observacionesRef.current.trim() : '-',
         nombre_responsable: nombreResponsableRef.current,
         cedula_responsable: cedulaResponsableRef.current,
         firma_responsable: signatureHash,
         fecha: fechaCapacitacion,
-        empleados: selectedEmpleados.map((e) => e.id),
-        puestos: selectedPuestos.map((p) => p.id),
+        empleados: selectedEmpleados.map((e) => ({ id: e.id, resultado: e.resultado ?? null })),
+        puestos: selectedPuestos.map((p) => ({ id: p.id, resultado: p.resultado ?? null })),
       };
 
       const requestData = {
@@ -1643,13 +1680,13 @@ export default function TrainingsScreen() {
                     division_id: formDivisionId!,
                     contrato_id: formContratoId!,
                     fecha: fechaCapacitacion,
-                    resultado: selectedResultado || null,
                     empleados: selectedEmpleados.map((e) => ({
                       id: e.id,
                       nombre: e.nombre,
                       cedula: e.cedula,
+                      resultado: e.resultado ?? null,
                     })),
-                    puestos: selectedPuestos.map((p) => ({ id: p.id, nombre: p.nombre })),
+                    puestos: selectedPuestos.map((p) => ({ id: p.id, nombre: p.nombre, resultado: p.resultado ?? null })),
                   }
                 : row
             );
@@ -1664,7 +1701,6 @@ export default function TrainingsScreen() {
                     descripcion: descripcionRef.current,
                     observaciones: requestData.observaciones,
                     tipo: selectedTipo,
-                    resultado: selectedResultado || null,
                     division_id: formDivisionId!,
                     contrato_id: formContratoId!,
                     puesto_id: formPuestoJerarquiaId!,
@@ -1672,8 +1708,9 @@ export default function TrainingsScreen() {
                       id: e.id,
                       nombre: e.nombre,
                       cedula: e.cedula,
+                      resultado: e.resultado ?? null,
                     })),
-                    puestos: selectedPuestos.map((p) => ({ id: p.id, nombre: p.nombre })),
+                    puestos: selectedPuestos.map((p) => ({ id: p.id, nombre: p.nombre, resultado: p.resultado ?? null })),
                   }
                 : row
             )
@@ -1742,7 +1779,6 @@ export default function TrainingsScreen() {
           titulo: tituloRef.current,
           descripcion: descripcionRef.current,
           tipo: selectedTipo,
-          resultado: selectedResultado || null,
           observaciones: observacionesRef.current.trim() !== '' ? observacionesRef.current.trim() : '-',
           responsable: {
             nombre: nombreResponsableRef.current,
@@ -1756,8 +1792,8 @@ export default function TrainingsScreen() {
           base64_file: '',
           archivos: [],
           offline_pending_files: trainingFilesMetaForQueue(pendingTrainingFiles),
-          empleados: selectedEmpleados.map((e) => ({ id: e.id, nombre: e.nombre, cedula: e.cedula })),
-          puestos: selectedPuestos.map((p) => ({ id: p.id, nombre: p.nombre })),
+          empleados: selectedEmpleados.map((e) => ({ id: e.id, nombre: e.nombre, cedula: e.cedula, resultado: e.resultado ?? null })),
+          puestos: selectedPuestos.map((p) => ({ id: p.id, nombre: p.nombre, resultado: p.resultado ?? null })),
           corpo_id: formCorpoId!,
           id_local: localId,
         };
@@ -2373,13 +2409,27 @@ export default function TrainingsScreen() {
               {selectedEmpleados.length > 0 && (
                 <ThemedView style={styles.selectedList}>
                   {selectedEmpleados.map((empleado) => (
-                    <ThemedView key={empleado.id} style={styles.selectedItem}>
-                      <ThemedText style={styles.selectedItemText}>
-                        {empleado.nombre} - {empleado.cedula}
-                      </ThemedText>
-                      <TouchableOpacity onPress={() => removeEmpleado(empleado.id)}>
-                        <Ionicons name="close-circle" size={24} color="#FF3B30" />
-                      </TouchableOpacity>
+                    <ThemedView key={empleado.id} style={styles.selectedItemColumn}>
+                      <ThemedView style={styles.selectedItem}>
+                        <ThemedText style={styles.selectedItemText}>
+                          {empleado.nombre} - {empleado.cedula}
+                        </ThemedText>
+                        <TouchableOpacity onPress={() => removeEmpleado(empleado.id)}>
+                          <Ionicons name="close-circle" size={24} color="#FF3B30" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                      <ThemedView style={styles.pickerContainer}>
+                        <Picker
+                          selectedValue={empleado.resultado || ''}
+                          onValueChange={(v) => setEmpleadoResultado(empleado.id, String(v))}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Resultado (opcional)" value="" color="#000000" />
+                          <Picker.Item label="Bueno" value="Bueno" color="#000000" />
+                          <Picker.Item label="Regular" value="Regular" color="#000000" />
+                          <Picker.Item label="Malo" value="Malo" color="#000000" />
+                        </Picker>
+                      </ThemedView>
                     </ThemedView>
                   ))}
                 </ThemedView>
@@ -2401,11 +2451,25 @@ export default function TrainingsScreen() {
               {selectedPuestos.length > 0 && (
                 <ThemedView style={styles.selectedList}>
                   {selectedPuestos.map((puesto) => (
-                    <ThemedView key={puesto.id} style={styles.selectedItem}>
-                      <ThemedText style={styles.selectedItemText}>{puesto.nombre}</ThemedText>
-                      <TouchableOpacity onPress={() => removePuesto(puesto.id)}>
-                        <Ionicons name="close-circle" size={24} color="#FF3B30" />
-                      </TouchableOpacity>
+                    <ThemedView key={puesto.id} style={styles.selectedItemColumn}>
+                      <ThemedView style={styles.selectedItem}>
+                        <ThemedText style={styles.selectedItemText}>{puesto.nombre}</ThemedText>
+                        <TouchableOpacity onPress={() => removePuesto(puesto.id)}>
+                          <Ionicons name="close-circle" size={24} color="#FF3B30" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                      <ThemedView style={styles.pickerContainer}>
+                        <Picker
+                          selectedValue={puesto.resultado || ''}
+                          onValueChange={(v) => setPuestoResultado(puesto.id, String(v))}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Resultado (opcional)" value="" color="#000000" />
+                          <Picker.Item label="Bueno" value="Bueno" color="#000000" />
+                          <Picker.Item label="Regular" value="Regular" color="#000000" />
+                          <Picker.Item label="Malo" value="Malo" color="#000000" />
+                        </Picker>
+                      </ThemedView>
                     </ThemedView>
                   ))}
                 </ThemedView>
@@ -2426,27 +2490,6 @@ export default function TrainingsScreen() {
               </TouchableOpacity>
             </ThemedView>
 
-            {/* Resultado */}
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Resultado (opcional):</ThemedText>
-              <ThemedView style={styles.radioGroup}>
-                {['Bueno', 'Regular', 'Malo'].map((option) => (
-                  <TouchableOpacity
-                    key={option}
-                    style={styles.radioOption}
-                    onPress={() => setSelectedResultado(selectedResultado === option ? '' : option)}
-                  >
-                    <ThemedView style={[
-                      styles.radioCircle,
-                      selectedResultado === option && styles.radioCircleSelected
-                    ]}>
-                      {selectedResultado === option && <ThemedView style={styles.radioInner} />}
-                    </ThemedView>
-                    <ThemedText style={styles.radioLabel}>{option}</ThemedText>
-                  </TouchableOpacity>
-                ))}
-              </ThemedView>
-            </ThemedView>
 
             {/* Archivos (opcional) — mismo criterio visual que JobManualsScreen: botón + lista por tipo */}
             <ThemedView style={styles.formGroup}>
@@ -2532,19 +2575,26 @@ export default function TrainingsScreen() {
 
             <ThemedView style={styles.formGroup}>
               <ThemedText style={styles.formLabel}>Audio (opcional):</ThemedText>
-              <TouchableOpacity
-                style={styles.addFileButton}
-                onPress={() => void pickTrainingFileByType('audio')}
-              >
-                <Ionicons name="mic-outline" size={18} color="#007AFF" />
-                <ThemedText style={styles.addFileButtonText}>Añadir audio</ThemedText>
-              </TouchableOpacity>
+              <ThemedView style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                <TouchableOpacity
+                  style={styles.addFileButton}
+                  onPress={() => void pickTrainingFileByType('audio')}
+                >
+                  <Ionicons name="mic-outline" size={18} color="#007AFF" />
+                  <ThemedText style={styles.addFileButtonText}>Añadir audio</ThemedText>
+                </TouchableOpacity>
+                <RecordAudioButton onRecorded={handleRecordedTrainingAudio} label="Grabar audio" />
+              </ThemedView>
               {pendingTrainingFiles.filter((f) => trainingPendingFileIsKind(f, 'audio')).length > 0 && (
                 <ThemedView style={styles.filesList}>
                   {pendingTrainingFiles
                     .filter((f) => trainingPendingFileIsKind(f, 'audio'))
                     .map((pf) => (
-                      <ThemedView key={pf.id} style={styles.fileRow}>
+                      <TouchableOpacity
+                        key={pf.id}
+                        style={styles.fileRow}
+                        onPress={() => setAudioPreview({ uri: getLocalFileDisplayUri(pf.localFileName), label: pf.originalName || pf.localFileName })}
+                      >
                         <Ionicons name="musical-notes-outline" size={16} color="#007AFF" />
                         <ThemedText numberOfLines={1} style={styles.fileName}>
                           {pf.originalName || pf.localFileName}
@@ -2556,7 +2606,7 @@ export default function TrainingsScreen() {
                         >
                           <Ionicons name="trash" size={16} color="#FF3B30" />
                         </TouchableOpacity>
-                      </ThemedView>
+                      </TouchableOpacity>
                     ))}
                 </ThemedView>
               )}
@@ -2760,12 +2810,6 @@ export default function TrainingsScreen() {
                       <ThemedText style={styles.trainingLabel}>Tipo: </ThemedText>
                       <ThemedText style={styles.trainingValue}>{training.tipo}</ThemedText>
                     </ThemedText>
-                    {training.resultado && (
-                      <ThemedText style={styles.trainingDetail}>
-                        <ThemedText style={styles.trainingLabel}>Resultado: </ThemedText>
-                        <ThemedText style={styles.trainingValue}>{training.resultado}</ThemedText>
-                      </ThemedText>
-                    )}
 
                     {/* Collapsable Button */}
                     <TouchableOpacity
@@ -2801,12 +2845,6 @@ export default function TrainingsScreen() {
                           <ThemedText style={styles.trainingLabel}>Descripción: </ThemedText>
                           <ThemedText style={styles.trainingValue}>{training.descripcion}</ThemedText>
                         </ThemedText>
-                        {training.resultado && (
-                          <ThemedText style={styles.trainingDetail}>
-                            <ThemedText style={styles.trainingLabel}>Resultado: </ThemedText>
-                            <ThemedText style={styles.trainingValue}>{training.resultado}</ThemedText>
-                          </ThemedText>
-                        )}
                         <ThemedText style={styles.trainingDetail}>
                           <ThemedText style={styles.trainingLabel}>Observaciones: </ThemedText>
                           <ThemedText style={styles.trainingValue}>{training.observaciones}</ThemedText>
@@ -2839,7 +2877,7 @@ export default function TrainingsScreen() {
                           <ThemedText style={styles.detailSectionTitle}>Empleados:</ThemedText>
                           {training.empleados.map((emp) => (
                             <ThemedText key={emp.id} style={styles.detailItem}>
-                              {emp.nombre} - {emp.cedula}
+                              {emp.nombre} - {emp.cedula}{emp.resultado ? ` (Resultado: ${emp.resultado})` : ''}
                             </ThemedText>
                           ))}
                         </ThemedView>
@@ -2847,7 +2885,7 @@ export default function TrainingsScreen() {
                           <ThemedText style={styles.detailSectionTitle}>Puestos:</ThemedText>
                           {training.puestos.map((puesto) => (
                             <ThemedText key={puesto.id} style={styles.detailItem}>
-                              {puesto.nombre}
+                              {puesto.nombre}{puesto.resultado ? ` (Resultado: ${puesto.resultado})` : ''}
                             </ThemedText>
                           ))}
                         </ThemedView>
@@ -3013,6 +3051,13 @@ export default function TrainingsScreen() {
           onChange={handleFilterFechaChange}
         />
       )}
+
+      <AudioPreviewModal
+        visible={!!audioPreview}
+        onClose={() => setAudioPreview(null)}
+        sourceUri={audioPreview?.uri}
+        label={audioPreview?.label}
+      />
 
       <AppFooter />
       <SlideMenu
@@ -3649,6 +3694,9 @@ const styles = StyleSheet.create({
     marginTop: 12,
     gap: 8,
     backgroundColor: '#fff',
+  },
+  selectedItemColumn: {
+    gap: 6,
   },
   selectedItem: {
     flexDirection: 'row',

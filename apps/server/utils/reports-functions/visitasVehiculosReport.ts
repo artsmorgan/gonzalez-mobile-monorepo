@@ -321,6 +321,11 @@ export async function buildVisitasVehiculosExcelConsolidado(
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Visitas vehículos");
     const wsCed = wb.addWorksheet("Cédulas");
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente.
+    for (const sheet of [wsMain, wsCed]) {
+        sheet.views = [{ showGridLines: false }];
+    }
     const anchorById = new Map<number, number>();
 
     const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
@@ -426,7 +431,6 @@ export async function buildVisitasVehiculosExcelConsolidado(
         cell.border = BORDER;
         cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
     }
-    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.autoFilter = {
         from: { row: 12, column: 2 },
         to: { row: Math.max(12, rows.length + 12), column: mainHeaders.length + 1 },

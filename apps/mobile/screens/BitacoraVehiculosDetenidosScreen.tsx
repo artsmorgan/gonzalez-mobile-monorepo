@@ -62,6 +62,7 @@ import {
   removeBitacoraDetenidoRowFromMainStructure,
   setBitacoraOnUsoInMainStructureCache,
   upsertBitacoraDetenidoRowInMainStructure,
+  localizeBitacoraInformacionGeneralFirmas,
 } from '@/hooks/bitacoraMainStructureCache';
 import {
   findHierarchyByCorpoIn,
@@ -81,7 +82,7 @@ import {
   saveCameraPhotoToBitacoraRevFile,
   type BitacoraRevisionEntry,
 } from '@/hooks/bitacoraRevisionMediaSync';
-import { deleteFile } from '@/hooks/fileStorage';
+import { deleteFile, hydrateSignatureRef, resolveStoredSignatureDisplayUri } from '@/hooks/fileStorage';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'BitacoraVehiculosDetenidos'>;
 
@@ -637,6 +638,8 @@ const buildRevisionConfig = (tipo: TipoBitacora): RevisionEntry[] => {
   return cfg;
 };
 
+const FIRMA_MANUAL_OFFLINE_MESSAGE = 'Para visualizar las firmas manuales, conéctate a internet y actualiza la lista';
+
 export default function BitacoraVehiculosDetenidosScreen() {
   const navigation = useNavigation<Nav>();
   const route = useRoute<RouteProp<RootStackParamList, 'BitacoraVehiculosDetenidos'>>();
@@ -755,6 +758,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const [vehMarchamo, setVehMarchamo] = useState<boolean | null>(null);
 
   const [generalValues, setGeneralValues] = useState<Record<string, any>>({});
+  const [generalFirmasUnavailableOffline, setGeneralFirmasUnavailableOffline] = useState<Record<string, boolean>>({});
   const [revisionValues, setRevisionValues] = useState<Record<string, any>>({});
   const [revisionObs, setRevisionObs] = useState<Record<string, string>>({});
   const [revisionImages, setRevisionImages] = useState<Record<string, string[]>>({});
@@ -2259,6 +2263,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
     baseGeneral.fecha = dateToLocalString(now);
     baseGeneral.hora = timeToHHmm(now);
     setGeneralValues(baseGeneral);
+    setGeneralFirmasUnavailableOffline({});
 
     const baseRev: Record<string, any> = {};
     const baseObs: Record<string, string> = {};
@@ -2337,8 +2342,31 @@ export default function BitacoraVehiculosDetenidosScreen() {
     const movs = safeParse<any[]>(item.movimientos_vehiculos, []);
 
     const gMap: Record<string, any> = {};
-    for (const f of infoG) gMap[f.key] = f.value;
+    const firmaUnavailableMap: Record<string, boolean> = {};
+    let isConnectedForFirmas: boolean | null = null;
+    for (const f of infoG) {
+      if (f.kind === 'signature') {
+        if (f.value) {
+          // `value` puede venir del cache como referencia local a expo-files: se hidrata a un data
+          // URI real para poder mostrarla y, si se guarda de nuevo, reenviarla tal cual.
+          gMap[f.key] = (await hydrateSignatureRef(String(f.value))) || f.value;
+        } else {
+          gMap[f.key] = f.value;
+          // Una bitácora ya registrada (con id de servidor) sin firma disponible localmente
+          // significa que la jerarquía no la trajo (ya no viaja ahí); si además no hay conexión
+          // para consultarla en el endpoint dedicado, se avisa en vez de invitar a dibujar una
+          // firma nueva.
+          if (Number(item.id) > 0) {
+            if (isConnectedForFirmas === null) isConnectedForFirmas = await getConnectionStatus();
+            firmaUnavailableMap[f.key] = !isConnectedForFirmas;
+          }
+        }
+      } else {
+        gMap[f.key] = f.value;
+      }
+    }
     setGeneralValues(gMap);
+    setGeneralFirmasUnavailableOffline(firmaUnavailableMap);
 
     const rMap: Record<string, any> = {};
     const oMap: Record<string, string> = {};
@@ -2588,6 +2616,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const onSignatureOK = (signature: string) => {
     if (!signatureTargetKey) return;
     setGeneralValues((prev) => ({ ...prev, [signatureTargetKey]: signature }));
+    setGeneralFirmasUnavailableOffline((prev) => ({ ...prev, [signatureTargetKey]: false }));
     setSignatureModalVisible(false);
     setSignatureTargetKey(null);
   };
@@ -3008,6 +3037,15 @@ export default function BitacoraVehiculosDetenidosScreen() {
       const requestData = await buildPayload();
       const isConnected = await getConnectionStatus();
 
+      // Las firmas de `informacion_general` se guardan en expo-files; solo se conserva la
+      // referencia en cache/actions (nunca base64). `requestData.informacion_general` (con el
+      // base64 real) se sigue usando tal cual para el envío directo a la API online.
+      const localizedInformacionGeneral = await localizeBitacoraInformacionGeneralFirmas(
+        requestData.informacion_general,
+        editing?.informacion_general ?? null,
+        'bitacora_general_firma'
+      );
+
       const sidForPayload = numOrNull(requestData.sucursal_id) ?? marcaCorpoId ?? formSucursalId;
       const isUnsyncedDraft = !!(editing?.id === 0 && editing?.id_local);
 
@@ -3033,7 +3071,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
         // Edición de un CREATE pendiente: actualizar cola, caché y árbol principal + fragmentos (sin POST duplicado)
         if (isUnsyncedDraft && editing.id_local) {
           const id_local = editing.id_local;
-          await upsertOfflineBitacoraCreateInEvaluations(id_local, requestData);
+          await upsertOfflineBitacoraCreateInEvaluations(id_local, { ...requestData, informacion_general: localizedInformacionGeneral });
           const foundPrev = await findBitacoraDetenidoInMainStructureByLocalKey(id_local);
           const prevRow = foundPrev?.row;
           const oldLink = bitacoraLinkFromCacheItem(prevRow);
@@ -3064,7 +3102,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
             vehiculo_id_local: requestData.vehiculo_id_local,
             uso_id_local: requestData.uso_id_local,
             tipo: tipoRef.current,
-            informacion_general: requestData.informacion_general,
+            informacion_general: localizedInformacionGeneral,
             informacion_revision: requestData.informacion_revision,
             movimientos_vehiculos: requestData.movimientos_vehiculos,
             observaciones: requestData.observaciones,
@@ -3138,7 +3176,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
                 vehiculo_id_local: requestData.vehiculo_id_local,
                 uso_id_local: requestData.uso_id_local,
                 tipo: tipoRef.current,
-                informacion_general: requestData.informacion_general,
+                informacion_general: localizedInformacionGeneral,
                 informacion_revision: requestData.informacion_revision,
                 movimientos_vehiculos: requestData.movimientos_vehiculos,
                 observaciones: requestData.observaciones,
@@ -3166,7 +3204,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
           editing?.id_local && editing.id_local.length > 0
             ? editing.id_local
             : `local-bitacora-${Date.now()}-${generateRandomId()}`;
-        await upsertOfflineBitacoraCreateInEvaluations(id_local, requestData);
+        await upsertOfflineBitacoraCreateInEvaluations(id_local, { ...requestData, informacion_general: localizedInformacionGeneral });
 
         const createdAt = new Date(horaAccion).toISOString();
 
@@ -3184,7 +3222,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
           vehiculo_id_local: requestData.vehiculo_id_local,
           uso_id_local: requestData.uso_id_local,
           tipo: tipoRef.current,
-          informacion_general: requestData.informacion_general,
+          informacion_general: localizedInformacionGeneral,
           informacion_revision: requestData.informacion_revision,
           movimientos_vehiculos: requestData.movimientos_vehiculos,
           observaciones: requestData.observaciones,
@@ -3238,7 +3276,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
         ...requestData,
         id: editing.id,
         tipo: requestData.tipo ?? editing.tipo,
-        informacion_general: requestData.informacion_general,
+        informacion_general: localizedInformacionGeneral,
         informacion_revision: requestData.informacion_revision,
         movimientos_vehiculos: requestData.movimientos_vehiculos,
         observaciones: requestData.observaciones,
@@ -3304,7 +3342,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
         id: editing.id,
         action: 'update',
         type: BITACORA_VEHICULO_DETENIDO_EVAL_TYPE,
-        payload: requestData,
+        payload: { ...requestData, informacion_general: localizedInformacionGeneral },
         synced: false,
       });
       await AsyncStorage.setItem('evaluations_actions', JSON.stringify(nextEvUp));
@@ -4149,23 +4187,32 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
                 if (f.kind === 'signature') {
                   const sig = formatSignatureForDisplay(generalValues[f.key]);
+                  const firmaUnavailableOffline = !sig && !!generalFirmasUnavailableOffline[f.key];
                   return (
                     <ThemedView key={f.key} style={styles.row}>
                       <ThemedText style={styles.label}>{f.label}{f.required ? ' *' : ''}</ThemedText>
                       {!sig ? (
-                        <TouchableOpacity
-                          style={styles.drawSignatureButton}
-                          onPress={() => openSignatureModal(f.key)}
-                        >
-                          <Ionicons name="create-outline" size={24} color="#007AFF" />
-                          <ThemedText style={styles.drawSignatureButtonText}>Toca para dibujar la firma</ThemedText>
-                        </TouchableOpacity>
+                        <>
+                          {firmaUnavailableOffline ? (
+                            <ThemedText style={styles.drawSignatureButtonText}>{FIRMA_MANUAL_OFFLINE_MESSAGE}</ThemedText>
+                          ) : null}
+                          <TouchableOpacity
+                            style={styles.drawSignatureButton}
+                            onPress={() => openSignatureModal(f.key)}
+                          >
+                            <Ionicons name="create-outline" size={24} color="#007AFF" />
+                            <ThemedText style={styles.drawSignatureButtonText}>Toca para dibujar la firma</ThemedText>
+                          </TouchableOpacity>
+                        </>
                       ) : (
                         <ThemedView style={styles.drawSignaturePreviewContainer}>
                           <Image source={{ uri: sig }} style={styles.drawSignaturePreview} />
                           <TouchableOpacity
                             style={styles.drawSignatureClearButton}
-                            onPress={() => setGeneralValues((prev) => ({ ...prev, [f.key]: '' }))}
+                            onPress={() => {
+                              setGeneralValues((prev) => ({ ...prev, [f.key]: '' }));
+                              setGeneralFirmasUnavailableOffline((prev) => ({ ...prev, [f.key]: false }));
+                            }}
                           >
                             <Ionicons name="trash" size={16} color="#FF3B30" />
                             <ThemedText style={styles.drawSignatureClearButtonText}>Eliminar Firma</ThemedText>

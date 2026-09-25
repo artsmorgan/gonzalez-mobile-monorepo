@@ -24,6 +24,7 @@ import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import RecordAudioButton from '@/components/RecordAudioButton';
 import { useAuth } from '@/contexts/AuthContext';
 import { useFocusEffect, useNavigation }  from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -353,6 +354,52 @@ export default function TrasladoPlazasScreen() {
         }
     };
 
+    const handleRecordedAudio = async (accionId: number | string, uri: string) => {
+        try {
+            const response = await fetch(uri);
+            const blob = await response.blob();
+
+            const base64 = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    const r = reader.result;
+                    if (typeof r === 'string') {
+                        const parts = r.split(',');
+                        resolve(parts.length > 1 ? parts[1] : parts[0]);
+                    } else reject(new Error('No se pudo leer el archivo'));
+                };
+                reader.onerror = () => reject(reader.error ?? new Error('Error al leer el archivo'));
+                reader.readAsDataURL(blob);
+            });
+
+            const localFileId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+            const name = `grabacion_${Date.now()}.m4a`;
+            const localFileName = await saveFile({
+                uri,
+                originalName: name,
+                extension: 'm4a',
+                type: 'audio',
+                prefix: 'traslado_plaza',
+            });
+            const localFile: LocalFile = {
+                id: localFileId,
+                accion_id: accionId,
+                type: 'audio',
+                name,
+                extension: 'm4a',
+                base64,
+                mimeType: 'audio/m4a',
+                localFileName,
+            };
+
+            // Mostrar vista previa antes de subir
+            setPendingFile({ accionId, file: localFile });
+        } catch (e: any) {
+            console.error('Error saving recorded audio:', e);
+            Alert.alert('Error', 'No se pudo procesar la grabación.');
+        }
+    };
+
     const confirmUpload = async () => {
         if (!pendingFile) return;
         const { accionId, file } = pendingFile;
@@ -586,32 +633,46 @@ export default function TrasladoPlazasScreen() {
         );
     };
 
+    const formatAudioTime = (seconds: number): string => {
+        if (!isFinite(seconds) || seconds < 0) seconds = 0;
+        const total = Math.floor(seconds);
+        const minutes = Math.floor(total / 60);
+        const secs = total % 60;
+        return `${minutes}:${secs.toString().padStart(2, '0')}`;
+    };
+
     const AudioPlayer = ({ sourceUrl }: { sourceUrl: string }) => {
         const player = useAudioPlayer(sourceUrl);
         const status = useAudioPlayerStatus(player);
-        const [isPlaying, setIsPlaying] = useState(false);
-
-        useEffect(() => {
-            setIsPlaying(status.playing);
-        }, [status.playing]);
+        const isPlaying = status.playing;
 
         return (
             <ThemedView style={styles.audioPlayer}>
-                <TouchableOpacity
-                    onPress={() => {
-                        if (isPlaying) {
-                            player.pause();
-                        } else {
-                            player.play();
-                        }
-                    }}
-                    style={styles.playButton}
-                >
-                    <Ionicons name={isPlaying ? 'pause' : 'play'} size={24} color="#007AFF" />
-                </TouchableOpacity>
                 <ThemedText style={styles.audioStatus}>
-                    {isPlaying ? 'Reproduciendo...' : status.isLoaded ? 'Listo' : 'Cargando...'}
+                    {formatAudioTime(status.currentTime || 0)} / {formatAudioTime(status.duration || 0)}
                 </ThemedText>
+                <ThemedView style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <TouchableOpacity
+                        onPress={() => player.pause()}
+                        style={styles.playButton}
+                        disabled={!isPlaying}
+                    >
+                        <Ionicons name="pause" size={22} color={isPlaying ? '#007AFF' : '#B0B0B0'} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        onPress={() => player.play()}
+                        style={styles.playButton}
+                        disabled={isPlaying}
+                    >
+                        <Ionicons name="play" size={22} color={!isPlaying ? '#007AFF' : '#B0B0B0'} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        onPress={() => { player.seekTo(0); player.play(); }}
+                        style={styles.playButton}
+                    >
+                        <Ionicons name="refresh" size={22} color="#007AFF" />
+                    </TouchableOpacity>
+                </ThemedView>
             </ThemedView>
         );
     };
@@ -763,6 +824,12 @@ export default function TrasladoPlazasScreen() {
                                                                     <Ionicons name="mic-outline" size={18} color="#007AFF" />
                                                                     <ThemedText style={styles.addFileButtonText}>Audio</ThemedText>
                                                                 </TouchableOpacity>
+                                                                <RecordAudioButton
+                                                                    onRecorded={(uri) => handleRecordedAudio(item.id, uri)}
+                                                                    label="Grabar"
+                                                                    disabled={isUploadingThis}
+                                                                    buttonStyle={[styles.addFileButton, isUploadingThis && styles.uploadButtonDisabled]}
+                                                                />
                                                                 <TouchableOpacity
                                                                     style={[styles.addFileButton, isUploadingThis && styles.uploadButtonDisabled]}
                                                                     onPress={() => handleAddFile(item.id, 'video')}

@@ -816,7 +816,11 @@ export async function buildAgendaMinutaExcelConsolidado(
         cell.border = borderThin;
     }
     main.getRow(12).height = 28;
-    main.views = [{ state: "frozen", ySplit: 12 }];
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente.
+    for (const sheet of [main, details]) {
+        sheet.views = [{ showGridLines: false }];
+    }
     main.columns = [
         { width: 3 },
         { width: 12 },

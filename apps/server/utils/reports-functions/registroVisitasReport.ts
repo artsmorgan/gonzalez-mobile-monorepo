@@ -413,6 +413,11 @@ export async function buildRegistroVisitasExcelConsolidado(
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Registro visitas");
     const wsDet = wb.addWorksheet("Detalles");
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente.
+    for (const sheet of [wsMain, wsDet]) {
+        sheet.views = [{ showGridLines: false }];
+    }
 
     // `e_registro_personas` no tiene `created_by`, pero sí tiene tracking en `c_cambios_apps_modules`
     // (ver apps/server/app/api/visitors/route.ts y [id]/route.ts) — se agrega como últimas 2 columnas.
@@ -612,7 +617,6 @@ export async function buildRegistroVisitasExcelConsolidado(
 
     const h = addMainRow(wsMain, mainHeaders);
     styleConsolidadoHeaderRow(h);
-    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.autoFilter = {
         from: { row: 12, column: 2 },
         to: { row: Math.max(12, rows.length + 12), column: mainHeaders.length + 1 },

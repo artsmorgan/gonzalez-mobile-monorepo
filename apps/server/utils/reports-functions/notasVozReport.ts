@@ -227,7 +227,8 @@ export async function buildNotasVozExcelConsolidado(
         cell.border = border;
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     }
-    ws.views = [{ state: "frozen", ySplit: 12 }];
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel, así solo se ven los bordes que dibujamos manualmente.
+    ws.views = [{ showGridLines: false }];
     ws.columns = [
         { width: 3 },
         { width: 8 },

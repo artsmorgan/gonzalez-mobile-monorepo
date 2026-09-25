@@ -254,14 +254,15 @@ export async function queryRegistroCapacitacionesRows(
                       id: e.id,
                       label: empleadoDisplayName(e),
                       cedula: e.cedula ?? "",
+                      resultado: link.resultado ?? null,
                   }
-                : { id: link.empleado_id, label: String(link.empleado_id), cedula: "" };
+                : { id: link.empleado_id, label: String(link.empleado_id), cedula: "", resultado: link.resultado ?? null };
         });
         const puestosCap = (r.e_capacitacion_puesto || []).map((link: any) => {
             const p = link.e_estructura_puesto;
             return p
-                ? { id: p.id, label: puestoDisplayName(p) }
-                : { id: link.puesto_id, label: String(link.puesto_id) };
+                ? { id: p.id, label: puestoDisplayName(p), resultado: link.resultado ?? null }
+                : { id: link.puesto_id, label: String(link.puesto_id), resultado: link.resultado ?? null };
         });
         return {
             ...r,
@@ -305,7 +306,7 @@ function appendDetalleCapacitacionBlocks(
     wsDet: ExcelJS.Worksheet,
     r: any,
 ): { rowEmpleados: number; rowPuestos: number } {
-    const maxCol = 4;
+    const maxCol = 5;
     const titleRow = wsDet.rowCount + 1;
     wsDet.mergeCells(titleRow, 1, titleRow, maxCol);
     wsDet.getCell(titleRow, 1).value = `Capacitación #${r.id} — ${excelCellString(r.titulo)}`;
@@ -320,7 +321,7 @@ function appendDetalleCapacitacionBlocks(
     wsDet.getCell(rowEmpTitle, 1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7E6E6" } };
     for (let c = 1; c <= maxCol; c++) wsDet.getCell(rowEmpTitle, c).border = borderThin;
 
-    const eh = wsDet.addRow(["ID vínculo", "ID empleado", "Código / nombre", "Cédula"]);
+    const eh = wsDet.addRow(["ID vínculo", "ID empleado", "Código / nombre", "Cédula", "Resultado"]);
     eh.font = { bold: true };
     eh.eachCell((c) => {
         c.fill = GRP_HDR;
@@ -334,6 +335,7 @@ function appendDetalleCapacitacionBlocks(
             link.empleado_id,
             e ? empleadoDisplayName(e) : String(link.empleado_id),
             e?.cedula ?? "",
+            link.resultado ?? "",
         ]);
         row.eachCell((c) => {
             c.border = borderThin;
@@ -341,7 +343,7 @@ function appendDetalleCapacitacionBlocks(
         });
     }
     if (!(r.e_capacitacion_empleado || []).length) {
-        const empty = wsDet.addRow(["—", "—", "Sin empleados vinculados", ""]);
+        const empty = wsDet.addRow(["—", "—", "Sin empleados vinculados", "", ""]);
         empty.eachCell((c) => {
             c.border = borderThin;
         });
@@ -354,7 +356,7 @@ function appendDetalleCapacitacionBlocks(
     wsDet.getCell(rowPtoTitle, 1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7E6E6" } };
     for (let c = 1; c <= maxCol; c++) wsDet.getCell(rowPtoTitle, c).border = borderThin;
 
-    const ph = wsDet.addRow(["ID vínculo", "ID puesto", "Código / nombre", ""]);
+    const ph = wsDet.addRow(["ID vínculo", "ID puesto", "Código / nombre", "", "Resultado"]);
     ph.font = { bold: true };
     ph.eachCell((c) => {
         c.fill = GRP_HDR;
@@ -368,6 +370,7 @@ function appendDetalleCapacitacionBlocks(
             link.puesto_id,
             p ? puestoDisplayName(p) : String(link.puesto_id),
             "",
+            link.resultado ?? "",
         ]);
         row.eachCell((c) => {
             c.border = borderThin;
@@ -375,7 +378,7 @@ function appendDetalleCapacitacionBlocks(
         });
     }
     if (!(r.e_capacitacion_puesto || []).length) {
-        const empty = wsDet.addRow(["—", "—", "Sin puestos vinculados", ""]);
+        const empty = wsDet.addRow(["—", "—", "Sin puestos vinculados", "", ""]);
         empty.eachCell((c) => {
             c.border = borderThin;
         });
@@ -393,6 +396,11 @@ export async function buildRegistroCapacitacionesExcelConsolidado(
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Registro capacitaciones");
     const wsDet = wb.addWorksheet("Detalles");
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente.
+    for (const sheet of [wsMain, wsDet]) {
+        sheet.views = [{ showGridLines: false }];
+    }
     const anchorEmp = new Map<number, number>();
     const anchorPto = new Map<number, number>();
 
@@ -445,7 +453,6 @@ export async function buildRegistroCapacitacionesExcelConsolidado(
         cell.border = borderThin;
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     }
-    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.columns = [
         { width: 3 },
         { width: 12 },
@@ -496,7 +503,6 @@ export async function buildRegistroCapacitacionesExcelConsolidado(
             [headers.indexOf("Puesto") + 1]: r.puesto_nombre,
             [headers.indexOf("Título") + 1]: excelCellString(r.titulo),
             [headers.indexOf("Tipo") + 1]: excelCellString(r.tipo),
-            [headers.indexOf("Resultado") + 1]: excelCellString(r.resultado ?? ""),
             [headers.indexOf("Responsable") + 1]: r.responsable_nombre,
         };
 
@@ -512,7 +518,7 @@ export async function buildRegistroCapacitacionesExcelConsolidado(
         rootRow.getCell(colPtoLink + 1).font = { color: { argb: "FF0563C1" }, underline: true };
         styleDataRow(rootRow, 0);
 
-        (r.empleados_cap || []).forEach((e: { id: number; label: string; cedula?: string }, idx: number) => {
+        (r.empleados_cap || []).forEach((e: { id: number; label: string; cedula?: string; resultado?: string | null }, idx: number) => {
             const values = new Array(headers.length).fill("");
             values[0] = `${r.id}.emp${idx + 1}`;
             values[1] = String(r.id);
@@ -521,11 +527,12 @@ export async function buildRegistroCapacitacionesExcelConsolidado(
             for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
             values[headers.indexOf("Empleado (código / nombre)")] = e.label;
             values[headers.indexOf("Cédula (empleado)")] = e.cedula ?? "";
+            values[headers.indexOf("Resultado")] = excelCellString(e.resultado ?? "");
             const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
 
-        (r.puestos_cap || []).forEach((p: { id: number; label: string }, idx: number) => {
+        (r.puestos_cap || []).forEach((p: { id: number; label: string; resultado?: string | null }, idx: number) => {
             const values = new Array(headers.length).fill("");
             values[0] = `${r.id}.pto${idx + 1}`;
             values[1] = String(r.id);
@@ -533,6 +540,7 @@ export async function buildRegistroCapacitacionesExcelConsolidado(
             values[3] = "Puesto vinculado";
             for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
             values[headers.indexOf("Puesto (código / nombre)")] = p.label;
+            values[headers.indexOf("Resultado")] = excelCellString(p.resultado ?? "");
             const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
@@ -543,6 +551,6 @@ export async function buildRegistroCapacitacionesExcelConsolidado(
         to: { row: Math.max(12, wsMain.rowCount), column: headers.length + 1 },
     };
 
-    wsDet.columns = [{ width: 14 }, { width: 14 }, { width: 42 }, { width: 18 }];
+    wsDet.columns = [{ width: 14 }, { width: 14 }, { width: 42 }, { width: 18 }, { width: 14 }];
     return Buffer.from(await wb.xlsx.writeBuffer());
 }

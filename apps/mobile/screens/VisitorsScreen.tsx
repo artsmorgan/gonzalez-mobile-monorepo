@@ -26,6 +26,7 @@ import {
 } from '@/hooks/visitorsCacheHelpers';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import { persistSignatureRef, resolveStoredSignatureDisplayUri, localizeSignatureFieldInList, deleteSignatureLocalRef } from '@/hooks/fileStorage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import SignatureScreen from 'react-native-signature-canvas';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
@@ -470,6 +471,7 @@ export default function VisitorsScreen() {
   const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
 
   const getConnectionStatus = async () => {
+    //return false;
     const connectivity = await resolveAppConnectivity();
     return connectivity.ok;
   };
@@ -1700,6 +1702,13 @@ export default function VisitorsScreen() {
                 const horaAccion = await getHoraAccion();
                 const localId = Math.random().toString(36).substring(2, 12).toUpperCase();
 
+                // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions.
+                const firmaVisitanteRefOffline = await persistSignatureRef({
+                  value: newVisitor.firma_visitante,
+                  prefix: 'visitor_firma',
+                });
+                const requestBodyOffline = { ...requestBody, firma_visitante: firmaVisitanteRefOffline };
+
                 // Guardar en visitors_actions
                 const actionsStr = await AsyncStorage.getItem('visitors_actions');
                 let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
@@ -1708,7 +1717,7 @@ export default function VisitorsScreen() {
                   (a: any) => !(a?.type === 'create' && String(a?.id) === String(localId))
                 );
                 actions.push({
-                  requestData: requestBody,
+                  requestData: requestBodyOffline,
                   marcaId: currentMarcaData.id,
                   id: localId,
                   type: 'create',
@@ -1739,7 +1748,7 @@ export default function VisitorsScreen() {
                   tipo_accion: newVisitor.es_funcionario && newVisitor.tipo_accion ? newVisitor.tipo_accion : null,
                   pers_autoriza_salida: newVisitor.es_funcionario && persAutorizaSalidaRef.current ? persAutorizaSalidaRef.current : null,
                   foto_cedula: newVisitor.foto_cedula_nueva || newVisitor.foto_cedula,
-                  firma_visitante: newVisitor.firma_visitante,
+                  firma_visitante: firmaVisitanteRefOffline,
                   activos: newVisitor.activos.map(activo => ({
                     tipo: tipoActivos.find(t => t.id === activo.tipo_id) || { id: activo.tipo_id || 0, nombre: 'Desconocido' },
                     nombre: activo.nombre ?? '',
@@ -1980,6 +1989,21 @@ export default function VisitorsScreen() {
                 let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
                 if (!Array.isArray(actions)) actions = [];
 
+                // Cache actual: se necesita antes para conocer la referencia previa de la firma y
+                // así reemplazar/borrar el archivo correcto en expo-files (nunca se guarda el base64).
+                const cacheStrForFirma = await AsyncStorage.getItem('visitors_cache');
+                const cacheForFirma = cacheStrForFirma ? JSON.parse(cacheStrForFirma) : [];
+                const visitorIndexForFirma = cacheForFirma.findIndex((v: Visitor) =>
+                  editingVisitor.id_local !== '' ? v.id_local === editingVisitor.id_local : v.id === editingVisitor.id
+                );
+                const previousFirmaVisitanteRef =
+                  visitorIndexForFirma !== -1 ? cacheForFirma[visitorIndexForFirma]?.firma_visitante ?? null : null;
+                const firmaVisitanteRefOffline = await persistSignatureRef({
+                  value: editingVisitor.firma_visitante,
+                  previousRef: previousFirmaVisitanteRef,
+                  prefix: 'visitor_firma',
+                });
+
                 // Si id_local !== '', buscar acción "create" y modificar su requestData
                 if (editingVisitor.id_local !== '') {
                   actions = stripErroneousVisitorUpdatesForLocalQueueId(actions, editingVisitor.id_local);
@@ -2002,7 +2026,7 @@ export default function VisitorsScreen() {
                       observaciones: editingVisitor.es_funcionario ? observacionesRef.current : null,
                       tipo_accion: editingVisitor.es_funcionario && editingVisitor.tipo_accion ? editingVisitor.tipo_accion : null,
                       pers_autoriza_salida: editingVisitor.es_funcionario && persAutorizaSalidaRef.current ? persAutorizaSalidaRef.current : null,
-                      firma_visitante: editingVisitor.firma_visitante,
+                      firma_visitante: firmaVisitanteRefOffline,
                       activos: editingVisitor.activos.map(activo => ({
                         tipo_id: activo.tipo_id,
                         nombre: activo.nombre ?? '',
@@ -2043,7 +2067,7 @@ export default function VisitorsScreen() {
                       tipo_accion: editingVisitor.es_funcionario && editingVisitor.tipo_accion ? editingVisitor.tipo_accion : null,
                       pers_autoriza_salida: editingVisitor.es_funcionario && persAutorizaSalidaRef.current ? persAutorizaSalidaRef.current : null,
                       foto_cedula: fotoCedula,
-                      firma_visitante: editingVisitor.firma_visitante,
+                      firma_visitante: firmaVisitanteRefOffline,
                       activos: editingVisitor.activos.map(activo => ({
                         tipo_id: activo.tipo_id,
                         nombre: activo.nombre ?? '',
@@ -2069,7 +2093,7 @@ export default function VisitorsScreen() {
                   const vid = Number(editingVisitor.id);
                   actions = stripQueuedVisitorUpdatesForVisitorId(actions, vid);
                   actions.push({
-                      requestData: requestBody,
+                      requestData: { ...requestBody, firma_visitante: firmaVisitanteRefOffline },
                     id: vid,
                       type: 'update',
                   });
@@ -2077,13 +2101,9 @@ export default function VisitorsScreen() {
                   await AsyncStorage.setItem('visitors_actions', JSON.stringify(actions));
                 }
 
-                // Actualizar visitors_cache
-                const cacheStr = await AsyncStorage.getItem('visitors_cache');
-                const cache = cacheStr ? JSON.parse(cacheStr) : [];
-
-                const visitorIndex = cache.findIndex((v: Visitor) =>
-                  editingVisitor.id_local !== '' ? v.id_local === editingVisitor.id_local : v.id === editingVisitor.id
-                );
+                // Actualizar visitors_cache (reutiliza el índice ya resuelto arriba)
+                const cache = cacheForFirma;
+                const visitorIndex = visitorIndexForFirma;
 
                 if (visitorIndex !== -1) {
                   cache[visitorIndex] = {
@@ -2100,7 +2120,7 @@ export default function VisitorsScreen() {
                     pers_autoriza_salida: editingVisitor.es_funcionario && persAutorizaSalidaRef.current ? persAutorizaSalidaRef.current : null,
                     // Reemplazar foto_cedula con nueva imagen si se tomó una
                     foto_cedula: editingVisitor.foto_cedula_nueva || cache[visitorIndex].foto_cedula,
-                    firma_visitante: editingVisitor.firma_visitante ?? cache[visitorIndex].firma_visitante,
+                    firma_visitante: firmaVisitanteRefOffline,
                     activos: editingVisitor.activos.map(activo => ({
                       tipo: tipoActivos.find(t => t.id === activo.tipo_id) || { id: activo.tipo_id || 0, nombre: 'Desconocido' },
                       nombre: activo.nombre ?? '',
@@ -2219,6 +2239,9 @@ export default function VisitorsScreen() {
                 const filteredCache = cache.filter((v: Visitor) =>
                   visitor.id_local !== '' ? v.id_local !== visitor.id_local : v.id !== visitor.id
                 );
+                if (visitor.firma_visitante) {
+                  await deleteSignatureLocalRef(visitor.firma_visitante);
+                }
                 await AsyncStorage.setItem('visitors_cache', JSON.stringify(filteredCache));
 
                 Alert.alert('Modo Offline', 'Persona eliminada localmente. Se sincronizará cuando haya conexión.');
@@ -3071,9 +3094,9 @@ export default function VisitorsScreen() {
 
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.label}>Firma del visitante (opcional)</ThemedText>
-          {visitor.firma_visitante && String(visitor.firma_visitante).startsWith('data:image') ? (
+          {visitor.firma_visitante && resolveStoredSignatureDisplayUri(visitor.firma_visitante) ? (
             <Image
-              source={{ uri: visitor.firma_visitante }}
+              source={{ uri: resolveStoredSignatureDisplayUri(visitor.firma_visitante) }}
               style={styles.firmaVisitantePreview}
               resizeMode="contain"
             />
@@ -3267,11 +3290,20 @@ export default function VisitorsScreen() {
                   return <ThemedText style={styles.visitorValue}>Sin firma registrada.</ThemedText>;
                 }
                 const s = String(raw).trim();
-                if (s.startsWith('data:') || /^https?:\/\//i.test(s)) {
-                  const uri = /^https?:\/\//i.test(s) ? appendTokenToUrl(s) : s;
+                if (/^https?:\/\//i.test(s)) {
                   return (
                     <Image
-                      source={{ uri }}
+                      source={{ uri: appendTokenToUrl(s) }}
+                      style={styles.firmaVisitantePreview}
+                      resizeMode="contain"
+                    />
+                  );
+                }
+                const displayUri = resolveStoredSignatureDisplayUri(s);
+                if (displayUri) {
+                  return (
+                    <Image
+                      source={{ uri: displayUri }}
                       style={styles.firmaVisitantePreview}
                       resizeMode="contain"
                     />

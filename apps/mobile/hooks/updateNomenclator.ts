@@ -345,7 +345,7 @@ const getLlaves = async (corpoId: number, refreshAccessToken: any, logout: any) 
     if (data.status && Array.isArray(data.data)) {
       const cacheStr = await AsyncStorage.getItem('llaves_cache');
       const existing = cacheStr ? JSON.parse(cacheStr) : [];
-      const merged = mergeLlavesCacheForCorpo(existing, data.data, cid);
+      const merged = await mergeLlavesCacheForCorpo(existing, data.data, cid);
       await AsyncStorage.setItem('llaves_cache', JSON.stringify(merged));
     }
   };
@@ -378,7 +378,7 @@ const getLlaveros = async (corpoId: number, refreshAccessToken: any, logout: any
     if (data.status && Array.isArray(data.data)) {
       const cacheStr = await AsyncStorage.getItem('llaveros_cache');
       const existing = cacheStr ? JSON.parse(cacheStr) : [];
-      const merged = mergeLlaverosCacheForCorpo(existing, data.data, cid);
+      const merged = await mergeLlaverosCacheForCorpo(existing, data.data, cid);
       await AsyncStorage.setItem('llaveros_cache', JSON.stringify(merged));
     }
   };

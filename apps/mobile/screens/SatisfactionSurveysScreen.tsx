@@ -28,6 +28,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import SignatureScreen from "react-native-signature-canvas";
+import { persistSignatureRef, hydrateSignatureRef, deleteSignatureLocalRef, resolveStoredSignatureDisplayUri, saveBase64File } from '@/hooks/fileStorage';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import { useQRScanner } from '@/hooks/useQRScanner';
@@ -671,6 +672,33 @@ function findHierarchyFromSurveySnapshot(structureArr: any[], survey: Survey): F
                   corpoId: sucursal.id,
                   puestoId: puesto.id,
                 };
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Nombre del puesto por id desde la jerarquía local. Las filas en `surveys_cache` reconstruidas tras
+ * sincronizar un borrador (App.tsx) guardan `puesto.id` pero no `puesto.nombre` (el servidor no lo
+ * devuelve en la respuesta de creación/actualización); esto rellena el nombre para la lista sin
+ * depender de que el cache lo tenga.
+ */
+function findPuestoNombreInStructure(structureArr: any[], puestoId: number | null | undefined): string | null {
+  const pid = Number(puestoId);
+  if (!Number.isFinite(pid) || pid <= 0 || !Array.isArray(structureArr)) return null;
+  for (const empresa of structureArr) {
+    for (const cliente of empresa?.clientes || []) {
+      for (const division of getClienteDivisionArray(cliente)) {
+        for (const contrato of division?.contratos || []) {
+          for (const sucursal of contrato?.sucursales || []) {
+            for (const puesto of sucursal?.puestos || []) {
+              if (Number(puesto?.id) === pid) {
+                return puesto?.nombre != null ? String(puesto.nombre) : null;
               }
             }
           }
@@ -1387,11 +1415,30 @@ export default function SatisfactionSurveysScreen() {
           const surveysData = await surveysResponse.json();
 
           if (surveysData.status && Array.isArray(surveysData.encuestas)) {
+            // La firma llega en base64 desde el servidor; se guarda en expo-files y solo se
+            // conserva la referencia en el cache (nunca el base64).
+            const localizedEncuestas = await Promise.all(
+              (surveysData.encuestas as any[]).map(async (s) => {
+                if (!s?.firma_persona_evaluada) return s;
+                try {
+                  const fileName = await saveBase64File({
+                    base64: s.firma_persona_evaluada,
+                    extension: 'png',
+                    type: 'image',
+                    prefix: 'survey_firma_persona',
+                  });
+                  return { ...s, firma_persona_evaluada: fileName };
+                } catch (error) {
+                  console.error('Error guardando firma de encuesta descargada en expo-files:', error);
+                  return { ...s, firma_persona_evaluada: null };
+                }
+              })
+            );
             let merged: any[];
             if (pid != null) {
-              merged = mergeSurveysCacheForPuesto(fullCache, surveysData.encuestas, pid);
+              merged = mergeSurveysCacheForPuesto(fullCache, localizedEncuestas, pid);
             } else {
-              merged = mergeSurveysCacheForCorpo(fullCache, surveysData.encuestas, cid!);
+              merged = mergeSurveysCacheForCorpo(fullCache, localizedEncuestas, cid!);
             }
             await AsyncStorage.setItem('surveys_cache', JSON.stringify(merged));
             const forList = (
@@ -1451,14 +1498,20 @@ export default function SatisfactionSurveysScreen() {
     [refreshAccessToken, logout]
   );
 
+  /**
+   * Ámbito de la LISTA (no del formulario de creación): usar solo el filtro (puesto/sucursal). Antes
+   * caía a `formPuestoId`/`formCorpoId` (jerarquía del formulario de creación, casi siempre poblada
+   * desde `current_marca`), lo que ignoraba un filtro por sucursal (puesto en null a propósito) en
+   * cada refresco (focus, reconexión, `surveysCacheUpdated`) y volvía a mostrar solo el puesto de la
+   * marca en vez de toda la sucursal cacheada.
+   */
   const getListScopeForRefresh = useCallback((): { puestoId: number | null; corpoId: number | null } => {
-    const puesto =
-      filterPuestoIdRef.current ?? filterPuestoId ?? formPuestoId ?? puestoIdRef.current;
+    const puesto = filterPuestoIdRef.current ?? filterPuestoId;
     if (puesto != null && Number(puesto) > 0) return { puestoId: Number(puesto), corpoId: null };
-    const corpo = filterCorpoIdRef.current ?? filterCorpoId ?? formCorpoId ?? marcaCorpoId;
+    const corpo = filterCorpoIdRef.current ?? filterCorpoId ?? marcaCorpoId;
     if (corpo != null && Number(corpo) > 0) return { puestoId: null, corpoId: Number(corpo) };
     return { puestoId: null, corpoId: null };
-  }, [filterPuestoId, filterCorpoId, formPuestoId, formCorpoId, marcaCorpoId]);
+  }, [filterPuestoId, filterCorpoId, marcaCorpoId]);
 
   useEffect(() => {
     filterPuestoIdRef.current = filterPuestoId;
@@ -2110,9 +2163,11 @@ export default function SatisfactionSurveysScreen() {
 
     if (survey.firma_persona_evaluada?.trim()) {
       const f = survey.firma_persona_evaluada.trim();
-      const uri = f.startsWith('data:') ? f : `data:image/png;base64,${f}`;
-      setPersonSignature(uri);
-      personSignatureRef.current = uri;
+      // Puede ser una referencia local a expo-files (cache tras esta migración): se hidrata a un
+      // data URI real, porque este estado también se reenvía al servidor al guardar.
+      const hydrated = f.startsWith('data:') ? f : (await hydrateSignatureRef(f)) || `data:image/png;base64,${f}`;
+      setPersonSignature(hydrated);
+      personSignatureRef.current = hydrated;
     } else {
       setPersonSignature(null);
       personSignatureRef.current = null;
@@ -2452,6 +2507,11 @@ export default function SatisfactionSurveysScreen() {
                       },
                       puestosByCorpo[String(corpoId!)] ?? []
                     );
+                    // La firma se guarda en expo-files; solo se conserva la referencia en el cache.
+                    const firmaPersonaRefCreate = await persistSignatureRef({
+                      value: personSignatureBase64 || null,
+                      prefix: 'survey_firma_persona',
+                    });
                     const row0: Survey = {
                       id: createdServerId,
                       id_local: '',
@@ -2460,7 +2520,7 @@ export default function SatisfactionSurveysScreen() {
                       cedula_persona_evaluada: personaCedulaRef.current,
                       telefono_persona_evaluada: personaTelefonoRef.current,
                       email_persona_evaluada: personaEmailRef.current,
-                      firma_persona_evaluada: personSignatureBase64,
+                      firma_persona_evaluada: firmaPersonaRefCreate ?? '',
                       empresa: labels0.empresa,
                       cliente: labels0.cliente,
                       sucursal: labels0.sucursal,
@@ -2495,6 +2555,13 @@ export default function SatisfactionSurveysScreen() {
                 const localId = generateRandomId();
                 const horaAccion = await getHoraAccion();
 
+                // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions.
+                const firmaPersonaRefOffline = await persistSignatureRef({
+                  value: personSignatureBase64 || null,
+                  prefix: 'survey_firma_persona',
+                });
+                const requestBodyOffline = { ...requestBody, firma_persona_evaluada: firmaPersonaRefOffline ?? '' };
+
                 // Crear entrada en surveys_actions
                 const actionsStr = await AsyncStorage.getItem('surveys_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
@@ -2502,7 +2569,7 @@ export default function SatisfactionSurveysScreen() {
                   (a: any) => !(a?.type === 'create' && String(a?.id) === String(localId))
                 );
                 nextActions.push({
-                  requestData: requestBody,
+                  requestData: requestBodyOffline,
                   marcaId: currentMarcaData.id,
                   id: localId,
                   type: 'create',
@@ -2534,7 +2601,7 @@ export default function SatisfactionSurveysScreen() {
                   cedula_persona_evaluada: personaCedulaRef.current,
                   telefono_persona_evaluada: personaTelefonoRef.current,
                   email_persona_evaluada: personaEmailRef.current,
-                  firma_persona_evaluada: personSignatureBase64,
+                  firma_persona_evaluada: firmaPersonaRefOffline ?? '',
                   empresa: labels.empresa,
                   cliente: labels.cliente,
                   sucursal: labels.sucursal,
@@ -2796,6 +2863,13 @@ export default function SatisfactionSurveysScreen() {
                   Alert.alert('Error', data.message || 'Error al actualizar la encuesta');
                 }
               } else {
+                // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions.
+                const firmaPersonaRefUpdate = await persistSignatureRef({
+                  value: personSignatureBase64 || null,
+                  previousRef: survey.firma_persona_evaluada || null,
+                  prefix: 'survey_firma_persona',
+                });
+                const requestBodyOffline = { ...requestBody, firma_persona_evaluada: firmaPersonaRefUpdate ?? '' };
                 const actionsStr = await AsyncStorage.getItem('surveys_actions');
                 let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
                 if (!Array.isArray(actions)) actions = [];
@@ -2803,7 +2877,7 @@ export default function SatisfactionSurveysScreen() {
                 actions.push({
                   type: 'update',
                   surveyId: survey.id,
-                  requestData: requestBody,
+                  requestData: requestBodyOffline,
                   marcaId: currentMarcaData.id,
                 });
                 await AsyncStorage.setItem('surveys_actions', JSON.stringify(actions));
@@ -2820,7 +2894,7 @@ export default function SatisfactionSurveysScreen() {
                         cedula_persona_evaluada: personaCedulaRef.current,
                         telefono_persona_evaluada: personaTelefonoRef.current,
                         email_persona_evaluada: personaEmailRef.current,
-                        firma_persona_evaluada: personSignatureBase64,
+                        firma_persona_evaluada: firmaPersonaRefUpdate ?? '',
                         firma_responsable: firmaResponsableBase64,
                         fecha: fechaEncuestaRef.current,
                         evaluaciones: evaluacionesJson,
@@ -2859,8 +2933,15 @@ export default function SatisfactionSurveysScreen() {
                 Alert.alert('Error', 'No se encontró el borrador local para actualizar.');
                 return;
               }
+              // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions.
+              const firmaPersonaRefDraft = await persistSignatureRef({
+                value: personSignatureBase64 || null,
+                previousRef: survey.firma_persona_evaluada || null,
+                prefix: 'survey_firma_persona',
+              });
               const offlineBody = {
                 ...requestBody,
+                firma_persona_evaluada: firmaPersonaRefDraft ?? '',
                 marca_id: currentMarcaData.id,
               };
               actions[idx].requestData = offlineBody;
@@ -2877,7 +2958,7 @@ export default function SatisfactionSurveysScreen() {
                     cedula_persona_evaluada: personaCedulaRef.current,
                     telefono_persona_evaluada: personaTelefonoRef.current,
                     email_persona_evaluada: personaEmailRef.current,
-                    firma_persona_evaluada: personSignatureBase64,
+                    firma_persona_evaluada: firmaPersonaRefDraft ?? '',
                     firma_responsable: firmaResponsableBase64,
                     fecha: fechaEncuestaRef.current,
                     evaluaciones: evaluacionesJson,
@@ -3137,9 +3218,15 @@ export default function SatisfactionSurveysScreen() {
                 return;
               }
 
-              // Sin conexión o borrador no sincronizado (id local): caché + cola
-              await persistFirmaPersonaInSurveyCache(survey, sig);
-              await persistFirmaPersonaInSurveyActionsQueue(survey, sig);
+              // Sin conexión o borrador no sincronizado (id local): caché + cola.
+              // La firma se guarda en expo-files; solo se conserva la referencia en cache/actions.
+              const firmaRef = await persistSignatureRef({
+                value: sig,
+                previousRef: survey.firma_persona_evaluada || null,
+                prefix: 'survey_firma_persona',
+              });
+              await persistFirmaPersonaInSurveyCache(survey, firmaRef ?? '');
+              await persistFirmaPersonaInSurveyActionsQueue(survey, firmaRef ?? '');
               setDecodedFirmas((prev) => {
                 const next = new Map(prev);
                 const ek = surveyExpandKey(survey);
@@ -3252,7 +3339,7 @@ export default function SatisfactionSurveysScreen() {
             const firma = survey.firma_persona_evaluada.trim();
             personaFirma = firma.startsWith('data:')
               ? firma
-              : `data:image/png;base64,${firma}`;
+              : resolveStoredSignatureDisplayUri(firma) || `data:image/png;base64,${firma}`;
           }
 
           setDecodedFirmas(prev => {
@@ -3516,7 +3603,7 @@ export default function SatisfactionSurveysScreen() {
                           </ThemedText>
                           <ThemedText style={styles.surveyInfo}>
                             <ThemedText style={styles.surveyLabel}>Puesto: </ThemedText>
-                            {survey.puesto?.nombre || 'N/A'}
+                            {survey.puesto?.nombre || findPuestoNombreInStructure(structure, survey.puesto?.id) || 'N/A'}
                           </ThemedText>
 
                           {/* Collapsable Button */}
