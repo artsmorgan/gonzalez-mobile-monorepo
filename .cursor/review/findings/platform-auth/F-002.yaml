@@ -1,0 +1,16 @@
+id: F-002
+module_id: platform-auth
+severity: medium
+status: fixed
+file: apps/mobile/contexts/AuthContext.tsx
+lines: "451-453"
+category: security
+title: Tokens JWT logueados en consola durante refresh
+description: |
+  refreshAccessTokenSafe hace console.log de newAccessToken, newRefreshToken y tokenCreatedAt.
+  En builds de desarrollo/preview esto expone credenciales en logcat.
+reproduction: |
+  1. Esperar expiración de access token o forzar refresh.
+  2. Observar logcat / Metro console tras POST refresh-token.
+impact: Exposición de tokens en dispositivos compartidos o logs capturados; riesgo de secuestro de sesión en entornos no controlados.
+suggested_fix: Eliminar logs de tokens; usar logging redactado solo en __DEV__ si es necesario para debug.

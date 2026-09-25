@@ -1,0 +1,22 @@
+id: F-002
+module_id: apreciacion-vulnerabilidad
+severity: high
+status: fixed
+file: apps/mobile/App.tsx
+lines: "3083-3085"
+category: offline
+title: Sync descarta updates duplicados en cola — solo se envía el primero
+description: |
+  ApreciacionVulnerabilidadScreen.upsertAction hace push sin deduplicar updates del mismo id (líneas 1223-1227).
+  Tras guardar offline dos veces un registro de servidor, la cola acumula dos type:update con el mismo id.
+  checkApreciacionVulnerabilidadActionsCache, al éxito del primero, filtra TODOS los update con ese id
+  (no solo el procesado), descartando el segundo payload sin sincronizarlo.
+reproduction: |
+  1. Editar boleta de servidor offline → update₁ en cola.
+  2. Editar de nuevo offline → update₂ push (upsertAction no reemplaza update₁).
+  3. Al reconectar, sync procesa update₁ OK y elimina update₁ y update₂ de la cola.
+  4. Cambios del segundo guardado nunca llegan al servidor.
+impact: Pérdida silenciosa del último edit offline; servidor queda con datos obsoletos.
+suggested_fix: |
+  Deduplicar/reemplazar update por id al encolar (como NotesScreen), o en sync remover solo la acción
+  procesada (match por referencia/timestamp), o fusionar payloads antes de enviar.

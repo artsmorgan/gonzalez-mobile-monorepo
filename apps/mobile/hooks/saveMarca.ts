@@ -1,0 +1,77 @@
+import Constants from "expo-constants";
+import authedFetch from "./authedFetch";
+import { readStoredPlanillasToken } from "./planillasTokenStorage";
+
+interface saveMarcaParams {
+    data_params: {
+        type: string;
+        reason: string;
+        horaAccion: number;
+        cords?: { lat: string | null; lng: string | null } | null;
+    };
+    marcaId: number;
+    planillasToken?: string | null;
+    refreshAccessToken?: () => Promise<boolean>;
+    logout?: () => Promise<{ status: boolean; message: string }>;
+}
+
+export default async function saveMarca({
+    data_params,
+    marcaId,
+    planillasToken: planillasTokenOverride,
+    refreshAccessToken,
+    logout
+}: saveMarcaParams) {
+    try {
+        if (!refreshAccessToken || !logout) {
+            throw new Error('Auth handlers not provided');
+        }
+
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) {
+            throw new Error('Server URL not configured');
+        }
+
+        if (!marcaId) {
+            throw new Error('Marca ID not found');
+        }
+
+        const storedPlanillas = await readStoredPlanillasToken();
+        const planillasToken =
+          String(planillasTokenOverride ?? '').trim() || storedPlanillas?.token || null;
+
+        const response = await authedFetch({
+            url: `${apiUrl}/api/attendance/${marcaId}`,
+            init: {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Planillas-Token': encodeURIComponent(planillasToken ?? ''),
+                },
+                body: JSON.stringify({
+                    type: data_params.type,
+                    reason: data_params.reason,
+                    horaAccion: data_params.horaAccion,
+                    cords: data_params.cords ?? { lat: null, lng: null },
+                }),
+            },
+            refreshAccessToken,
+            logout,
+        });
+
+        if (!response) {
+            return { status: false, message: 'Sesión expirada' };
+        }
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        return data;
+    } catch (error) {
+        console.error('Error saving marca:', error);
+        return { status: false, message: 'Error al guardar la marca' };
+    }
+}

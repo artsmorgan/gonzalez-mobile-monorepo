@@ -1,0 +1,15 @@
+id: F-003
+module_id: complaints-master
+severity: low
+status: fixed
+file: apps/mobile/screens/ComplaintsMasterScreen.tsx
+lines: "2064-2073"
+category: offline
+title: Create offline sin merge por localId
+description: |
+  push create sin findIndex merge.
+reproduction: |
+  1. Double save race.
+impact: Duplicados create en cola.
+suggested_fix: |
+  Merge por localId.

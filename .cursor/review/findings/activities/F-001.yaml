@@ -1,0 +1,18 @@
+id: F-001
+module_id: activities
+severity: critical
+status: fixed
+file: apps/mobile/screens/MarcarIngresoSalidaScreen.tsx
+lines: "1334-1337,1540-1543"
+category: offline
+title: Marcar entrada borra activities_actions pendientes
+description: |
+  hydrateAfterEntrada llama getActivities, que hace removeItem('activities_actions') antes de refrescar
+  desde servidor. Ocurre tras entrada exitosa aunque queden marcas offline en cola.
+reproduction: |
+  1. Marcar actividad offline (activities_actions type:update).
+  2. Antes de sync, marcar entrada online en turno siguiente.
+  3. hydrateAfterEntrada → getActivities elimina activities_actions.
+  4. La marca offline nunca se envía.
+impact: Pérdida irreversible de marcas de actividades offline.
+suggested_fix: No borrar activities_actions en getActivities; sincronizar/drenar cola antes del wipe o preservar la key.

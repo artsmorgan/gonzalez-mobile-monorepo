@@ -5,25 +5,36 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start:web": "next start",
+    "start": "node scripts/startWithWorker.mjs",
+    "worker:reports": "tsx scripts/reportWorker.ts",
+    "dev:worker": "tsx scripts/reportWorker.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^6.15.0",
+    "archiver": "^7.0.1",
+    "axios": "^1.13.5",
     "bcrypt": "^6.0.0",
     "date-fns-tz": "^3.2.0",
+    "docx": "^9.6.1",
     "dotenv": "^17.2.2",
+    "exceljs": "^4.4.0",
     "express": "^5.1.0",
+    "firebase-admin": "^13.10.0",
     "jsonwebtoken": "^9.0.2",
-    "next": "15.5.2",
+    "next": "^15.5.9",
     "nodemailer": "^7.0.6",
+    "tsx": "^4.22.3",
     "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/react": "^19",
     "eslint": "^9",
+    "eslint-config-next": "^16.2.4",
     "prisma": "^6.16.1",
     "tailwindcss": "^4",
     "typescript": "^5"

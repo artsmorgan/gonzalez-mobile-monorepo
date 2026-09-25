@@ -1,0 +1,15 @@
+id: F-004
+module_id: complaints-master
+severity: informational
+status: fixed
+file: apps/mobile/hooks/complaintsMasterFilesSync.ts
+lines: "157-199"
+category: offline
+title: Hydration deferral correctamente implementado
+description: |
+  diskHydrationComplete false evita sync parcial.
+reproduction: |
+  N/A positivo.
+impact: Patrón a replicar en trainings.
+suggested_fix: |
+  N/A — mantener.

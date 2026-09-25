@@ -1,0 +1,19 @@
+id: F-001
+module_id: apreciacion-vulnerabilidad
+severity: critical
+status: fixed
+file: apps/mobile/screens/MarcarIngresoSalidaScreen.tsx
+lines: "1280-1288,1467-1502"
+category: offline
+title: Marcar entrada borra apreciacion_vulnerabilidad_actions y cache
+description: |
+  El módulo usa storageKeys apreciacion_vulnerabilidad_actions y apreciacion_vulnerabilidad_cache.
+  cleanAsyncStorage en hydrateAfterEntrada no las preserva; las elimina al marcar entrada online
+  aunque queden create/update/delete/delete_file/update_solicitante_firma pendientes.
+reproduction: |
+  1. Crear boleta offline (apreciacion_vulnerabilidad_actions + cache).
+  2. Marcar entrada online antes de checkApreciacionVulnerabilidadActionsCache.
+  3. Cola y cache eliminados.
+impact: Pérdida irreversible de boletas offline y firmas/imágenes asociadas en cola.
+suggested_fix: |
+  Añadir apreciacion_vulnerabilidad_actions y apreciacion_vulnerabilidad_cache a excepciones de cleanAsyncStorage.

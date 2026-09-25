@@ -1,0 +1,37 @@
+---
+description: Guardrails globales para campaña test-soft-001 (variante Lite)
+alwaysApply: true
+---
+
+# test-soft-001 — Guardrails globales
+
+## Alcance
+
+- Rama: `test-soft-001`, baseline tag `soft-001-baseline`.
+- Variante objetivo: **Lite** (`APP_VARIANT=lite`, package `.lite`).
+- Módulos in-scope: solo los definidos en `.cursor/review/modules-manifest.json`.
+- Excluir pantallas ISO/calidad fuera de SlideMenu.
+
+## Comportamiento obligatorio
+
+1. **STOP on uncertainty**: si el comportamiento esperado no es claro desde código/docs, crear `.cursor/review/questions/Q-xxx.md` y NO modificar código hasta respuesta del usuario.
+2. **Fix mínimo**: cambios acotados al finding; no refactorizar módulos enteros.
+3. **Sin commits intermedios**: un solo commit al final tras `APPROVAL.md` con `status: PASS`.
+4. **No tocar secretos**: nunca modificar ni commitear `.env*`, `google-services*.json`, credenciales Firebase.
+5. **Respetar arquitectura**: BFF Next.js, colas AsyncStorage, hooks `*Functions.ts`, `authedFetch`.
+
+## Intencional — NO reportar ni corregir
+
+- `authedFetch` hace logout inmediato en 401/403 (sin retry).
+- Token Planillas requerido para ciertas sync actions (diseño actual).
+
+## Severidad y approval
+
+- Bloquean approval: findings **high** y **medium** abiertos.
+- **low** / **informational**: pueden quedar `wontfix` con justificación del usuario.
+
+## Registro
+
+- Hallazgos: `.cursor/review/findings/{module-id}/F-xxx.yaml`
+- Estado módulo: actualizar `.cursor/review/MODULE-STATUS.json`
+- Módulo activo (Coder): escribir id en `.cursor/review/ACTIVE-MODULE.txt`

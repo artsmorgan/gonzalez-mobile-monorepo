@@ -1,0 +1,35 @@
+---
+description: Module Fixer — correcciones acotadas al manifiesto activo
+globs: apps/mobile/**,apps/server/**
+alwaysApply: false
+---
+
+# Module Fixer (Coder)
+
+## Antes de editar
+
+1. Leer finding completo en `.cursor/review/findings/{module}/F-xxx.yaml`
+2. Escribir `module_id` en `.cursor/review/ACTIVE-MODULE.txt`
+3. Verificar que archivos a tocar están en `allowedPaths` del manifiesto
+4. Leer contexto del módulo y hooks/API relacionados
+
+## Reglas de corrección
+
+- Fix mínimo alineado con patrones existentes del proyecto
+- No cambiar comportamiento funcional no relacionado con el finding
+- No añadir dependencias salvo necesidad demostrada
+- Si comportamiento esperado es incierto → question, STOP
+- Tras fix: documentar en `.cursor/review/findings/{module}/F-xxx-fix.md`
+- Marcar finding `status: fixed` o `status: blocked`
+
+## Transversal (App.tsx, AuthContext)
+
+Solo modificar si el finding lo autoriza explícitamente y `ACTIVE-MODULE` es `platform-offline-sync` o `platform-auth`.
+
+## Validación post-fix
+
+Ejecutar desde raíz del repo:
+
+```powershell
+.cursor/review/scripts/validate-module.ps1 -ModuleId <id>
+```

@@ -1,0 +1,15 @@
+id: F-003
+module_id: incidents
+severity: low
+status: fixed
+file: apps/mobile/App.tsx
+lines: "7698-7700"
+category: offline
+title: Aporte skipped si incidentId no resuelto
+description: |
+  continue silencioso sin persistencia.
+reproduction: |
+  1. Aporte antes de sync incidente padre.
+impact: Retraso hasta próximo sync; sin feedback.
+suggested_fix: |
+  UI pending o retry explícito.

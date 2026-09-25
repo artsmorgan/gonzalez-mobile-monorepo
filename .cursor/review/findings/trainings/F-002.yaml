@@ -1,0 +1,16 @@
+id: F-002
+module_id: trainings
+severity: medium
+status: fixed
+file: apps/mobile/screens/TrainingsScreen.tsx
+lines: "1459-1462"
+category: ux
+title: Borradores offline id===0 no editables
+description: |
+  openEditTraining bloquea id===0.
+reproduction: |
+  1. Create offline.
+  2. Intentar editar.
+impact: Debe esperar sync para corregir.
+suggested_fix: |
+  Permitir edit local draft o merge en cola.

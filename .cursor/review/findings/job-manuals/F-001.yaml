@@ -1,0 +1,16 @@
+id: F-001
+module_id: job-manuals
+severity: medium
+status: fixed
+file: apps/mobile/hooks/jobManualsQueueUtils.ts
+lines: "18-30"
+category: offline
+title: Adjuntos omitidos silenciosamente en create sync
+description: |
+  hydrateJobManualCreateRequestData omite archivos si getFile falla.
+reproduction: |
+  1. Manual offline archivo missing.
+  2. Sync.
+impact: Manual creado sin adjuntos.
+suggested_fix: |
+  Abortar acción si adjunto requerido falta.

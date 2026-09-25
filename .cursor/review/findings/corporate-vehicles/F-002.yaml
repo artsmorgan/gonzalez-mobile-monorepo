@@ -1,0 +1,15 @@
+id: F-002
+module_id: corporate-vehicles
+severity: medium
+status: fixed
+file: apps/mobile/screens/CorporateVehiclesScreen.tsx
+lines: "1390-1394"
+category: offline
+title: Cache jerárquica omitida si tree mergeado vacío
+description: |
+  updateMainStructureCacheFromFetchedVehicles return early.
+reproduction: |
+  1. Mismo escenario F-001.
+impact: Otros módulos no ven vehículos nuevos.
+suggested_fix: |
+  Persistir en corpo cache aunque tree vacío.

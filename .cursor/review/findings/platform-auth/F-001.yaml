@@ -1,0 +1,18 @@
+id: F-001
+module_id: platform-auth
+severity: medium
+status: fixed
+file: apps/mobile/hooks/getValidAccessTokenOrLogout.ts
+lines: "12-20, 36-38"
+category: async
+title: Criterio de conectividad inconsistente con resolveAppConnectivity
+description: |
+  getValidAccessTokenOrLogout exige isInternetReachable === true estrictamente.
+  resolveAppConnectivity (usada por sync) trata isInternetReachable === null como online.
+  En Android, reach suele ser null transitoriamente → sync inicia pero preflight devuelve null y aborta silenciosamente.
+reproduction: |
+  1. Dispositivo Android con WiFi conectado pero isInternetReachable null (común al reconectar).
+  2. resolveAppConnectivity().ok === true → syncPendingActionsIfOnline corre.
+  3. getValidAccessTokenOrLogout retorna null sin logout → sync cancelada en App.tsx:812-816.
+impact: Colas offline no sincronizan hasta que reach pase a true; comportamiento intermitente difícil de reproducir en QA.
+suggested_fix: Unificar criterio de red (reutilizar resolveAppConnectivity en getValidAccessTokenOrLogout) o permitir token cacheado offline sin preflight cuando solo se necesita leer token existente.
