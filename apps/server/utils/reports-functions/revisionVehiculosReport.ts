@@ -746,14 +746,10 @@ export async function buildRevisionVehiculosExcelConsolidado(
         wsDet.addRow([]);
     }
 
-    /** Cuadrícula jerárquica: Registro (nivel 0) → Ítem info. general / Ítem info. revisión / Movimiento, hermanos (nivel 1). */
+    /** Cuadrícula jerárquica: Registro (nivel 0) → Ítem info. general / Ítem info. revisión, hermanos (nivel 1). Los "Movimientos" se agrupan y separan por punto y coma en la fila del registro. */
     wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
 
     const mainHeaders = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Registro",
         "Empresa",
         "Cliente",
@@ -785,13 +781,15 @@ export async function buildRevisionVehiculosExcelConsolidado(
     const colGen = mainHeaders.indexOf("Ver información general") + 1;
     const colRev = mainHeaders.indexOf("Ver información de revisión") + 1;
     const colMov = mainHeaders.indexOf("Ver movimientos") + 1;
-    const COL_TIPO_FILA = mainHeaders.indexOf("Tipo de fila") + 1;
     // +1 más: columna real en la hoja tras el margen que agrega `addMainRow`.
     const SHEET_COL_GEN = colGen + 1;
     const SHEET_COL_REV = colRev + 1;
     const SHEET_COL_MOV = colMov + 1;
-    const SHEET_COL_TIPO_FILA = COL_TIPO_FILA + 1;
     const linkCols = new Set([SHEET_COL_GEN, SHEET_COL_REV, SHEET_COL_MOV]);
+
+    /** Todos los movimientos de una revisión se unen en 1 sola fila, separados por punto y coma. */
+    const joinMovimientos = (movs: Array<Record<string, unknown>>, key: string): string =>
+        movs.map((item) => String(item?.[key] ?? "")).join(";");
 
     const creadorIds = [...new Set(rows.map((r) => Number(r.created_by)).filter((n) => Number.isFinite(n) && n > 0))];
     const creadores = creadorIds.length
@@ -830,9 +828,8 @@ export async function buildRevisionVehiculosExcelConsolidado(
             cell.alignment = { wrapText: true, vertical: "top" };
         });
         for (const c of linkCols) row.getCell(c).border = borderThin;
-        row.getCell(SHEET_COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(SHEET_COL_TIPO_FILA).font = { bold: true };
+        if (nivel === 0) row.getCell(2).font = { bold: true };
     };
 
     for (const r of rows) {
@@ -854,14 +851,18 @@ export async function buildRevisionVehiculosExcelConsolidado(
             [mainHeaders.indexOf("Fecha de creación") + 1]: formatDateOnlyDMY(r.created_at),
             [mainHeaders.indexOf("Hora de creación") + 1]: formatTimeOnlyHMS(r.created_at),
             [mainHeaders.indexOf("Creado por") + 1]: fmtCreador(creadorById.get(Number(r.created_by))),
-            [mainHeaders.indexOf("Usuario modifica") + 1]: cambio?.cedula ?? "",
+            [mainHeaders.indexOf("Usuario modifica") + 1]: cambio?.nombreCompleto ?? "",
             [mainHeaders.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
         };
 
+        const movimientosArr = safeParseArray(r.movimientos_vehiculos);
+        general[mainHeaders.indexOf("Movimiento") + 1] = joinMovimientos(movimientosArr, "movimiento");
+        general[mainHeaders.indexOf("Fecha (movimiento)") + 1] = joinMovimientos(movimientosArr, "fecha");
+        general[mainHeaders.indexOf("Hora (movimiento)") + 1] = joinMovimientos(movimientosArr, "hora");
+        general[mainHeaders.indexOf("Realizado por (movimiento)") + 1] = joinMovimientos(movimientosArr, "realizado_por");
+        general[mainHeaders.indexOf("Autorizado por (movimiento)") + 1] = joinMovimientos(movimientosArr, "autorizado_por");
+
         const rootValues = new Array(mainHeaders.length).fill("");
-        rootValues[0] = String(r.id);
-        rootValues[2] = 0;
-        rootValues[3] = "Registro";
         for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
         rootValues[colGen - 1] = linkGen || "—";
         rootValues[colRev - 1] = linkRev || "—";
@@ -890,10 +891,6 @@ export async function buildRevisionVehiculosExcelConsolidado(
 
         const itemRow = (tipo: string, idPrefix: string, item: any, idx: number) => {
             const values = new Array(mainHeaders.length).fill("");
-            values[0] = `${r.id}.${idPrefix}${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = tipo;
             for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
             if (item?.kind === "heading") {
                 values[mainHeaders.indexOf("Campo (ítem)")] = excelCellString(item.label ?? item.title ?? "");
@@ -912,22 +909,6 @@ export async function buildRevisionVehiculosExcelConsolidado(
 
         safeParseArray(r.informacion_general).forEach((item: any, idx: number) => itemRow("Ítem info. general", "ig", item, idx));
         parseInformacionRevision(r.informacion_revision).forEach((item: any, idx: number) => itemRow("Ítem info. revisión", "ir", item, idx));
-
-        safeParseArray(r.movimientos_vehiculos).forEach((mov: any, idx: number) => {
-            const values = new Array(mainHeaders.length).fill("");
-            values[0] = `${r.id}.mov${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = "Movimiento";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[mainHeaders.indexOf("Movimiento")] = excelCellString(mov?.movimiento ?? "");
-            values[mainHeaders.indexOf("Fecha (movimiento)")] = excelCellString(mov?.fecha ?? "");
-            values[mainHeaders.indexOf("Hora (movimiento)")] = excelCellString(mov?.hora ?? "");
-            values[mainHeaders.indexOf("Realizado por (movimiento)")] = excelCellString(mov?.realizado_por ?? "");
-            values[mainHeaders.indexOf("Autorizado por (movimiento)")] = excelCellString(mov?.autorizado_por ?? "");
-            const row = addMainRow(wsMain, values);
-            styleDataRow(row, 1);
-        });
     }
 
     wsMain.autoFilter = {
@@ -938,7 +919,7 @@ export async function buildRevisionVehiculosExcelConsolidado(
     wsMain.columns = [
         { width: 3 },
         ...[
-            12, 14, 8, 20, 10,
+            10,
             28, 24, 22, 28, 24, 28,
             14, 32, 36, 14, 12, 16, 16, 20,
             20, 24, 18,

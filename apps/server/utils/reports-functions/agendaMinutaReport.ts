@@ -767,14 +767,8 @@ export async function buildAgendaMinutaExcelConsolidado(
         rows.map((r) => Number(r.id)),
     );
 
-    /** Cuadrícula jerárquica: la agenda (nivel 0) más sus subregistros hermanos (participantes / acuerdos / temas, nivel 1). */
-    main.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
+    /** Cada agenda/minuta (registro de negocio) ocupa una única fila; participantes, acuerdos y temas se aplanan en columnas propias. */
     const mainHeaders = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Agenda",
         "Empresa",
         "Cliente",
@@ -793,17 +787,17 @@ export async function buildAgendaMinutaExcelConsolidado(
         "Ver participantes",
         "Ver acuerdos",
         "Ver temas",
-        "Nombre (participante)",
-        "Puesto (participante)",
+        "Nombre participante",
+        "Puesto participante",
         "Tiene firma (participante)",
-        "Texto (acuerdo)",
-        "Responsable (acuerdo)",
-        "Fecha límite (acuerdo)",
+        "Texto acuerdo",
+        "Responsable acuerdo",
+        "Fecha límite acuerdo",
         "Tema",
     ];
-    const COL_VER_PARTICIPANTES = 21;
-    const COL_VER_ACUERDOS = 22;
-    const COL_VER_TEMAS = 23;
+    const COL_VER_PARTICIPANTES = mainHeaders.indexOf("Ver participantes") + 2;
+    const COL_VER_ACUERDOS = mainHeaders.indexOf("Ver acuerdos") + 2;
+    const COL_VER_TEMAS = mainHeaders.indexOf("Ver temas") + 2;
 
     applyConsolidadoReportBanner(main, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: mainHeaders.length });
 
@@ -823,10 +817,6 @@ export async function buildAgendaMinutaExcelConsolidado(
     }
     main.columns = [
         { width: 3 },
-        { width: 12 },
-        { width: 14 },
-        { width: 8 },
-        { width: 20 },
         { width: 12 },
         { width: 38 },
         { width: 34 },
@@ -937,19 +927,18 @@ export async function buildAgendaMinutaExcelConsolidado(
 
     details.columns = [{ width: 44 }, { width: 28 }, { width: 32 }];
 
-    const blank = (n: number) => Array.from({ length: n }, () => "");
-
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((c, colNumber) => {
             if (colNumber === 1) return;
             c.border = borderThin;
             c.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
         });
-        row.getCell(5).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
-        row.outlineLevel = nivel;
         row.height = 22;
-        if (nivel === 0) row.getCell(5).font = { bold: true };
     };
+
+    /** Todos los participantes/acuerdos/temas de 1 agenda se unen en 1 sola fila, separados por punto y coma. */
+    const joinDetalle = (detalleRows: Array<Record<string, unknown>>, key: string): string =>
+        detalleRows.map((item) => String(item?.[key] ?? "")).join(";");
 
     let totalDataRows = 0;
     for (const r of rows) {
@@ -971,21 +960,27 @@ export async function buildAgendaMinutaExcelConsolidado(
             r.titulo,
             r.autor,
             creadoPorTxt,
-            cambio?.cedula ?? "",
+            cambio?.nombreCompleto ?? "",
             cambio?.fechaHoraTexto ?? "",
             r.estado ? "Completado" : "Pendiente",
         ];
 
+        const participantes = parseParticipantes(r.participantes);
+        const acuerdos = parseAcuerdosItems(r.acuerdos);
+        const temas = parseTemas(r.temas_a_tratar);
+
         const rootRow = addMainRow(main, [
-            String(r.id),
-            "",
-            0,
-            "Agenda minuta",
             ...general,
             "Ver participantes",
             "Ver acuerdos",
             "Ver temas",
-            ...blank(7),
+            joinDetalle(participantes, "nombre"),
+            joinDetalle(participantes, "puesto"),
+            participantes.map((p) => (p?.firma ? "Sí" : "No")).join(";"),
+            joinDetalle(acuerdos, "texto"),
+            joinDetalle(acuerdos, "responsable"),
+            joinDetalle(acuerdos, "fecha_limite"),
+            temas.join(";"),
         ]);
         rootRow.getCell(COL_VER_PARTICIPANTES).value = { text: "Ver participantes", hyperlink: `#'Detalles'!A${detailRow}` };
         rootRow.getCell(COL_VER_ACUERDOS).value = { text: "Ver acuerdos", hyperlink: `#'Detalles'!A${detailRow}` };
@@ -993,56 +988,8 @@ export async function buildAgendaMinutaExcelConsolidado(
         rootRow.getCell(COL_VER_PARTICIPANTES).font = { color: { argb: "FF0563C1" }, underline: true };
         rootRow.getCell(COL_VER_ACUERDOS).font = { color: { argb: "FF0563C1" }, underline: true };
         rootRow.getCell(COL_VER_TEMAS).font = { color: { argb: "FF0563C1" }, underline: true };
-        styleDataRow(rootRow, 0);
+        styleDataRow(rootRow);
         totalDataRows += 1;
-
-        parseParticipantes(r.participantes).forEach((p, idx) => {
-            const row = addMainRow(main, [
-                `${r.id}.p${idx + 1}`,
-                String(r.id),
-                1,
-                "Participante",
-                ...general,
-                ...blank(3),
-                String(p.nombre ?? ""),
-                String(p.puesto ?? ""),
-                p.firma ? "Sí" : "No",
-                ...blank(4),
-            ]);
-            styleDataRow(row, 1);
-            totalDataRows += 1;
-        });
-
-        parseAcuerdosItems(r.acuerdos).forEach((a, idx) => {
-            const row = addMainRow(main, [
-                `${r.id}.a${idx + 1}`,
-                String(r.id),
-                1,
-                "Acuerdo",
-                ...general,
-                ...blank(6),
-                String(a.texto ?? ""),
-                String(a.responsable ?? ""),
-                String(a.fecha_limite ?? ""),
-                "",
-            ]);
-            styleDataRow(row, 1);
-            totalDataRows += 1;
-        });
-
-        parseTemas(r.temas_a_tratar).forEach((t, idx) => {
-            const row = addMainRow(main, [
-                `${r.id}.t${idx + 1}`,
-                String(r.id),
-                1,
-                "Tema",
-                ...general,
-                ...blank(9),
-                String(t ?? ""),
-            ]);
-            styleDataRow(row, 1);
-            totalDataRows += 1;
-        });
     }
 
     main.autoFilter = {

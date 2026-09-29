@@ -106,7 +106,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
 
-        const { e, estado, bitacora, file, articles_state, hora_accion } = await req.json();
+        const { e, estado, bitacora, file, articles_state, hora_accion, firma_marcado } = await req.json();
+
         const now = toZonedTime(new Date(), "America/Costa_Rica").toISOString();
         /** Instante en que el cliente realizó la acción (marcar); para no pisar mantenimientos ya actualizados después. */
         const accionAtMs = (() => {

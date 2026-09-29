@@ -643,7 +643,7 @@ export async function buildMutuosAcuerdosExcelConsolidado(
             formatDateOnlyDMY(r.created_at),
             formatTimeOnlyHMS(r.created_at),
             r.created_by_txt,
-            cambio?.cedula ?? "",
+            cambio?.nombreCompleto ?? "",
             cambio?.fechaHoraTexto ?? "",
             r.empresa_nombre,
             r.cliente_nombre,

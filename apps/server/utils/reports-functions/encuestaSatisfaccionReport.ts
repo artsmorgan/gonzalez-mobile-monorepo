@@ -862,14 +862,12 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(
         wsDet.addRow([]);
     }
 
-    /** Cuadrícula jerárquica: Encuesta (nivel 0) → Sección (nivel 1, solo formato "form") → Pregunta (nivel 2 en "form", nivel 1 directo en formato legado). */
+    /** Cuadrícula jerárquica: Encuesta (nivel 0) → Sección (nivel 1, solo formato "form"). Las preguntas
+     *  (y su respuesta) de cada sección — o de la encuesta completa en formato legado, que no tiene
+     *  secciones — se agrupan y separan por ";" en columnas de esa misma fila, sin fila propia. */
     wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
 
     const headers = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Encuesta",
         "Creado en (fecha)",
         "Creado en (hora)",
@@ -887,14 +885,16 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(
         "Observaciones",
         "¿Conoce procedimiento de quejas?",
         "Sección",
-        "Pregunta",
-        "Respuesta",
+        "Preguntas",
+        "Respuestas",
+        "Observaciones sección",
         "Usuario modifica",
         "Fecha y hora modifica",
     ];
     // Posiciones dentro de la hoja (incluyen la columna de margen A que agrega `addMainRow`).
-    const COL_VER_EVAL = 18;
-    const COL_VER_FIRMA = 19;
+    const COL_VER_EVAL = headers.indexOf("Ver evaluaciones") + 2;
+    const COL_VER_FIRMA = headers.indexOf("Ver firma") + 2;
+    const COL_SECCION = headers.indexOf("Sección") + 2;
 
     applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
 
@@ -916,10 +916,6 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(
         { width: 3 },
         { width: 12 },
         { width: 14 },
-        { width: 8 },
-        { width: 20 },
-        { width: 10 },
-        { width: 14 },
         { width: 12 },
         { width: 12 },
         { width: 24 },
@@ -937,11 +933,10 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(
         { width: 26 },
         { width: 40 },
         { width: 26 },
+        { width: 32 },
         { width: 16 },
         { width: 20 },
     ];
-
-    const blank = (n: number) => Array.from({ length: n }, () => "");
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
         row.eachCell((cell, colNumber) => {
@@ -949,9 +944,9 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(
             cell.border = border;
             cell.alignment = { vertical: "middle", wrapText: true };
         });
-        row.getCell(5).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(COL_SECCION).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(5).font = { bold: true };
+        if (nivel === 0) row.getCell(2).font = { bold: true };
     };
 
     let totalDataRows = 0;
@@ -977,18 +972,25 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(
         const decoded = parseEncuestaEvaluacionesJson(r.evaluaciones);
         const conoceTxt = decoded.kind === "form" ? (decoded.know_process ? "Sí" : "No") : "";
 
+        /** Formato legado: no hay secciones, las preguntas son directas de la encuesta → se agrupan aquí. */
+        let rootPreguntas = "";
+        let rootRespuestas = "";
+        if (decoded.kind === "legacy") {
+            rootPreguntas = decoded.items.map((item) => String((item as any)?.question ?? "").trim()).join(";");
+            rootRespuestas = decoded.items.map((item) => String((item as any)?.result ?? (item as any)?.value ?? "")).join(";");
+        }
+
         const rootRow = addMainRow(wsMain, [
-            String(r.id),
-            "",
-            0,
-            "Encuesta",
             ...general,
             "Ver evaluaciones",
             "Ver firma",
             String(r.observaciones ?? "").slice(0, 5000),
             conoceTxt,
-            ...blank(3),
-            cambio?.cedula ?? "",
+            "",
+            rootPreguntas,
+            rootRespuestas,
+            "",
+            cambio?.nombreCompleto ?? "",
             cambio?.fechaHoraTexto ?? "",
         ]);
         rootRow.getCell(COL_VER_EVAL).value = { text: "Ver evaluaciones", hyperlink: `#'Detalles'!A${evRow}` };
@@ -998,97 +1000,53 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(
         styleDataRow(rootRow, 0);
         totalDataRows += 1;
 
-        if (decoded.kind === "legacy") {
-            decoded.items.forEach((item, idx) => {
-                const q = String((item as any)?.question ?? "").trim();
-                const v = (item as any)?.result ?? (item as any)?.value ?? "";
-                const row = addMainRow(wsMain, [
-                    `${r.id}.q${idx + 1}`,
-                    String(r.id),
-                    1,
-                    "Pregunta",
-                    ...general,
-                    ...blank(4),
-                    "",
-                    q,
-                    String(v ?? ""),
-                    ...blank(2),
-                ]);
-                styleDataRow(row, 1);
-                totalDataRows += 1;
-            });
-        } else if (decoded.kind === "form") {
+        if (decoded.kind === "form") {
             decoded.form.forEach((sec, secIdx) => {
                 const secObj = sec as Record<string, unknown>;
                 const secTitle = String(secObj.section_title ?? "").trim() || `Sección ${secIdx + 1}`;
-                const secId = `${r.id}.s${secIdx + 1}`;
                 const globalSec = isGlobalSectionTitle(secTitle);
+                const questions = Array.isArray(secObj.questions) ? secObj.questions : [];
+                /** Preguntas y respuestas de la sección: agrupadas y separadas por ";" en la misma fila. */
+                const preguntasTxt = questions.map((q) => String((q as Record<string, unknown>)?.question ?? "").trim()).join(";");
+                const respuestasTxt = questions
+                    .map((q) => {
+                        const qRow = q as Record<string, unknown>;
+                        const apply = coerceQuestionApply(qRow.apply);
+                        const val = apply && Number.isFinite(Number(qRow.value)) ? Number(qRow.value) : 0;
+                        return apply ? likertLabel5(val, globalSec) : "No aplica";
+                    })
+                    .join(";");
+                const secObs = String(secObj.observations ?? "").trim();
+
                 const secRow = addMainRow(wsMain, [
-                    secId,
-                    String(r.id),
-                    1,
-                    "Sección",
                     ...general,
-                    ...blank(4),
+                    "",
+                    "",
+                    "",
+                    "",
                     secTitle,
+                    preguntasTxt,
+                    respuestasTxt,
+                    secObs,
                     "",
                     "",
-                    ...blank(2),
                 ]);
                 styleDataRow(secRow, 1);
                 totalDataRows += 1;
-
-                const questions = Array.isArray(secObj.questions) ? secObj.questions : [];
-                questions.forEach((q, qIdx) => {
-                    const qRow = q as Record<string, unknown>;
-                    const qt = String(qRow.question ?? "").trim();
-                    const apply = coerceQuestionApply(qRow.apply);
-                    const val = apply && Number.isFinite(Number(qRow.value)) ? Number(qRow.value) : 0;
-                    const label = apply ? likertLabel5(val, globalSec) : "No aplica";
-                    const row = addMainRow(wsMain, [
-                        `${secId}.q${qIdx + 1}`,
-                        secId,
-                        2,
-                        "Pregunta",
-                        ...general,
-                        ...blank(5),
-                        qt,
-                        label,
-                        ...blank(2),
-                    ]);
-                    styleDataRow(row, 2);
-                    totalDataRows += 1;
-                });
-
-                const secObs = String(secObj.observations ?? "").trim();
-                if (secObs) {
-                    const row = addMainRow(wsMain, [
-                        `${secId}.obs`,
-                        secId,
-                        2,
-                        "Observaciones sección",
-                        ...general,
-                        ...blank(5),
-                        "Observaciones",
-                        secObs,
-                        ...blank(2),
-                    ]);
-                    styleDataRow(row, 2);
-                    totalDataRows += 1;
-                }
             });
         } else if (decoded.kind === "raw" && decoded.text.trim()) {
             const row = addMainRow(wsMain, [
-                `${r.id}.raw`,
-                String(r.id),
-                1,
-                "Contenido no estructurado",
                 ...general,
-                ...blank(4),
                 "",
+                "",
+                "",
+                "",
+                "Contenido no estructurado",
                 "",
                 decoded.text.slice(0, 5000),
-                ...blank(2),
+                "",
+                "",
+                "",
             ]);
             styleDataRow(row, 1);
             totalDataRows += 1;

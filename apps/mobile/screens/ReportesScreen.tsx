@@ -1681,6 +1681,7 @@ export default function ReportesScreen() {
   const [modalMqMedioRecepcion, setModalMqMedioRecepcion] = useState<string>('todos');
   const [modalMqTipoQueja, setModalMqTipoQueja] = useState<string>('todos');
   const [modalMqNivelQueja, setModalMqNivelQueja] = useState<string>('todos');
+  const [modalActTipoTurno, setModalActTipoTurno] = useState<'todos' | 'D' | 'M' | 'N'>('todos');
   const [modalEjecutivoSearch, setModalEjecutivoSearch] = useState('');
   const [modalEjecutivoResults, setModalEjecutivoResults] = useState<StructureLite[]>([]);
   const [modalEjecutivoSelected, setModalEjecutivoSelected] = useState<StructureLite[]>([]);
@@ -1945,6 +1946,7 @@ export default function ReportesScreen() {
     setModalMqMedioRecepcion('todos');
     setModalMqTipoQueja('todos');
     setModalMqNivelQueja('todos');
+    setModalActTipoTurno('todos');
     setModalEjecutivoSearch('');
     setModalEjecutivoResults([]);
     setModalEjecutivoSelected([]);
@@ -3897,6 +3899,9 @@ export default function ReportesScreen() {
           if (modalMqTipoQueja !== 'todos') mf.tipoQueja = modalMqTipoQueja;
           if (modalMqNivelQueja !== 'todos') mf.nivelQueja = modalMqNivelQueja;
         }
+        if (formModulo === MODULO_ACTIVIDADES) {
+          if (modalActTipoTurno !== 'todos') mf.tipoTurno = modalActTipoTurno;
+        }
         if (formModulo === MODULO_INCIDENTES || formModulo === MODULO_CHECKLIST_SUPERVISION) {
           moveCreadoRangeToFechaReporte(mf);
           mf.ejecutivoCuentaIds = modalEjecutivoSelected.map((x) => x.id);
@@ -4422,6 +4427,9 @@ export default function ReportesScreen() {
           if (modalMqMedioRecepcion !== 'todos') moduleFilters.medioRecepcionQueja = modalMqMedioRecepcion;
           if (modalMqTipoQueja !== 'todos') moduleFilters.tipoQueja = modalMqTipoQueja;
           if (modalMqNivelQueja !== 'todos') moduleFilters.nivelQueja = modalMqNivelQueja;
+        }
+        if (formModulo === MODULO_ACTIVIDADES) {
+          if (modalActTipoTurno !== 'todos') moduleFilters.tipoTurno = modalActTipoTurno;
         }
         if (formModulo === MODULO_INCIDENTES || formModulo === MODULO_CHECKLIST_SUPERVISION) {
           moveCreadoRangeToFechaReporte(moduleFilters);
@@ -10971,6 +10979,23 @@ export default function ReportesScreen() {
                           <Picker.Item label="Leve" value="Leve" color="#000000" />
                           <Picker.Item label="Moderada" value="Moderada" color="#000000" />
                           <Picker.Item label="Grave" value="Grave" color="#000000" />
+                        </Picker>
+                      </View>
+                    </>
+                  ) : null}
+                  {formModulo === MODULO_ACTIVIDADES ? (
+                    <>
+                      <ThemedText style={styles.label}>Tipo de turno</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={modalActTipoTurno}
+                          onValueChange={(v) => setModalActTipoTurno(v as 'todos' | 'D' | 'M' | 'N')}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Todos" value="todos" color="#000000" />
+                          <Picker.Item label="Diurno" value="D" color="#000000" />
+                          <Picker.Item label="Mixto" value="M" color="#000000" />
+                          <Picker.Item label="Nocturno" value="N" color="#000000" />
                         </Picker>
                       </View>
                     </>

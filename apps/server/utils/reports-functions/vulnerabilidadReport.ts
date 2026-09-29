@@ -238,14 +238,10 @@ export async function buildVulnerabilidadExcelConsolidado(
         rows.map((r) => Number(r.id)),
     );
 
-    /** Cuadrícula jerárquica: Registro (nivel 0) → Sección de la boleta (nivel 1) → Ítem de la sección (nivel 2); Métrica es hermana de Sección (nivel 1). */
-    main.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
+    /** Cada registro (boleta de apreciación de vulnerabilidad) es una sola fila; los ítems de cada
+     * sección de la boleta y las métricas se aplanan en columnas propias, uniendo todos los valores
+     * de cada registro con ";". */
     const headers = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Registro",
         "Empresa",
         "Cliente",
@@ -259,15 +255,16 @@ export async function buildVulnerabilidadExcelConsolidado(
         "Ver boleta",
         "Ver métricas",
         "Observaciones",
-        "Sección / Nivel vulnerabilidad",
-        "Ítem (etiqueta)",
-        "Ítem (respuesta)",
-        "Métrica",
+        "Ítems (sección)",
+        "Ítems (etiqueta)",
+        "Ítems (respuesta)",
+        "Nivel de vulnerabilidad",
+        "Métricas de vulnerabilidad",
         "Usuario modifica",
         "Fecha y hora modifica",
     ];
-    const COL_VER_BOLETA = 15;
-    const COL_VER_METRICAS = 16;
+    const COL_VER_BOLETA = headers.indexOf("Ver boleta") + 2;
+    const COL_VER_METRICAS = headers.indexOf("Ver métricas") + 2;
 
     applyConsolidadoReportBanner(main, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
 
@@ -281,10 +278,6 @@ export async function buildVulnerabilidadExcelConsolidado(
     });
     main.columns = [
         { width: 3 },
-        { width: 12 },
-        { width: 14 },
-        { width: 8 },
-        { width: 22 },
         { width: 12 },
         { width: 30 },
         { width: 26 },
@@ -301,6 +294,7 @@ export async function buildVulnerabilidadExcelConsolidado(
         { width: 28 },
         { width: 34 },
         { width: 22 },
+        { width: 18 },
         { width: 34 },
         { width: 16 },
         { width: 20 },
@@ -361,25 +355,37 @@ export async function buildVulnerabilidadExcelConsolidado(
     }
     details.columns = [{ width: 48 }, { width: 18 }, { width: 18 }, { width: 18 }];
 
-    const blank = (n: number) => Array.from({ length: n }, () => "");
-
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((c, colNumber) => {
             if (colNumber === 1) return;
             c.border = borderThin;
             c.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
         });
-        row.getCell(5).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
-        row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(5).font = { bold: true };
+        row.height = 22;
     };
+
+    /** Todos los ítems/métricas de 1 registro se unen en 1 sola fila, separados por punto y coma. */
+    const joinDetalle = (detalleRows: Array<Record<string, unknown>>, key: string): string =>
+        detalleRows.map((item) => String(item?.[key] ?? "")).join(";");
 
     let totalDataRows = 0;
     for (const r of rows) {
         const dr = detailStartById.get(Number(r.id)) ?? 1;
         const cambio = cambiosByRegistro.get(Number(r.id));
-        const cambioVals = [cambio?.cedula ?? "", cambio?.fechaHoraTexto ?? ""];
-        const general = [
+
+        const sections = parseBoletaSections(r.boleta);
+        const pctSection = sections.find((s) => s.key === "porcentaje_vulnerabilidad");
+        const itemEntries: Array<{ seccion: string; etiqueta: string; respuesta: string }> = [];
+        for (const sec of sections) {
+            if (sec.key === "porcentaje_vulnerabilidad") continue;
+            const secTitle = String(sec.title ?? "");
+            for (const item of sec.items ?? []) {
+                itemEntries.push({ seccion: secTitle, etiqueta: String(item?.label ?? ""), respuesta: String(item?.answer ?? "") });
+            }
+        }
+        const metricas = parseArrayJSON(r.metricas_vulnerablidad).map((m) => String(m ?? ""));
+
+        const rootRow = addMainRow(main, [
             String(r.id),
             r.empresa_nombre,
             r.cliente_nombre,
@@ -390,96 +396,23 @@ export async function buildVulnerabilidadExcelConsolidado(
             formatDateOnlyDMY(r.fecha),
             formatTimeOnlyHMS(r.fecha),
             r.nombre_solicitante ?? "",
-        ];
-
-        const rootRow = addMainRow(main, [
-            String(r.id),
-            "",
-            0,
-            "Registro",
-            ...general,
             "Ver boleta",
             "Ver métricas",
             r.observaciones ?? "",
-            ...blank(4),
-            ...cambioVals,
+            joinDetalle(itemEntries, "seccion"),
+            joinDetalle(itemEntries, "etiqueta"),
+            joinDetalle(itemEntries, "respuesta"),
+            String(pctSection?.vulnerabilityLevel ?? ""),
+            metricas.join(";"),
+            cambio?.nombreCompleto ?? "",
+            cambio?.fechaHoraTexto ?? "",
         ]);
-        rootRow.getCell(COL_VER_BOLETA + 1).value = { text: "Ver boleta", hyperlink: `#'Detalles'!A${dr}` };
-        rootRow.getCell(COL_VER_METRICAS + 1).value = { text: "Ver métricas", hyperlink: `#'Detalles'!A${dr}` };
-        rootRow.getCell(COL_VER_BOLETA + 1).font = { color: { argb: "FF0563C1" }, underline: true };
-        rootRow.getCell(COL_VER_METRICAS + 1).font = { color: { argb: "FF0563C1" }, underline: true };
-        styleDataRow(rootRow, 0);
+        rootRow.getCell(COL_VER_BOLETA).value = { text: "Ver boleta", hyperlink: `#'Detalles'!A${dr}` };
+        rootRow.getCell(COL_VER_METRICAS).value = { text: "Ver métricas", hyperlink: `#'Detalles'!A${dr}` };
+        rootRow.getCell(COL_VER_BOLETA).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(COL_VER_METRICAS).font = { color: { argb: "FF0563C1" }, underline: true };
+        styleDataRow(rootRow);
         totalDataRows += 1;
-
-        for (const sec of parseBoletaSections(r.boleta)) {
-            const secTitle = String(sec.title ?? "");
-            const secRow = addMainRow(main, [
-                `${r.id}.s${sec.key ?? secTitle}`.slice(0, 60) || `${r.id}.s${totalDataRows}`,
-                String(r.id),
-                1,
-                "Sección",
-                ...general,
-                ...blank(3),
-                secTitle,
-                "",
-                "",
-                "",
-                ...cambioVals,
-            ]);
-            styleDataRow(secRow, 1);
-            totalDataRows += 1;
-
-            if (sec.key === "porcentaje_vulnerabilidad") {
-                const itemRow = addMainRow(main, [
-                    `${r.id}.s${sec.key}.i1`,
-                    `${r.id}.s${sec.key}`.slice(0, 60),
-                    2,
-                    "Ítem",
-                    ...general,
-                    ...blank(3),
-                    "",
-                    "Nivel de vulnerabilidad",
-                    String(sec.vulnerabilityLevel ?? ""),
-                    "",
-                    ...cambioVals,
-                ]);
-                styleDataRow(itemRow, 2);
-                totalDataRows += 1;
-                continue;
-            }
-            (sec.items ?? []).forEach((item, idx) => {
-                const itemRow = addMainRow(main, [
-                    `${r.id}.s${sec.key ?? secTitle}.i${idx + 1}`.slice(0, 60),
-                    `${r.id}.s${sec.key ?? secTitle}`.slice(0, 60),
-                    2,
-                    "Ítem",
-                    ...general,
-                    ...blank(3),
-                    "",
-                    String(item?.label ?? ""),
-                    String(item?.answer ?? ""),
-                    "",
-                    ...cambioVals,
-                ]);
-                styleDataRow(itemRow, 2);
-                totalDataRows += 1;
-            });
-        }
-
-        parseArrayJSON(r.metricas_vulnerablidad).forEach((m, idx) => {
-            const row = addMainRow(main, [
-                `${r.id}.m${idx + 1}`,
-                String(r.id),
-                1,
-                "Métrica",
-                ...general,
-                ...blank(6),
-                String(m ?? ""),
-                ...cambioVals,
-            ]);
-            styleDataRow(row, 1);
-            totalDataRows += 1;
-        });
     }
     main.autoFilter = {
         from: { row: 12, column: 2 },

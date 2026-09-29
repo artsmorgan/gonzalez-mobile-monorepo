@@ -292,7 +292,7 @@ export async function buildDocumentosEntregadosExcelConsolidado(
         const row = addMainRow(wsMain, [
             r.id, formatDateOnlyDMY(r.fecha), r.empresa_nombre, r.cliente_nombre, r.division_nombre, r.contrato_nombre, r.corpo_nombre, r.puesto_nombre,
             r.tipo_documento, r.nombre_oficial_entrega, r.nombre_oficial_recibe, r.descripcion, "",
-            cambio?.cedula ?? "", cambio?.fechaHoraTexto ?? "",
+            cambio?.nombreCompleto ?? "", cambio?.fechaHoraTexto ?? "",
         ]);
         row.getCell(COL_VER_FIRMA).value = { text: "Ver firma", hyperlink: `#'Firmas'!A${anchor}` };
         row.getCell(COL_VER_FIRMA).font = { color: { argb: "FF0563C1" }, underline: true };

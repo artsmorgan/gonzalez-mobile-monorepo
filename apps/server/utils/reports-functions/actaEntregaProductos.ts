@@ -3,6 +3,12 @@ import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type ActaEntregaModuleFilters = {
     creadoDesde?: string | null;
@@ -236,8 +242,12 @@ export async function queryActaEntregaProductos(
     return sorted;
 }
 
-export async function buildActaEntregaExcelBuffer(rows: any[]): Promise<Buffer> {
-    return buildActaEntregaExcelBufferByType(rows, "Consolidado"); // Consolidado
+export async function buildActaEntregaExcelBuffer(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> {
+    return buildActaEntregaExcelBufferByType(rows, "Consolidado", undefined, reportDb, bannerMeta); // Consolidado
 }
 
 async function resolveLogoPathByEmpresaId(empresaId: number): Promise<string | null> {
@@ -285,6 +295,8 @@ export async function buildActaEntregaExcelBufferByType(
     rows: any[],
     reportType: ActaEntregaReportType,
     reportName?: string,
+    reportDb?: ReportDataAccess,
+    bannerMeta?: ConsolidadoBannerMeta,
 ): Promise<Buffer> {
     if (reportType === "Individual") {
         const workbook = new ExcelJS.Workbook();
@@ -534,14 +546,7 @@ export async function buildActaEntregaExcelBufferByType(
         right: { style: "thin" },
     };
 
-    /** Cuadrícula jerárquica: cada fila es el acta (nivel 0) o uno de sus ítems de `detalle` (nivel 1). */
-    main.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
     const mainHeaders = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Acta",
         "Empresa",
         "Cliente",
@@ -559,24 +564,29 @@ export async function buildActaEntregaExcelBufferByType(
         "Ver detalle",
         "Ver firma entrega",
         "Ver firma recibe",
-        "Descripción (detalle)",
-        "Unidad medida (detalle)",
-        "Cantidad (detalle)",
-        "Devolución (detalle)",
-        "Faltantes (detalle)",
+        "Descripción",
+        "Unidad de medida",
+        "Cantidad",
+        "Devolución",
+        "Faltantes",
+        "Usuario modifica",
+        "Fecha y hora modifica",
     ];
-    const COL_VER_DETALLE = 19;
-    const COL_VER_FIRMA_ENTREGA = 20;
-    const COL_VER_FIRMA_RECIBE = 21;
+    const COL_VER_DETALLE = mainHeaders.indexOf("Ver detalle") + 2;
+    const COL_VER_FIRMA_ENTREGA = mainHeaders.indexOf("Ver firma entrega") + 2;
+    const COL_VER_FIRMA_RECIBE = mainHeaders.indexOf("Ver firma recibe") + 2;
 
-    const h = main.addRow(mainHeaders);
+    applyConsolidadoReportBanner(main, bannerMeta!, { headerFillArgb: "FFD9EAF7", mainColumnCount: mainHeaders.length });
+
+    const h = addMainRow(main, mainHeaders);
     h.font = { bold: true };
     h.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-    h.eachCell((c) => {
-        c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } };
-        c.border = borderThin;
-    });
-    main.getRow(1).height = 28;
+    for (let c = 2; c <= mainHeaders.length + 1; c++) {
+        const cell = h.getCell(c);
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } };
+        cell.border = borderThin;
+    }
+    h.height = 28;
     // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
     // se ven los bordes que dibujamos manualmente.
     for (const sheet of [main, details]) {
@@ -584,10 +594,7 @@ export async function buildActaEntregaExcelBufferByType(
     }
     /** Anchos amplios y sin agrupación de columnas: el filtrado va en la fila de encabezado (autoFilter). */
     main.columns = [
-        { width: 12 },
-        { width: 14 },
-        { width: 8 },
-        { width: 20 },
+        { width: 3 },
         { width: 12 },
         { width: 38 },
         { width: 36 },
@@ -605,11 +612,13 @@ export async function buildActaEntregaExcelBufferByType(
         { width: 22 },
         { width: 22 },
         { width: 22 },
-        { width: 32 },
-        { width: 18 },
-        { width: 14 },
-        { width: 14 },
-        { width: 14 },
+        { width: 40 },
+        { width: 22 },
+        { width: 16 },
+        { width: 16 },
+        { width: 16 },
+        { width: 26 },
+        { width: 20 },
     ];
 
     const detailsStartById = new Map<number, number>();
@@ -686,25 +695,34 @@ export async function buildActaEntregaExcelBufferByType(
         { width: 20 },
     ];
 
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
-        row.eachCell((c) => {
+    const styleDataRow = (row: ExcelJS.Row) => {
+        row.eachCell((c, colNumber) => {
+            if (colNumber === 1) return;
             c.border = borderThin;
             c.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
         });
-        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
-        row.outlineLevel = nivel;
         row.height = 22;
-        if (nivel === 0) {
-            row.getCell(4).font = { bold: true };
-        }
     };
+
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb!,
+        "c_acta_entre_producto",
+        rows.map((r) => Number(r.id)),
+    );
+
+    /** Todos los ítems de `detalle` de 1 acta se unen en 1 sola fila, separados por punto y coma. */
+    const joinDetalle = (detalleRows: Array<Record<string, unknown>>, key: string): string =>
+        detalleRows.map((item) => String(item?.[key] ?? "")).join(";");
 
     let totalDataRows = 0;
     for (const r of rows) {
         const detailRow = detailsStartById.get(Number(r.id)) ?? 1;
         const fechaTxt = r.fecha instanceof Date ? r.fecha.toISOString() : String(r.fecha ?? "");
-        const general = [
-            String(r.id),
+        const detalleRows = parseDetalleArray(r.detalle);
+        const cambio = cambiosByRegistro.get(Number(r.id));
+
+        const rootRow = addMainRow(main, [
+            r.id,
             r.empresa_nombre,
             r.cliente_nombre,
             r.division_id,
@@ -718,22 +736,16 @@ export async function buildActaEntregaExcelBufferByType(
             r.cedula_entrega,
             r.nombre_recibe,
             r.cedula_recibe,
-        ];
-
-        const rootRow = main.addRow([
-            String(r.id),
-            "",
-            0,
-            "Acta",
-            ...general,
             "Ver detalle",
             "Ver firma entrega",
             "Ver firma recibe",
-            "",
-            "",
-            "",
-            "",
-            "",
+            joinDetalle(detalleRows, "descripcion"),
+            joinDetalle(detalleRows, "unidad_medida"),
+            joinDetalle(detalleRows, "cantidad"),
+            joinDetalle(detalleRows, "devolucion"),
+            joinDetalle(detalleRows, "faltantes"),
+            cambio?.nombreCompleto ?? "",
+            cambio?.fechaHoraTexto ?? "",
         ]);
         rootRow.getCell(COL_VER_DETALLE).value = { text: "Ver detalle", hyperlink: `#'Detalles'!A${detailRow}` };
         rootRow.getCell(COL_VER_FIRMA_ENTREGA).value = { text: "Ver firma entrega", hyperlink: `#'Detalles'!A${detailRow}` };
@@ -741,33 +753,12 @@ export async function buildActaEntregaExcelBufferByType(
         rootRow.getCell(COL_VER_DETALLE).font = { color: { argb: "FF0563C1" }, underline: true };
         rootRow.getCell(COL_VER_FIRMA_ENTREGA).font = { color: { argb: "FF0563C1" }, underline: true };
         rootRow.getCell(COL_VER_FIRMA_RECIBE).font = { color: { argb: "FF0563C1" }, underline: true };
-        styleDataRow(rootRow, 0);
+        styleDataRow(rootRow);
         totalDataRows += 1;
-
-        const detalleRows = parseDetalleArray(r.detalle);
-        detalleRows.forEach((item, idx) => {
-            const itemRow = main.addRow([
-                `${r.id}.d${idx + 1}`,
-                String(r.id),
-                1,
-                "Detalle producto",
-                ...general,
-                "",
-                "",
-                "",
-                String(item.descripcion ?? ""),
-                String(item.unidad_medida ?? ""),
-                String(item.cantidad ?? ""),
-                String(item.devolucion ?? ""),
-                String(item.faltantes ?? ""),
-            ]);
-            styleDataRow(itemRow, 1);
-            totalDataRows += 1;
-        });
     }
     main.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, totalDataRows + 1), column: mainHeaders.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, totalDataRows + 12), column: mainHeaders.length + 1 },
     };
 
     const ab = await workbook.xlsx.writeBuffer();

@@ -16,6 +16,7 @@ import { ThemedView } from '../components/ThemedView';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import RecordAudioButton from '@/components/RecordAudioButton';
 import AudioPreviewModal from '@/components/AudioPreviewModal';
+import { ZoomableThumbnailImage, FullscreenMediaModal } from '@/components/FullscreenMediaViewer';
 import { ThemedText } from '../components/ThemedText';
 import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
@@ -3982,10 +3983,8 @@ export default function JobManualsScreen() {
                   <ThemedView style={styles.filesList}>
                     {imageFiles.map(file => (
                       <ThemedView key={file.id} style={styles.fileRow}>
-                        <Image
-                          source={{
-                            uri: `data:image/${file.extension || 'jpeg'};base64,${file.base64}`,
-                          }}
+                        <ZoomableThumbnailImage
+                          uri={`data:image/${file.extension || 'jpeg'};base64,${file.base64}`}
                           style={styles.filePreviewImage}
                           resizeMode="cover"
                         />
@@ -5504,8 +5503,8 @@ export default function JobManualsScreen() {
                         <ThemedView style={styles.filesList}>
                           {viewImageFiles.map(file => (
                             <ThemedView key={file.id} style={styles.fileRow}>
-                              <Image
-                                source={{ uri: `data:image/${file.extension || 'jpeg'};base64,${file.base64}` }}
+                              <ZoomableThumbnailImage
+                                uri={`data:image/${file.extension || 'jpeg'};base64,${file.base64}`}
                                 style={styles.filePreviewImage}
                                 resizeMode="cover"
                               />
@@ -6863,6 +6862,7 @@ function ManualAudioPlayer({ sourceUrl, label }: { sourceUrl: string; label?: st
 // Image viewer that adjusts container based on image dimensions
 function ManualImageViewer({ imageUrl }: { imageUrl: string }) {
   const [containerStyle, setContainerStyle] = useState<any>(styles.viewerImage);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const maxContainerWidth = Dimensions.get('window').width - 64; // Ancho máximo del contenedor (pantalla - padding del modal)
 
   const handleImageLoad = (event: any) => {
@@ -6904,12 +6904,22 @@ function ManualImageViewer({ imageUrl }: { imageUrl: string }) {
   };
 
   return (
-    <Image
-      source={{ uri: imageUrl }}
-      style={containerStyle}
-      resizeMode="contain"
-      onLoad={handleImageLoad}
-    />
+    <>
+      <TouchableOpacity activeOpacity={0.85} onPress={() => setIsFullscreen(true)}>
+        <Image
+          source={{ uri: imageUrl }}
+          style={containerStyle}
+          resizeMode="contain"
+          onLoad={handleImageLoad}
+        />
+      </TouchableOpacity>
+      <FullscreenMediaModal
+        visible={isFullscreen}
+        onClose={() => setIsFullscreen(false)}
+        type="image"
+        uri={imageUrl}
+      />
+    </>
   );
 }
 

@@ -31,6 +31,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import SignatureScreen from 'react-native-signature-canvas';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import PuestoSalidaPicker, { type PuestoSalidaOption } from '@/components/PuestoSalidaPicker';
+import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 
 type VisitorsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Visitors'>;
 
@@ -3132,8 +3133,8 @@ export default function VisitorsScreen() {
           <ThemedText style={styles.label}>Foto de Cédula (Opcional)</ThemedText>
           {visitor.foto_cedula ? (
             <ThemedView style={styles.photoPreviewContainer}>
-              <Image
-                source={{ uri: visitor.foto_cedula }}
+              <ZoomableThumbnailImage
+                uri={visitor.foto_cedula}
                 style={styles.photoPreview}
                 resizeMode="contain"
               />
@@ -3319,8 +3320,8 @@ export default function VisitorsScreen() {
                 {(() => {
                   const cedulaUri = resolveVisitorCedulaListUri(visitor);
                   return cedulaUri ? (
-                    <Image
-                      source={{ uri: cedulaUri }}
+                    <ZoomableThumbnailImage
+                      uri={cedulaUri}
                       style={styles.fotoCedulaImage}
                       resizeMode="contain"
                     />

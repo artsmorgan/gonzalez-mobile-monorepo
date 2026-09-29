@@ -790,14 +790,14 @@ export async function buildRegistroInduccionGeneralExcelConsolidado(
         rows.map((r) => Number(r.id)),
     );
 
-    /** Cuadrícula jerárquica: Registro (nivel 0) → Sección de tema (nivel 1, de `temas_a_tratar`) → Ítem del tema (nivel 2); Colaborador / Capacitador son hermanos de Sección (nivel 1). */
+    /**
+     * Cuadrícula jerárquica: Registro (nivel 0) → Sección de tema (nivel 1, de `temas_a_tratar`, con sus
+     * ítems agrupados y unidos con ";" en la misma fila, sin fila propia por ítem); Colaborador /
+     * Capacitador son hermanos de Sección (nivel 1).
+     */
     wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
 
     const headers = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Registro",
         "Creado en (fecha)",
         "Creado en (hora)",
@@ -817,8 +817,8 @@ export async function buildRegistroInduccionGeneralExcelConsolidado(
         "Ver capacitadores",
         "Firma responsable",
         "Sección (tema)",
-        "Tema",
-        "Marcado (tema)",
+        "Ítems (tema)",
+        "Marcado (ítems)",
         "Nombre (colaborador)",
         "Cédula (colaborador)",
         "Puesto (colaborador)",
@@ -833,7 +833,7 @@ export async function buildRegistroInduccionGeneralExcelConsolidado(
     const cC = headers.indexOf("Ver colaboradores") + 2;
     const cK = headers.indexOf("Ver capacitadores") + 2;
     const cF = headers.indexOf("Firma responsable") + 2;
-    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 2;
+    const COL_ID_REGISTRO = headers.indexOf("ID Registro") + 2;
     const linkCols = new Set([cT, cC, cK]);
 
     applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
@@ -854,9 +854,9 @@ export async function buildRegistroInduccionGeneralExcelConsolidado(
                 cell.alignment = { vertical: "top", wrapText: true };
             }
         });
-        row.getCell(COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(COL_ID_REGISTRO).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+        if (nivel === 0) row.getCell(COL_ID_REGISTRO).font = { bold: true };
     };
 
     for (const r of rows) {
@@ -877,14 +877,11 @@ export async function buildRegistroInduccionGeneralExcelConsolidado(
             [headers.indexOf("Sucursal") + 1]: r.corpo_nombre,
             [headers.indexOf("Puesto") + 1]: r.puesto_nombre,
             [headers.indexOf("Empleado (creador)") + 1]: r.empleado_creador_nombre,
-            [headers.indexOf("Usuario modifica") + 1]: cambio?.cedula ?? "",
+            [headers.indexOf("Usuario modifica") + 1]: cambio?.nombreCompleto ?? "",
             [headers.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
         };
 
         const rootValues = new Array(headers.length).fill("");
-        rootValues[0] = String(r.id);
-        rootValues[2] = 0;
-        rootValues[3] = "Registro";
         for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
         rootValues[cF - 2] = excelCellString(r.firma_responsable);
         const rootRow = addMainRow(wsMain, rootValues);
@@ -896,74 +893,48 @@ export async function buildRegistroInduccionGeneralExcelConsolidado(
         rootRow.getCell(cK).font = { color: { argb: "FF0563C1" }, underline: true };
         styleDataRow(rootRow, 0);
 
+        // Sección de tema: 1 fila por sección; sus ítems se unen en la misma fila, separados por ";".
         const sections = parseTemasSectionsForDetalle(String(r.temas_a_tratar ?? "{}"));
-        sections.forEach((sec, secIdx) => {
-            const secId = `${r.id}.tsec${secIdx + 1}`;
+        sections.forEach((sec) => {
             const secValues = new Array(headers.length).fill("");
-            secValues[0] = secId;
-            secValues[1] = String(r.id);
-            secValues[2] = 1;
-            secValues[3] = "Sección de tema";
             for (const [col, val] of Object.entries(general)) secValues[Number(col) - 1] = val;
             secValues[headers.indexOf("Sección (tema)")] = sec.text;
-            const secRow = wsMain.addRow(secValues);
+            secValues[headers.indexOf("Ítems (tema)")] = sec.items.map((it) => it.text).join(";");
+            secValues[headers.indexOf("Marcado (ítems)")] = sec.items.map((it) => (it.checked ? "Sí" : "No")).join(";");
+            const secRow = addMainRow(wsMain, secValues);
             styleDataRow(secRow, 1);
-
-            sec.items.forEach((it, itIdx) => {
-                const values = new Array(headers.length).fill("");
-                values[0] = `${secId}.item${itIdx + 1}`;
-                values[1] = secId;
-                values[2] = 2;
-                values[3] = "Ítem de tema";
-                for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-                values[headers.indexOf("Tema")] = it.text;
-                values[headers.indexOf("Marcado (tema)")] = it.checked ? "Sí" : "No";
-                const row = wsMain.addRow(values);
-                styleDataRow(row, 2);
-            });
         });
 
         const colabs = resolvePersonasForReport(r, "colaboradores");
-        colabs.forEach((p, idx) => {
+        colabs.forEach((p) => {
             const values = new Array(headers.length).fill("");
-            values[0] = `${r.id}.colab${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = "Colaborador";
             for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
             values[headers.indexOf("Nombre (colaborador)")] = String(p?.nombre ?? "");
             values[headers.indexOf("Cédula (colaborador)")] = String(p?.cedula ?? "");
             values[headers.indexOf("Puesto (colaborador)")] = String(p?.puesto_text ?? "");
             values[headers.indexOf("Tiene firma (colaborador)")] = p?.firma_data_uri || p?.firma ? "Sí" : "No";
-            const row = wsMain.addRow(values);
+            const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
 
         const caps = resolvePersonasForReport(r, "capacitadores");
-        caps.forEach((p, idx) => {
+        caps.forEach((p) => {
             const values = new Array(headers.length).fill("");
-            values[0] = `${r.id}.cap${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = "Capacitador";
             for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
             values[headers.indexOf("Nombre (capacitador)")] = String(p?.nombre ?? "");
             values[headers.indexOf("Cédula (capacitador)")] = String(p?.cedula ?? "");
             values[headers.indexOf("Tiene firma (capacitador)")] = p?.firma_data_uri || p?.firma ? "Sí" : "No";
-            const row = wsMain.addRow(values);
+            const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
     }
 
     wsMain.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, wsMain.rowCount), column: headers.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, wsMain.rowCount), column: headers.length + 1 },
     };
     wsMain.columns = [
-        { width: 12 },
-        { width: 14 },
-        { width: 8 },
-        { width: 20 },
+        { width: 3 },
         { width: 10 },
         { width: 20 },
         { width: 14 },

@@ -467,7 +467,7 @@ export async function buildVisitasVehiculosExcelConsolidado(
             excelCellString(r.responsable_label),
             formatDateOnlyDMY(r.created_at),
             formatTimeOnlyHMS(r.created_at),
-            cambio?.cedula ?? "",
+            cambio?.nombreCompleto ?? "",
             cambio?.fechaHoraTexto ?? "",
         ]);
         row.eachCell((cell, colNumber) => {

@@ -26,6 +26,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       frecuencia,
       es_revision_equipo,
       firma_responsable,
+      tipo_turno,
     } = await req.json();
 
     if (
@@ -69,6 +70,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
           frecuencia,
           es_revision_equipo,
           firma_responsable,
+          tipo_turno: tipo_turno || null,
         },
       },
     });
@@ -92,6 +94,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 fecha_fin: existing.fecha_fin,
                 frecuencia: existing.frecuencia,
                 es_revision_equipo: existing.es_revision_equipo,
+                tipo_turno: existing.tipo_turno,
               },
               after: {
                 nombre_actividad,
@@ -100,6 +103,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 fecha_fin: fecha_fin || fecha_inicio,
                 frecuencia,
                 es_revision_equipo,
+                tipo_turno: tipo_turno || null,
               },
             },
           ]),

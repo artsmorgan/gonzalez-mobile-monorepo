@@ -1,5 +1,10 @@
+import { Platform } from 'react-native';
 import { Directory, File, Paths } from 'expo-file-system';
+import { getContentUriAsync } from 'expo-file-system/legacy';
+import * as IntentLauncher from 'expo-intent-launcher';
+import * as Sharing from 'expo-sharing';
 import authedFetch from './authedFetch';
+import getValidAccessTokenOrLogout from './getValidAccessTokenOrLogout';
 
 export type DownloadReportFileResult =
   | { ok: true; savedUri: string; fileName: string }
@@ -306,6 +311,100 @@ export async function downloadAuthedUrlToDevice(params: {
     contentType: downloaded.contentType,
     tempPrefix: params.tempPrefix,
   });
+}
+
+export type DownloadAndShareResult =
+  | { ok: true; fileUri: string }
+  | { ok: false; cancelled: boolean; message?: string };
+
+/**
+ * Descarga de archivos grandes (p. ej. el instalador .apk) directamente al almacenamiento propio de
+ * la app vía `File.downloadFileAsync` (nativo, streaming) — a diferencia de `downloadAuthedUrlToDevice`,
+ * que pasa por `fetch` + `arrayBuffer()` y carga el archivo completo en memoria JS, agotando el heap con
+ * archivos de decenas/cientos de MB (`OutOfMemoryError` en Android).
+ *
+ * A propósito NO usa `Directory.pickDirectoryAsync()` (carpeta elegida por el usuario): en Android esas
+ * carpetas son URIs `content://`, y ninguna operación de bajo nivel de `expo-file-system` (`open`,
+ * `copy`, `FileHandle.readBytes/writeBytes`) funciona contra `content://` — solo los métodos de alto
+ * nivel (`write(bytes)`) lo soportan, y esos exigen el buffer completo en memoria. Como no hay forma de
+ * escribir por bloques dentro de una carpeta elegida por SAF, se descarga al almacenamiento propio de la
+ * app (siempre `file://`).
+ *
+ * Entrega (Android): usa `android.intent.action.INSTALL_PACKAGE` — no `ACTION_VIEW`. `ACTION_VIEW` es
+ * genérico ("ver este archivo") y lo reclama cualquier visor/gestor de archivos instalado, por lo que
+ * Android muestra un selector; y cuando hay selector, el permiso de lectura sobre el `content://` que se
+ * otorga vía `FLAG_GRANT_READ_URI_PERMISSION` a nivel de Intent NO se propaga de forma confiable a la app
+ * que el usuario termina eligiendo (ese mecanismo solo es confiable para intents explícitos a un único
+ * componente). Resultado real observado: el instalador recibía el intent pero no podía leer el archivo,
+ * y terminaba sin mostrar nada (`resultCode: 0`, sin excepción ni aviso).
+ *
+ * `ACTION_INSTALL_PACKAGE` es la acción específica de "instalar este paquete": normalmente solo la
+ * registra el instalador de paquetes del sistema, así que se resuelve a un único destino sin selector,
+ * y el permiso se propaga correctamente al no haber ambigüedad. Si ningún componente la maneja (algún
+ * OEM/ROM la bloquea o no la registra), cae a `expo-sharing`, que sí sortea el problema del selector
+ * otorgando el permiso explícitamente a cada app candidata antes de abrirlo (mismo mecanismo que usan
+ * los gestores de archivos) — con el costo de mostrar un selector en ese caso.
+ */
+export async function downloadAndShareLargeAuthedFile(params: {
+  url: string;
+  fileName: string;
+  mimeType: string;
+  dialogTitle?: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<unknown>;
+}): Promise<DownloadAndShareResult> {
+  const { url, mimeType, dialogTitle, refreshAccessToken, logout } = params;
+  const fileName = sanitizeFileName(params.fileName);
+
+  const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+  if (!token) {
+    return { ok: false, cancelled: false, message: 'Sesión no válida' };
+  }
+
+  const destFile = new File(Paths.document, fileName);
+
+  try {
+    if (destFile.exists) {
+      destFile.delete();
+    }
+    await File.downloadFileAsync(url, destFile, {
+      headers: { Authorization: `Bearer ${token}` },
+      idempotent: true,
+    });
+
+    if (Platform.OS === 'android') {
+      try {
+        const contentUri = await getContentUriAsync(destFile.uri);
+        console.log('[downloadAndShareLargeAuthedFile] contentUri:', contentUri, 'mimeType:', mimeType);
+        const intentResult = await IntentLauncher.startActivityAsync('android.intent.action.INSTALL_PACKAGE', {
+          data: contentUri,
+          flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
+          type: mimeType,
+        });
+        console.log('[downloadAndShareLargeAuthedFile] INSTALL_PACKAGE result:', JSON.stringify(intentResult));
+        return { ok: true, fileUri: destFile.uri };
+      } catch (error) {
+        // Ningún componente registra ACTION_INSTALL_PACKAGE (poco común) u otro fallo: cae a compartir.
+        console.warn(
+          '[downloadAndShareLargeAuthedFile] ACTION_INSTALL_PACKAGE failed, falling back to share:',
+          JSON.stringify(error, Object.getOwnPropertyNames(error instanceof Object ? error : {})),
+          error,
+        );
+      }
+    }
+
+    const isSharingAvailable = await Sharing.isAvailableAsync();
+    if (!isSharingAvailable) {
+      return { ok: false, cancelled: false, message: 'No hay una aplicación disponible para abrir el archivo' };
+    }
+
+    await Sharing.shareAsync(destFile.uri, { mimeType, dialogTitle });
+
+    return { ok: true, fileUri: destFile.uri };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo descargar el archivo';
+    return { ok: false, cancelled: false, message };
+  }
 }
 
 export async function downloadReportFileToDevice(params: {

@@ -51,6 +51,26 @@ function formatHourOnly(v: unknown): string {
     return s;
 }
 
+/** Igual que `formatHourOnly`, pero conserva/agrega los segundos (`HH:MM:SS`) para las horas de colaborador. */
+function formatHourOnlyHMS(v: unknown): string {
+    const s = String(v ?? "").trim();
+    if (!s) return "";
+    // Si viene como HH:mm o HH:mm:ss
+    const hm = /^(\d{2}:\d{2})(:\d{2})?$/.exec(s);
+    if (hm) return hm[2] ? `${hm[1]}${hm[2]}` : `${hm[1]}:00`;
+    // Si viene tipo ISO datetime
+    const m = /T(\d{2}:\d{2})(:\d{2})?/.exec(s);
+    if (m) return m[2] ? `${m[1]}${m[2]}` : `${m[1]}:00`;
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) {
+        const hh = String(d.getHours()).padStart(2, "0");
+        const mm = String(d.getMinutes()).padStart(2, "0");
+        const ss = String(d.getSeconds()).padStart(2, "0");
+        return `${hh}:${mm}:${ss}`;
+    }
+    return s;
+}
+
 function parseSignatureDataForExcel(dataUriOrBase64: string | null | undefined): { extension: "png" | "jpeg"; base64: string } | null {
     const d = normalizeSignatureDataUri(dataUriOrBase64);
     if (!d) return null;
@@ -297,8 +317,8 @@ export async function buildControlAsistenciaExcelConsolidado(
                 String(c?.cedula_reemplazo || ""),
                 c?.ausente ? "No" : "Sí",
                 String(c?.puesto || ""),
-                String(c?.hora_inicio || ""),
-                String(c?.hora_fin || ""),
+                formatHourOnlyHMS(c?.hora_inicio),
+                formatHourOnlyHMS(c?.hora_fin),
                 c?.firma_manual_colaborador_data_uri ? "Sí" : "No",
             ]);
             row.eachCell((cell) => {
@@ -309,14 +329,11 @@ export async function buildControlAsistenciaExcelConsolidado(
         wsDetails.addRow([]);
     }
 
-    /** Cuadrícula jerárquica: Control (nivel 0) → Colaborador (nivel 1, de `colaboradores`, enriquecido con firmas de `c_control_asistencia_empleado_firmas`). */
-    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
+    /**
+     * Todos los `colaboradores` (enriquecidos con firmas de `c_control_asistencia_empleado_firmas`) de un
+     * control se unen en la misma fila del control, separados por ";" (una columna por campo de colaborador).
+     */
     const headers = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Control",
         "Creado por",
         "Usuario modifica",
@@ -346,7 +363,7 @@ export async function buildControlAsistenciaExcelConsolidado(
         "Tiene firma (colaborador)",
     ];
     // Posición dentro de la hoja (incluye la columna de margen A que agrega `addMainRow`).
-    const COL_VER_DETALLES = 23;
+    const COL_VER_DETALLES = headers.indexOf("Ver detalles") + 2;
 
     applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
 
@@ -366,7 +383,7 @@ export async function buildControlAsistenciaExcelConsolidado(
     }
     wsMain.columns = [
         { width: 3 },
-        { width: 12 }, { width: 14 }, { width: 8 }, { width: 20 }, { width: 10 },
+        { width: 10 },
         { width: 16 }, { width: 16 }, { width: 20 },
         { width: 28 }, { width: 24 }, { width: 20 },
         { width: 28 }, { width: 28 }, { width: 24 }, { width: 14 }, { width: 12 },
@@ -375,17 +392,13 @@ export async function buildControlAsistenciaExcelConsolidado(
         { width: 24 }, { width: 14 }, { width: 24 }, { width: 16 }, { width: 12 }, { width: 24 }, { width: 12 }, { width: 12 }, { width: 16 },
     ];
 
-    const blank = (n: number) => Array.from({ length: n }, () => "");
-
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((cell, colNumber) => {
             if (colNumber === 1) return;
             cell.border = border;
             cell.alignment = { vertical: "middle", wrapText: true };
         });
-        row.getCell(5).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
-        row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(5).font = { bold: true };
+        row.getCell(2).font = { bold: true };
     };
 
     let totalDataRows = 0;
@@ -395,7 +408,7 @@ export async function buildControlAsistenciaExcelConsolidado(
         const general = [
             String(r.id),
             fmtEmpleado(empById.get(Number(r.created_by))) || String(r.created_by ?? ""),
-            cambio?.cedula ?? "",
+            cambio?.nombreCompleto ?? "",
             cambio?.fechaHoraTexto ?? "",
             r.empresa_nombre,
             r.cliente_nombre,
@@ -412,43 +425,29 @@ export async function buildControlAsistenciaExcelConsolidado(
             r.comentarios ?? "",
         ];
 
+        const cols = Array.isArray(r.colaboradores_preview) ? r.colaboradores_preview : parseColaboradores(r.colaboradores);
+        const joinCol = (mapper: (c: any) => string): string => cols.map(mapper).join(";");
+
         const rootRow = addMainRow(wsMain, [
-            String(r.id),
-            "",
-            0,
-            "Control",
             ...general,
             "Ver detalles",
-            ...blank(9),
+            joinCol((c) => String(c?.nombre_original || c?.nombre || "")),
+            joinCol((c) => String(c?.cedula || "")),
+            joinCol((c) => String(c?.nombre_reemplazo || "")),
+            joinCol((c) => String(c?.cedula_reemplazo || "")),
+            joinCol((c) => (c?.ausente ? "No" : "Sí")),
+            joinCol((c) => String(c?.puesto || "")),
+            joinCol((c) => formatHourOnlyHMS(c?.hora_inicio)),
+            joinCol((c) => formatHourOnlyHMS(c?.hora_fin)),
+            joinCol((c) => {
+                const hasFirma = !!(c?.firma_manual_colaborador_data_uri || c?.firma_manual_original_data_uri || c?.firma_manual_reemplazo_data_uri);
+                return hasFirma ? "Sí" : "No";
+            }),
         ]);
         rootRow.getCell(COL_VER_DETALLES).value = { text: "Ver detalles", hyperlink: `#'Detalles'!A${anchor}` };
         rootRow.getCell(COL_VER_DETALLES).font = { color: { argb: "FF0563C1" }, underline: true };
-        styleDataRow(rootRow, 0);
+        styleDataRow(rootRow);
         totalDataRows += 1;
-
-        const cols = Array.isArray(r.colaboradores_preview) ? r.colaboradores_preview : parseColaboradores(r.colaboradores);
-        cols.forEach((c: any, idx: number) => {
-            const hasFirma = !!(c?.firma_manual_colaborador_data_uri || c?.firma_manual_original_data_uri || c?.firma_manual_reemplazo_data_uri);
-            const row = addMainRow(wsMain, [
-                `${r.id}.col${idx + 1}`,
-                String(r.id),
-                1,
-                "Colaborador",
-                ...general,
-                "",
-                String(c?.nombre_original || c?.nombre || ""),
-                String(c?.cedula || ""),
-                String(c?.nombre_reemplazo || ""),
-                String(c?.cedula_reemplazo || ""),
-                c?.ausente ? "No" : "Sí",
-                String(c?.puesto || ""),
-                String(c?.hora_inicio || ""),
-                String(c?.hora_fin || ""),
-                hasFirma ? "Sí" : "No",
-            ]);
-            styleDataRow(row, 1);
-            totalDataRows += 1;
-        });
     }
     wsMain.autoFilter = {
         from: { row: 12, column: 2 },

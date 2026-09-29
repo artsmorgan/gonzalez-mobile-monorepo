@@ -14,6 +14,7 @@ import {
   Dimensions,
 } from 'react-native';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
+import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
@@ -158,8 +159,8 @@ const BitacoraRevisionThumbnail = React.memo(function BitacoraRevisionThumbnail(
   const isList = variant === 'list';
   return (
     <ThemedView style={isList ? styles.revisionImageWrap : styles.revisionFormImageWrap}>
-      <Image
-        source={{ uri }}
+      <ZoomableThumbnailImage
+        uri={uri}
         style={isList ? styles.revisionImagePreview : styles.revisionImagePreviewForm}
         resizeMode={isList ? 'contain' : 'cover'}
         {...(Platform.OS === 'android' ? { resizeMethod: 'resize' as const } : {})}

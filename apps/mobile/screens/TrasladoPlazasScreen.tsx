@@ -25,6 +25,7 @@ import SlideMenu from '@/components/SlideMenu';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import RecordAudioButton from '@/components/RecordAudioButton';
+import { ZoomableThumbnailImage, FullscreenVideoButton } from '@/components/FullscreenMediaViewer';
 import { useAuth } from '@/contexts/AuthContext';
 import { useFocusEffect, useNavigation }  from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -580,8 +581,8 @@ export default function TrasladoPlazasScreen() {
 
         if (isImage) {
             return (
-                <Image
-                    source={{ uri: fileUrl }}
+                <ZoomableThumbnailImage
+                    uri={fileUrl}
                     style={styles.filePreviewImage}
                     resizeMode="contain"
                     onError={(e) => {
@@ -602,9 +603,10 @@ export default function TrasladoPlazasScreen() {
 
         if (isVideo) {
             return (
-                <ThemedView style={styles.mediaBlock}>
+                <ThemedView style={[styles.mediaBlock, { position: 'relative' }]}>
                     <ThemedText style={styles.mediaLabel}>Video: {fileName}</ThemedText>
                     <VideoPlayer sourceUrl={fileUrl} />
+                    <FullscreenVideoButton uri={fileUrl} />
                 </ThemedView>
             );
         }
@@ -891,8 +893,8 @@ export default function TrasladoPlazasScreen() {
                         <ThemedText style={styles.modalFileName}>Nombre: {file.name}</ThemedText>
 
                         {isImage && (
-                            <Image
-                                source={{ uri: dataUri }}
+                            <ZoomableThumbnailImage
+                                uri={dataUri}
                                 style={styles.modalPreviewImage}
                                 resizeMode="contain"
                             />

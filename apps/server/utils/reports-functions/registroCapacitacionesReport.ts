@@ -410,14 +410,7 @@ export async function buildRegistroCapacitacionesExcelConsolidado(
         anchorPto.set(Number(r.id), a.rowPuestos);
     }
 
-    /** Cuadrícula jerárquica: Capacitación (nivel 0) → Empleado (nivel 1, `e_capacitacion_empleado`) y Puesto (nivel 1, `e_capacitacion_puesto`), hermanos. */
-    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
     const headers = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Capacitación",
         "Fecha",
         "Empresa",
@@ -428,17 +421,17 @@ export async function buildRegistroCapacitacionesExcelConsolidado(
         "Puesto",
         "Título",
         "Tipo",
-        "Resultado",
         "Responsable",
         "Ver empleados",
         "Ver puestos",
         "Empleado (código / nombre)",
         "Cédula (empleado)",
+        "Resultado (empleado)",
         "Puesto (código / nombre)",
+        "Resultado (puesto)",
     ];
     const colEmpLink = headers.indexOf("Ver empleados") + 1;
     const colPtoLink = headers.indexOf("Ver puestos") + 1;
-    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 1;
     // +1 adicional: columnas reales en la hoja (con margen de `addMainRow` en A).
     const linkCols = new Set([colEmpLink + 1, colPtoLink + 1]);
 
@@ -457,10 +450,6 @@ export async function buildRegistroCapacitacionesExcelConsolidado(
         { width: 3 },
         { width: 12 },
         { width: 14 },
-        { width: 8 },
-        { width: 20 },
-        { width: 12 },
-        { width: 14 },
         { width: 26 },
         { width: 24 },
         { width: 20 },
@@ -469,81 +458,70 @@ export async function buildRegistroCapacitacionesExcelConsolidado(
         { width: 22 },
         { width: 32 },
         { width: 14 },
-        { width: 14 },
         { width: 24 },
         { width: 16 },
         { width: 16 },
         { width: 28 },
         { width: 16 },
+        { width: 14 },
         { width: 28 },
+        { width: 14 },
     ];
 
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((cell, col) => {
             if (col === 1) return;
             cell.border = borderThin;
             if (!linkCols.has(col)) cell.alignment = { vertical: "top", wrapText: true };
         });
-        row.getCell(COL_TIPO_FILA + 1).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
-        row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(COL_TIPO_FILA + 1).font = { bold: true };
     };
+
+    /** Todos los empleados o puestos vinculados a 1 capacitación se unen en 1 sola fila, separados por punto y coma. */
+    const joinCapacitacionDetalle = <T,>(items: T[], formatter: (item: T) => string): string =>
+        items.map(formatter).join(";");
 
     for (const r of rows) {
         const re = anchorEmp.get(Number(r.id)) ?? 1;
         const rp = anchorPto.get(Number(r.id)) ?? 1;
-        const general: Record<number, unknown> = {
-            [headers.indexOf("ID Capacitación") + 1]: r.id,
-            [headers.indexOf("Fecha") + 1]: r.fecha_txt,
-            [headers.indexOf("Empresa") + 1]: r.empresa_nombre,
-            [headers.indexOf("Cliente") + 1]: r.cliente_nombre,
-            [headers.indexOf("División") + 1]: r.division_nombre,
-            [headers.indexOf("Contrato") + 1]: r.contrato_nombre,
-            [headers.indexOf("Sucursal") + 1]: r.corpo_nombre,
-            [headers.indexOf("Puesto") + 1]: r.puesto_nombre,
-            [headers.indexOf("Título") + 1]: excelCellString(r.titulo),
-            [headers.indexOf("Tipo") + 1]: excelCellString(r.tipo),
-            [headers.indexOf("Responsable") + 1]: r.responsable_nombre,
-        };
+        const empleados: Array<{ id: number; label: string; cedula?: string; resultado?: string | null }> = Array.isArray(
+            r.empleados_cap,
+        )
+            ? r.empleados_cap
+            : [];
+        const puestosCap: Array<{ id: number; label: string; resultado?: string | null }> = Array.isArray(r.puestos_cap)
+            ? r.puestos_cap
+            : [];
 
-        const rootValues = new Array(headers.length).fill("");
-        rootValues[0] = String(r.id);
-        rootValues[2] = 0;
-        rootValues[3] = "Capacitación";
-        for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
-        const rootRow = addMainRow(wsMain, rootValues);
-        rootRow.getCell(colEmpLink + 1).value = { text: "Ver empleados", hyperlink: `#'Detalles'!A${re}` };
-        rootRow.getCell(colEmpLink + 1).font = { color: { argb: "FF0563C1" }, underline: true };
-        rootRow.getCell(colPtoLink + 1).value = { text: "Ver puestos", hyperlink: `#'Detalles'!A${rp}` };
-        rootRow.getCell(colPtoLink + 1).font = { color: { argb: "FF0563C1" }, underline: true };
-        styleDataRow(rootRow, 0);
+        const values = new Array(headers.length).fill("");
+        values[headers.indexOf("ID Capacitación")] = r.id;
+        values[headers.indexOf("Fecha")] = r.fecha_txt;
+        values[headers.indexOf("Empresa")] = r.empresa_nombre;
+        values[headers.indexOf("Cliente")] = r.cliente_nombre;
+        values[headers.indexOf("División")] = r.division_nombre;
+        values[headers.indexOf("Contrato")] = r.contrato_nombre;
+        values[headers.indexOf("Sucursal")] = r.corpo_nombre;
+        values[headers.indexOf("Puesto")] = r.puesto_nombre;
+        values[headers.indexOf("Título")] = excelCellString(r.titulo);
+        values[headers.indexOf("Tipo")] = excelCellString(r.tipo);
+        values[headers.indexOf("Responsable")] = r.responsable_nombre;
+        values[headers.indexOf("Ver empleados")] = "Ver empleados";
+        values[headers.indexOf("Ver puestos")] = "Ver puestos";
+        values[headers.indexOf("Empleado (código / nombre)")] = joinCapacitacionDetalle(empleados, (e) => e.label);
+        values[headers.indexOf("Cédula (empleado)")] = joinCapacitacionDetalle(empleados, (e) => e.cedula ?? "");
+        values[headers.indexOf("Resultado (empleado)")] = joinCapacitacionDetalle(empleados, (e) =>
+            excelCellString(e.resultado ?? ""),
+        );
+        values[headers.indexOf("Puesto (código / nombre)")] = joinCapacitacionDetalle(puestosCap, (p) => p.label);
+        values[headers.indexOf("Resultado (puesto)")] = joinCapacitacionDetalle(puestosCap, (p) =>
+            excelCellString(p.resultado ?? ""),
+        );
 
-        (r.empleados_cap || []).forEach((e: { id: number; label: string; cedula?: string; resultado?: string | null }, idx: number) => {
-            const values = new Array(headers.length).fill("");
-            values[0] = `${r.id}.emp${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = "Empleado";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[headers.indexOf("Empleado (código / nombre)")] = e.label;
-            values[headers.indexOf("Cédula (empleado)")] = e.cedula ?? "";
-            values[headers.indexOf("Resultado")] = excelCellString(e.resultado ?? "");
-            const row = addMainRow(wsMain, values);
-            styleDataRow(row, 1);
-        });
-
-        (r.puestos_cap || []).forEach((p: { id: number; label: string; resultado?: string | null }, idx: number) => {
-            const values = new Array(headers.length).fill("");
-            values[0] = `${r.id}.pto${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = "Puesto vinculado";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[headers.indexOf("Puesto (código / nombre)")] = p.label;
-            values[headers.indexOf("Resultado")] = excelCellString(p.resultado ?? "");
-            const row = addMainRow(wsMain, values);
-            styleDataRow(row, 1);
-        });
+        const row = addMainRow(wsMain, values);
+        row.getCell(colEmpLink + 1).value = { text: "Ver empleados", hyperlink: `#'Detalles'!A${re}` };
+        row.getCell(colEmpLink + 1).font = { color: { argb: "FF0563C1" }, underline: true };
+        row.getCell(colPtoLink + 1).value = { text: "Ver puestos", hyperlink: `#'Detalles'!A${rp}` };
+        row.getCell(colPtoLink + 1).font = { color: { argb: "FF0563C1" }, underline: true };
+        styleDataRow(row);
     }
 
     wsMain.autoFilter = {

@@ -32,6 +32,7 @@ import { loadPuestoArticulosForTable, refreshPuestoArticulosFromServer, rewriteP
 import { prioritizePlanByArticuloNomencladorId } from '@/hooks/prioritizePlanByArticuloNomencladorId';
 import ArticuloMantenimientoArchivosModal from '@/components/ArticuloMantenimientoArchivosModal';
 import type { ArticuloMantenimientoPendingFile } from '@/utils/articuloMantenimientoFiles';
+import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 
 const ACTIVITIES_MARK_PHOTO_PREFIX = 'activities_mark';
 
@@ -348,8 +349,8 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
                 : `data:image/jpeg;base64,${imageToShow}`;
 
               return (
-                <Image
-                  source={{ uri: imageUri }}
+                <ZoomableThumbnailImage
+                  uri={imageUri}
                   style={styles.imagePreview}
                   resizeMode="contain"
                 />
@@ -560,8 +561,8 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
         />
         {inventoryImages[inventory.id] && (
           <ThemedView style={styles.imagePreviewContainer}>
-            <Image
-              source={{ uri: resolveLocalMarkImageUri(inventoryImages[inventory.id]) || '' }}
+            <ZoomableThumbnailImage
+              uri={resolveLocalMarkImageUri(inventoryImages[inventory.id]) || ''}
               style={styles.imagePreview}
               resizeMode="contain"
             />
@@ -576,7 +577,7 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
                 imageToShow.startsWith('data:') || imageToShow.startsWith('file:')
                   ? imageToShow
                   : `data:image/jpeg;base64,${imageToShow}`;
-              return <Image source={{ uri: imageUri }} style={styles.imagePreview} resizeMode="contain" />;
+              return <ZoomableThumbnailImage uri={imageUri} style={styles.imagePreview} resizeMode="contain" />;
             })()}
           </ThemedView>
         )}
@@ -805,6 +806,7 @@ interface CreatedActivityItem {
   frecuencia: string;
   es_revision_equipo: boolean;
   firma_responsable: string;
+  tipo_turno?: string | null;
   puestos_vinculados?: CreatedActivityPuestoVinculado[];
 }
 
@@ -963,6 +965,8 @@ export default function ActivitiesScreen() {
   const [scheduleSlotPickerIndex, setScheduleSlotPickerIndex] = useState<number | null>(null);
   const scheduleSlotPickerIndexRef = useRef<number | null>(null);
   const [tipoActividad, setTipoActividad] = useState<'Normal' | 'Inventario'>('Normal');
+  /** 'D' Diurno, 'M' Mixto, 'N' Nocturno — se compara contra `c_marca_dia.tipo_turno` al determinar actividades del turno. */
+  const [tipoTurno, setTipoTurno] = useState<'D' | 'M' | 'N'>('D');
   const [puestos, setPuestos] = useState<PuestoOption[]>([]);
   const [selectedPuestoId, setSelectedPuestoId] = useState<string>('');
   const [markedPlazaIds, setMarkedPlazaIds] = useState<string[]>([]);
@@ -1532,6 +1536,7 @@ export default function ActivitiesScreen() {
     setActivityStartDate(start);
     setShowStartDatePicker(false);
     setTipoActividad('Normal');
+    setTipoTurno('D');
     setSelectedPuestoId('');
     setMarkedPlazaIds([]);
     setAssignedResponsables([]);
@@ -2401,6 +2406,7 @@ export default function ActivitiesScreen() {
         reglas: JSON.stringify(reglasPayload),
         puestos_plazas: JSON.stringify(puestosPayload),
         firma_responsable: signatureData?.raw || '',
+        tipo_turno: tipoTurno,
       };
 
       const isConnected = await getConnectionStatus();
@@ -2423,6 +2429,7 @@ export default function ActivitiesScreen() {
               frecuencia: frequencyString,
               es_revision_equipo: tipoActividad === 'Inventario',
               firma_responsable: signatureData?.raw || '',
+              tipo_turno: tipoTurno,
             },
             refreshAccessToken,
             logout,
@@ -2719,6 +2726,13 @@ export default function ActivitiesScreen() {
       bitacora: bitacora || '-',
       hora_accion: horaAccionIso,
     };
+
+    if (estado === 'marcar') {
+      // Firma digital del responsable al marcar la actividad como lista. No se consume en el
+      // servidor todavía, pero debe generarse y guardarse ya (en la petición o en el action offline)
+      // para no perder la trazabilidad. Usa coordenadas en caché sin bloquear ni alertar al usuario.
+      requestData.firma_marcado = await getCurrentUserDigitalSignature(employee, { silent: true });
+    }
 
     // Para actividades de revisión de equipo, enviar también el estado actual de los artículos mostrado en la tabla
     if (estado === 'marcar' && activity.is_revision_equipo && inventoryRows.length > 0) {
@@ -3730,6 +3744,7 @@ export default function ActivitiesScreen() {
       setActivityScheduleSlots([]);
     }
     setTipoActividad(activity.es_revision_equipo ? 'Inventario' : 'Normal');
+    setTipoTurno(activity.tipo_turno === 'M' || activity.tipo_turno === 'N' ? activity.tipo_turno : 'D');
     try {
       const decoded = decodeSignatureHash(activity.firma_responsable || '');
       setSignatureData({
@@ -4255,6 +4270,19 @@ export default function ActivitiesScreen() {
                   >
                     <Picker.Item label="Normal" value="Normal" color="#000000" />
                     <Picker.Item label="Inventario" value="Inventario" color="#000000" />
+                  </Picker>
+                </ThemedView>
+
+                <ThemedText style={styles.sectionTitle}>Tipo de turno</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    selectedValue={tipoTurno}
+                    onValueChange={(value) => setTipoTurno(value as 'D' | 'M' | 'N')}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Diurno" value="D" color="#000000" />
+                    <Picker.Item label="Mixto" value="M" color="#000000" />
+                    <Picker.Item label="Nocturno" value="N" color="#000000" />
                   </Picker>
                 </ThemedView>
 
@@ -4864,8 +4892,8 @@ export default function ActivitiesScreen() {
               {activityImageLocalFileName && (
                 <ThemedView style={styles.imagePreviewContainer}>
                   <ThemedText style={styles.imagePreviewTitle}>Imagen capturada:</ThemedText>
-                  <Image
-                    source={{ uri: resolveLocalMarkImageUri(activityImageLocalFileName) || '' }}
+                  <ZoomableThumbnailImage
+                    uri={resolveLocalMarkImageUri(activityImageLocalFileName) || ''}
                     style={styles.imagePreview}
                     resizeMode="contain"
                   />

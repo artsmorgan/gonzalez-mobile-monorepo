@@ -705,14 +705,8 @@ export async function buildInduccionRecorridoExcelConsolidado(
         anchorSup.set(Number(r.id), a.rs);
     }
 
-    /** Cuadrícula jerárquica: Registro (nivel 0) → Tema / Aspecto / Participante, hermanos (nivel 1). */
-    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
+    /** Tema, Aspecto y Participante se unen en la misma fila del registro, separados por ";" (sin fila propia). */
     const headers = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Registro",
         "Creado en (fecha)",
         "Creado en (hora)",
@@ -750,7 +744,6 @@ export async function buildInduccionRecorridoExcelConsolidado(
     const c2 = headers.indexOf("Ver aspectos") + 2;
     const c3 = headers.indexOf("Ver participantes") + 2;
     const c4 = headers.indexOf("Ver firma supervisor") + 2;
-    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 2;
     const linkCols = new Set([c1, c2, c3, c4]);
 
     const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
@@ -780,15 +773,12 @@ export async function buildInduccionRecorridoExcelConsolidado(
         }),
     ];
 
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((cell, col) => {
             if (col === 1) return;
             cell.border = borderThin as ExcelJS.Borders;
             if (!linkCols.has(col)) cell.alignment = { vertical: "middle", wrapText: true };
         });
-        row.getCell(COL_TIPO_FILA).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
-        row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
     };
 
     for (const r of rows) {
@@ -815,14 +805,26 @@ export async function buildInduccionRecorridoExcelConsolidado(
             [headers.indexOf("Supervisor corporación") + 1]: excelCellString(r.supervisor_corporacion),
             [headers.indexOf("División (texto)") + 1]: excelCellString(r.division),
             [headers.indexOf("Responsable (creado por)") + 1]: r.created_by_nombre,
-            [headers.indexOf("Usuario modifica") + 1]: cambio?.cedula ?? "",
+            [headers.indexOf("Usuario modifica") + 1]: cambio?.nombreCompleto ?? "",
             [headers.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
         };
 
+        // Tema, Aspecto y Participante: cada grupo se une en la misma fila del registro, separados por ";".
+        const temas = safeParseJsonArray(r.temas_desarrollados);
+        const aspectos = safeParseJsonArray(r.aspectos_especificos);
+        const participantes = safeParseJsonArray(r.participantes);
+        general[headers.indexOf("Tema") + 1] = temas.map((t: any) => excelCellString(t?.tema)).join(";");
+        general[headers.indexOf("Respuesta (tema)") + 1] = temas.map((t: any) => excelCellString(t?.respuesta)).join(";");
+        general[headers.indexOf("Comentarios (tema)") + 1] = temas.map((t: any) => excelCellString(t?.comentarios)).join(";");
+        general[headers.indexOf("Aspecto") + 1] = aspectos.map((a: any) => excelCellString(a?.aspecto)).join(";");
+        general[headers.indexOf("Respuesta (aspecto)") + 1] = aspectos.map((a: any) => excelCellString(a?.respuesta)).join(";");
+        general[headers.indexOf("Comentarios (aspecto)") + 1] = aspectos.map((a: any) => excelCellString(a?.comentarios)).join(";");
+        general[headers.indexOf("Nombre completo (participante)") + 1] = participantes
+            .map((p: any) => excelCellString(p?.nombre_completo))
+            .join(";");
+        general[headers.indexOf("Cédula (participante)") + 1] = participantes.map((p: any) => excelCellString(p?.cedula)).join(";");
+
         const rootValues = new Array(headers.length).fill("");
-        rootValues[0] = String(r.id);
-        rootValues[2] = 0;
-        rootValues[3] = "Registro";
         for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
         const rootRow = addMainRow(wsMain, rootValues);
         rootRow.getCell(c1).value = { text: "Ver", hyperlink: `#'Detalles'!A${rt}` };
@@ -833,48 +835,7 @@ export async function buildInduccionRecorridoExcelConsolidado(
         rootRow.getCell(c3).font = { color: { argb: "FF0563C1" }, underline: true };
         rootRow.getCell(c4).value = { text: "Ver", hyperlink: `#'Detalles'!A${rs}` };
         rootRow.getCell(c4).font = { color: { argb: "FF0563C1" }, underline: true };
-        styleDataRow(rootRow, 0);
-
-        safeParseJsonArray(r.temas_desarrollados).forEach((t: any, idx: number) => {
-            const values = new Array(headers.length).fill("");
-            values[0] = `${r.id}.tema${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = "Tema";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[headers.indexOf("Tema")] = excelCellString(t?.tema);
-            values[headers.indexOf("Respuesta (tema)")] = excelCellString(t?.respuesta);
-            values[headers.indexOf("Comentarios (tema)")] = excelCellString(t?.comentarios);
-            const row = addMainRow(wsMain, values);
-            styleDataRow(row, 1);
-        });
-
-        safeParseJsonArray(r.aspectos_especificos).forEach((a: any, idx: number) => {
-            const values = new Array(headers.length).fill("");
-            values[0] = `${r.id}.asp${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = "Aspecto";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[headers.indexOf("Aspecto")] = excelCellString(a?.aspecto);
-            values[headers.indexOf("Respuesta (aspecto)")] = excelCellString(a?.respuesta);
-            values[headers.indexOf("Comentarios (aspecto)")] = excelCellString(a?.comentarios);
-            const row = addMainRow(wsMain, values);
-            styleDataRow(row, 1);
-        });
-
-        safeParseJsonArray(r.participantes).forEach((p: any, idx: number) => {
-            const values = new Array(headers.length).fill("");
-            values[0] = `${r.id}.part${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = "Participante";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[headers.indexOf("Nombre completo (participante)")] = excelCellString(p?.nombre_completo);
-            values[headers.indexOf("Cédula (participante)")] = excelCellString(p?.cedula);
-            const row = addMainRow(wsMain, values);
-            styleDataRow(row, 1);
-        });
+        styleDataRow(rootRow);
     }
     for (let c = 1; c <= maxCol; c++) wsDet.getColumn(c).width = c === 2 ? 48 : 14;
     return Buffer.from(await wb.xlsx.writeBuffer());

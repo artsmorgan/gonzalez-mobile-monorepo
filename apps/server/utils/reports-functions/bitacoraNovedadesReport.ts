@@ -317,7 +317,7 @@ export async function buildBitacoraNovedadesExcelConsolidado(
             formatTimeOnlyHMS(r.updated_at),
             r.firma_manual_responsable ? "Ver firma manual" : "",
             firmaRespShort,
-            cambio?.cedula ?? "",
+            cambio?.nombreCompleto ?? "",
             cambio?.fechaHoraTexto ?? "",
         ]);
         row.eachCell((cell, colNumber) => {

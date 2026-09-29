@@ -547,14 +547,8 @@ export async function buildSolicitudesPermisoExcelConsolidado(
         anchorsById.set(Number(r.id), appendDetalleBlock(wsDet, r));
     }
 
-    /** Cuadrícula jerárquica: Solicitud (nivel 0) → Turno (nivel 1, de `turnos`). */
-    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
+    /** 1 fila por solicitud: los "Turno" se agrupan y separan por punto y coma en la fila del registro. */
     const headers = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Solicitud",
         "Empresa",
         "Cliente",
@@ -592,13 +586,15 @@ export async function buildSolicitudesPermisoExcelConsolidado(
     const colTurnos = headers.indexOf("Ver turnos") + 1;
     const colFirmaEmpleado = headers.indexOf("Firma empleado") + 1;
     const colFirmaEjecutivo = headers.indexOf("Firma ejecutivo") + 1;
-    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 1;
     // +1 adicional: columnas reales en la hoja (con margen de `addMainRow` en A).
     const colTurnosReal = colTurnos + 1;
     const colFirmaEmpleadoReal = colFirmaEmpleado + 1;
     const colFirmaEjecutivoReal = colFirmaEjecutivo + 1;
-    const colTipoFilaReal = COL_TIPO_FILA + 1;
     const linkCols = new Set([colTurnosReal, colFirmaEmpleadoReal, colFirmaEjecutivoReal]);
+
+    /** Todos los turnos de una solicitud se unen en 1 sola fila, separados por punto y coma. */
+    const joinTurnos = (turnos: Array<Record<string, unknown>>, key: string): string =>
+        turnos.map((item) => String(item?.[key] ?? "")).join(";");
 
     applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
 
@@ -613,15 +609,12 @@ export async function buildSolicitudesPermisoExcelConsolidado(
     }
     wsMain.columns = [{ width: 3 }, ...headers.map(() => ({ width: 18 }))];
 
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((cell, col) => {
             if (col === 1) return;
             cell.border = borderThin;
             if (!linkCols.has(col)) cell.alignment = { vertical: "top", wrapText: true };
         });
-        row.getCell(colTipoFilaReal).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
-        row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(colTipoFilaReal).font = { bold: true };
     };
 
     for (const r of rows) {
@@ -648,16 +641,23 @@ export async function buildSolicitudesPermisoExcelConsolidado(
             [headers.indexOf("Creado (fecha)") + 1]: formatDateOnlyDMY(r.created_at),
             [headers.indexOf("Creado (hora)") + 1]: formatTimeOnlyHMS(r.created_at),
             [headers.indexOf("Creado por") + 1]: r.creado_por_nombre,
-            [headers.indexOf("Usuario modifica") + 1]: cambio?.cedula ?? "",
+            [headers.indexOf("Usuario modifica") + 1]: cambio?.nombreCompleto ?? "",
             [headers.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
             [headers.indexOf("Motivo") + 1]: String(r.motivo_txt ?? r.motivo ?? "").slice(0, 500),
             [headers.indexOf("Observaciones") + 1]: String(r.observaciones_txt ?? r.observaciones ?? "").slice(0, 500),
         };
 
+        const turnos: any[] = r.turnos_list?.length ? r.turnos_list : safeParseTurnos(r.turnos);
+        general[headers.indexOf("Puesto (turno)") + 1] = joinTurnos(turnos, "puesto");
+        general[headers.indexOf("Hora inicio (turno)") + 1] = joinTurnos(turnos, "hora_inicio");
+        general[headers.indexOf("Hora fin (turno)") + 1] = joinTurnos(turnos, "hora_fin");
+        general[headers.indexOf("Tipo turno") + 1] = joinTurnos(turnos, "tipo_turno");
+        general[headers.indexOf("Horas duración (turno)") + 1] = joinTurnos(turnos, "horas_duracion");
+        general[headers.indexOf("Reemplazo (turno)") + 1] = turnos
+            .map((t: any) => String(t?.reemplazo_nombre ?? t?.reemplazo_id ?? ""))
+            .join(";");
+
         const rootValues = new Array(headers.length).fill("");
-        rootValues[0] = String(r.id);
-        rootValues[2] = 0;
-        rootValues[3] = "Solicitud";
         for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
         const rootRow = addMainRow(wsMain, rootValues);
         if (anchors) {
@@ -674,25 +674,7 @@ export async function buildSolicitudesPermisoExcelConsolidado(
             };
             rootRow.getCell(colFirmaEjecutivoReal).font = { color: { argb: "FF0563C1" }, underline: true };
         }
-        styleDataRow(rootRow, 0);
-
-        const turnos: any[] = r.turnos_list?.length ? r.turnos_list : safeParseTurnos(r.turnos);
-        turnos.forEach((t: any, idx: number) => {
-            const values = new Array(headers.length).fill("");
-            values[0] = `${r.id}.turno${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = "Turno";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[headers.indexOf("Puesto (turno)")] = String(t.puesto ?? "");
-            values[headers.indexOf("Hora inicio (turno)")] = String(t.hora_inicio ?? "");
-            values[headers.indexOf("Hora fin (turno)")] = String(t.hora_fin ?? "");
-            values[headers.indexOf("Tipo turno")] = String(t.tipo_turno ?? "");
-            values[headers.indexOf("Horas duración (turno)")] = String(t.horas_duracion ?? "");
-            values[headers.indexOf("Reemplazo (turno)")] = String(t.reemplazo_nombre ?? t.reemplazo_id ?? "");
-            const row = addMainRow(wsMain, values);
-            styleDataRow(row, 1);
-        });
+        styleDataRow(rootRow);
     }
 
     wsMain.autoFilter = {

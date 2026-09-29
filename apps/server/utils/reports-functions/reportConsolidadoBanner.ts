@@ -199,11 +199,12 @@ export function addMainRow(ws: ExcelJS.Worksheet, arr: unknown[]): ExcelJS.Row {
     return ws.addRow(["", ...arr]);
 }
 
-export type CambioRegistroInfo = { cedula: string; fechaHoraTexto: string };
+export type CambioRegistroInfo = { cedula: string; nombreCompleto: string; fechaHoraTexto: string };
 
 /**
  * Trae, para cada `registro_id`, el último cambio registrado en `c_cambios_apps_modules` para
- * `nombreTabla`, resuelto a cédula del empleado que lo hizo. Un solo query + un batch de empleados.
+ * `nombreTabla`, resuelto al nombre completo (y cédula) del empleado que lo hizo (`created_by` del
+ * cambio, no del registro). Un solo query + un batch de empleados.
  */
 export async function fetchLatestCambiosPorRegistro(
     reportDb: ReportDataAccess,
@@ -230,15 +231,20 @@ export async function fetchLatestCambiosPorRegistro(
     const empleados = empleadoIds.length
         ? ((await reportDb.c_empleado.findMany({
               where: { id: { in: empleadoIds } },
-              select: { id: true, cedula: true },
-          })) as Array<{ id: number; cedula: string | null }>)
+              select: { id: true, cedula: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+          })) as Array<{ id: number; cedula: string | null; nombre: string | null; primer_apellido: string | null; segundo_apellido: string | null }>)
         : [];
-    const cedulaById = new Map(empleados.map((e) => [e.id, e.cedula ?? ""]));
+    const empleadoById = new Map(empleados.map((e) => [e.id, e]));
 
     const out = new Map<number, CambioRegistroInfo>();
     for (const [registroId, info] of latestByRegistro.entries()) {
+        const emp = empleadoById.get(info.created_by);
+        const nombreCompleto = emp
+            ? [emp.nombre, emp.primer_apellido, emp.segundo_apellido].filter(Boolean).join(" ").trim()
+            : "";
         out.set(registroId, {
-            cedula: cedulaById.get(info.created_by) ?? "",
+            cedula: emp?.cedula ?? "",
+            nombreCompleto,
             fechaHoraTexto: formatDateTimeDMY(info.created_at),
         });
     }

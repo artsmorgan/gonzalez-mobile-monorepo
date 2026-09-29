@@ -13,6 +13,7 @@ import {
   Dimensions,
 } from 'react-native';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
+import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 import EmployeeSearchModal, { type EmployeeSearchHit } from '@/components/EmployeeSearchModal';
 import PuestoSearchModal, { type PuestoSearchHit } from '@/components/PuestoSearchModal';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -3481,7 +3482,7 @@ export default function GeneralInductionRegisterScreen() {
               if (!uri) return null;
               return (
                 <ThemedView key={`img-${idx}`} style={styles.thumbWrapper}>
-                  <Image source={{ uri }} style={styles.thumb} />
+                  <ZoomableThumbnailImage uri={uri} style={styles.thumb} />
                   <TouchableOpacity style={styles.thumbDelete} onPress={() => confirmRemoveImageAt(idx)}>
                     <Ionicons name="trash" size={14} color="#FFFFFF" />
                   </TouchableOpacity>

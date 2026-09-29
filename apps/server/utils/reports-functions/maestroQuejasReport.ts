@@ -361,7 +361,7 @@ export async function buildMaestroQuejasExcelConsolidado(
             excelCellString(r.accion_correctiva_preventiva),
             excelCellString(r.estado),
             excelCellString(r.creado_por_nombre ?? r.created_by),
-            cambio?.cedula ?? "",
+            cambio?.nombreCompleto ?? "",
             cambio?.fechaHoraTexto ?? "",
             excelCellString(r.firma_responsable),
         ]);

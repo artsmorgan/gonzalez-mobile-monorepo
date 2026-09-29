@@ -439,14 +439,11 @@ export async function buildEvaluacionPersonalExcelConsolidado(
         anchorFirmaById.set(Number(r.id), firmaRow);
     }
 
-    /** Cuadrícula jerárquica: Evaluación (nivel 0) → Sección (nivel 1, de `evaluacion`) → Pregunta (nivel 2, de `sec.questions`). */
+    /** Cuadrícula jerárquica: Evaluación (nivel 0) → Sección (nivel 1, de `evaluacion`). Las preguntas de cada
+     *  sección (`sec.questions`) se agrupan y separan por ";" en columnas de esa misma fila, sin fila propia. */
     wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
 
     const headers = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Evaluación",
         "Creado en (fecha)",
         "Creado en (hora)",
@@ -463,13 +460,13 @@ export async function buildEvaluacionPersonalExcelConsolidado(
         "Ver firma",
         "Comentarios",
         "Sección",
-        "Pregunta",
-        "Respuesta",
+        "Preguntas",
+        "Respuestas",
         "Imágenes (nombres)",
     ];
     const COL_VER_EVAL = headers.indexOf("Ver evaluación") + 2;
     const COL_VER_FIRMA = headers.indexOf("Ver firma") + 2;
-    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 2;
+    const COL_SECCION = headers.indexOf("Sección") + 2;
 
     applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
 
@@ -484,10 +481,6 @@ export async function buildEvaluacionPersonalExcelConsolidado(
     }
     wsMain.columns = [
         { width: 3 },
-        { width: 12 },
-        { width: 14 },
-        { width: 8 },
-        { width: 20 },
         { width: 12 },
         { width: 14 },
         { width: 12 },
@@ -517,9 +510,9 @@ export async function buildEvaluacionPersonalExcelConsolidado(
             cell.border = border;
             cell.alignment = { vertical: "middle", wrapText: true };
         });
-        row.getCell(COL_TIPO_FILA).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(COL_SECCION).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+        if (nivel === 0) row.getCell(2).font = { bold: true };
     };
 
     const imagesJoined = (q: any): string => {
@@ -555,10 +548,6 @@ export async function buildEvaluacionPersonalExcelConsolidado(
         ];
 
         const rootRow = addMainRow(wsMain, [
-            String(r.id),
-            "",
-            0,
-            "Evaluación",
             ...general,
             "Ver evaluación",
             "Ver firma",
@@ -575,39 +564,24 @@ export async function buildEvaluacionPersonalExcelConsolidado(
         const sections = parseStaffEvaluacionSections(r.evaluacion);
         sections.forEach((sec, secIdx) => {
             const secTitle = String(sec.title ?? "").trim() || `Sección ${secIdx + 1}`;
-            const secId = `${r.id}.s${secIdx + 1}`;
+            const questions = Array.isArray(sec.questions) ? sec.questions : [];
+            /** Preguntas, respuestas e imágenes de la sección: agrupadas y separadas por ";" en la misma fila. */
+            const preguntasTxt = questions.map((q) => String(q?.title ?? "").trim()).join(";");
+            const respuestasTxt = questions.map((q) => String(q?.answear ?? "").trim()).join(";");
+            const imagenesTxt = questions.map((q) => imagesJoined(q)).join(";");
+
             const secRow = addMainRow(wsMain, [
-                secId,
-                String(r.id),
-                1,
-                "Sección",
                 ...general,
-                ...blank(3),
+                "",
+                "",
+                "",
                 secTitle,
-                "",
-                "",
-                "",
+                preguntasTxt,
+                respuestasTxt,
+                imagenesTxt,
             ]);
             styleDataRow(secRow, 1);
             totalDataRows += 1;
-
-            const questions = Array.isArray(sec.questions) ? sec.questions : [];
-            questions.forEach((q, qIdx) => {
-                const row = addMainRow(wsMain, [
-                    `${secId}.q${qIdx + 1}`,
-                    secId,
-                    2,
-                    "Pregunta",
-                    ...general,
-                    ...blank(3),
-                    "",
-                    String(q?.title ?? ""),
-                    String(q?.answear ?? ""),
-                    imagesJoined(q),
-                ]);
-                styleDataRow(row, 2);
-                totalDataRows += 1;
-            });
         });
     }
     wsMain.autoFilter = {

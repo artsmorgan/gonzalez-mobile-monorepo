@@ -34,6 +34,7 @@ import SlideMenu from '@/components/SlideMenu';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { Collapsible } from '@/components/Collapsible';
+import { ZoomableThumbnailImage, FullscreenVideoButton } from '@/components/FullscreenMediaViewer';
 import { useAuth } from '@/contexts/AuthContext';
 import authedFetch from '@/hooks/authedFetch';
 import { downloadAuthedUrlToDevice } from '@/hooks/downloadReportFileToDevice';
@@ -1531,7 +1532,7 @@ export default function PermitRequestScreenV2() {
                                   {!Boolean(r.is_executive_for_record) ? (
                                     <ThemedText style={styles.signatureHintMuted}>Disponible para el ejecutivo asignado.</ThemedText>
                                   ) : normalizedType === 'image' ? (
-                                    <Image source={{ uri: mediaUrl }} style={styles.attachmentImage} resizeMode="contain" />
+                                    <ZoomableThumbnailImage uri={mediaUrl} style={styles.attachmentImage} resizeMode="contain" />
                                   ) : normalizedType === 'audio' ? (
                                     <PermitAudioPlayer sourceUrl={mediaUrl} />
                                   ) : normalizedType === 'video' ? (
@@ -1737,12 +1738,12 @@ export default function PermitRequestScreenV2() {
                         </TouchableOpacity>
                       </ThemedView>
                       {f.type === 'image' ? (
-                        <Image
-                          source={{
-                            uri: f.localFileName
+                        <ZoomableThumbnailImage
+                          uri={
+                            f.localFileName
                               ? getLocalFileDisplayUri(f.localFileName)
-                              : `data:${f.mimeType || 'image/jpeg'};base64,${f.base64 || ''}`,
-                          }}
+                              : `data:${f.mimeType || 'image/jpeg'};base64,${f.base64 || ''}`
+                          }
                           style={styles.attachmentImage}
                           resizeMode="contain"
                         />
@@ -2439,7 +2440,7 @@ function PermitVideoPlayer({ sourceUrl }: { sourceUrl: string }) {
   const player = useVideoPlayer(sourceUrl);
   const maxContainerWidth = Dimensions.get('window').width - 100;
   return (
-    <View style={[styles.videoContainer, { width: maxContainerWidth, maxWidth: '100%' }]}>
+    <View style={[styles.videoContainer, { width: maxContainerWidth, maxWidth: '100%', position: 'relative' }]}>
       <VideoView
         player={player}
         style={{ width: '100%', aspectRatio: 16 / 9, backgroundColor: '#000' }}
@@ -2448,6 +2449,7 @@ function PermitVideoPlayer({ sourceUrl }: { sourceUrl: string }) {
         allowsFullscreen={false}
         allowsPictureInPicture={false}
       />
+      <FullscreenVideoButton uri={sourceUrl} />
     </View>
   );
 }

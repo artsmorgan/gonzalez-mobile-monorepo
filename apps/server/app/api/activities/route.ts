@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        const { marca_id, nombre_actividad, fecha_inicio, fecha_fin, frecuencia, es_revision_equipo, descripcion_actividad, reglas, puestos_plazas, firma_responsable } = await req.json();
+        const { marca_id, nombre_actividad, fecha_inicio, fecha_fin, frecuencia, es_revision_equipo, descripcion_actividad, reglas, puestos_plazas, firma_responsable, tipo_turno } = await req.json();
 
         if (!marca_id || !nombre_actividad || !fecha_inicio || !frecuencia || es_revision_equipo === undefined || !descripcion_actividad || !reglas || !firma_responsable) {
             console.log("marca_id", marca_id);
@@ -59,6 +59,7 @@ export async function POST(req: NextRequest) {
                     es_revision_equipo: es_revision_equipo,
                     descripcion_actividad: descripcion_actividad,
                     firma_responsable: firma_responsable,
+                    tipo_turno: tipo_turno || null,
                 }
             }
         });
@@ -149,6 +150,7 @@ export async function POST(req: NextRequest) {
                                 frecuencia,
                                 es_revision_equipo,
                                 firma_responsable,
+                                tipo_turno: tipo_turno || null,
                                 puestos_ids: confirmedPuestoIds,
                             },
                         }]),
