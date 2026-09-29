@@ -22,6 +22,7 @@ import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import RecordAudioButton from '@/components/RecordAudioButton';
 import AudioPreviewModal from '@/components/AudioPreviewModal';
+import { ZoomableThumbnailImage, FullscreenVideoButton } from '@/components/FullscreenMediaViewer';
 import { useNavigation, useFocusEffect, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
@@ -2907,8 +2908,8 @@ export default function TrainingsScreen() {
                                   style={tileStyle}
                                 >
                                   {kind === 'image' && displayUri ? (
-                                    <Image
-                                      source={{ uri: displayUri }}
+                                    <ZoomableThumbnailImage
+                                      uri={displayUri}
                                       style={styles.trainingImage}
                                       resizeMode="contain"
                                     />
@@ -2959,7 +2960,7 @@ export default function TrainingsScreen() {
                                 return (
                                 <ThemedView key={pf.id} style={styles.archivoTile}>
                                   {isImg && u ? (
-                                    <Image source={{ uri: u }} style={styles.trainingImage} />
+                                    <ZoomableThumbnailImage uri={u} style={styles.trainingImage} />
                                   ) : (
                                     <ThemedText style={styles.noImageText}>
                                       {pf.originalName || 'Documento (pendiente)'}
@@ -3179,8 +3180,8 @@ const TrainingImageComponent: React.FC<{ trainingId: number; fileName?: string }
   }
 
   return (
-    <Image
-      source={{ uri: imageBase64 }}
+    <ZoomableThumbnailImage
+      uri={imageBase64}
       style={styles.trainingImage}
       onError={(error) => {
         console.error('Error loading image:', error);
@@ -3987,6 +3988,7 @@ function CapacitacionArchivoVideoPlayer({ sourceUrl }: { sourceUrl: string }) {
   return (
     <View
       style={{
+        position: 'relative',
         marginBottom: 8,
         overflow: 'hidden',
         borderRadius: 8,
@@ -4008,6 +4010,7 @@ function CapacitacionArchivoVideoPlayer({ sourceUrl }: { sourceUrl: string }) {
         allowsFullscreen={false}
         allowsPictureInPicture={false}
       />
+      <FullscreenVideoButton uri={sourceUrl} />
     </View>
   );
 }

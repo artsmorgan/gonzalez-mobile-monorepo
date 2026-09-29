@@ -617,14 +617,14 @@ export async function buildArticulosPuestoExcelConsolidado(
         }
     }
 
-    /** Cuadrícula jerárquica: Puesto (nivel 0) → Artículo (nivel 1, de tablas de plan/asignación) → Movimiento (nivel 2, de `c_movimientos_articulo_mantenimiento`). */
+    /**
+     * Cuadrícula jerárquica: Puesto (nivel 0) → Artículo (nivel 1, de tablas de plan/asignación). Los
+     * `c_movimientos_articulo_mantenimiento` de cada artículo se unen en la misma fila del artículo,
+     * separados por ";" (una columna por campo de movimiento), sin fila propia por movimiento.
+     */
     wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
 
     const mainHeaders = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Puesto",
         "Empresa",
         "Cliente",
@@ -671,6 +671,11 @@ export async function buildArticulosPuestoExcelConsolidado(
         cell.fill = GRP_HDR;
         cell.border = borderThin as ExcelJS.Borders;
         cell.alignment = { vertical: "middle", wrapText: true };
+    }
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente.
+    for (const sheet of [wsMain, wsArt, wsMov]) {
+        sheet.views = [{ showGridLines: false }];
     }
 
     const artHeaders = [
@@ -731,8 +736,6 @@ export async function buildArticulosPuestoExcelConsolidado(
     }
 
     const blank = (n: number) => Array.from({ length: n }, () => "");
-    const origenCode = (origen: string): string =>
-        origen === "Asignado" ? "as" : origen === "Plan (combo)" ? "pc" : "pl";
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
         row.eachCell((c, colNumber) => {
@@ -740,9 +743,7 @@ export async function buildArticulosPuestoExcelConsolidado(
             c.border = borderThin;
             c.alignment = { wrapText: true, vertical: "top" };
         });
-        row.getCell(5).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(5).font = { bold: true };
     };
 
     let totalDataRows = 0;
@@ -751,15 +752,7 @@ export async function buildArticulosPuestoExcelConsolidado(
         const linkText = r.articulos_count > 0 ? `Ver artículos (${r.articulos_count})` : "Sin artículos";
         const general = [String(r.puesto_id), r.empresa_txt, r.cliente_txt, r.division_txt, r.contrato_txt, r.corpo_txt, r.puesto_txt];
 
-        const rootRow = addMainRow(wsMain, [
-            String(r.puesto_id),
-            "",
-            0,
-            "Puesto",
-            ...general,
-            linkText,
-            ...blank(22),
-        ]);
+        const rootRow = addMainRow(wsMain, [...general, linkText, ...blank(22)]);
         if (anchor && r.articulos_count > 0) {
             const cell = rootRow.getCell(SHEET_COL_VER_ARTICULOS);
             cell.value = { text: linkText, hyperlink: `#'Artículos'!A${anchor}` };
@@ -769,17 +762,15 @@ export async function buildArticulosPuestoExcelConsolidado(
         totalDataRows += 1;
 
         for (const a of r.articulos) {
-            const artId = `p${r.puesto_id}.${origenCode(a.origen)}${a.registro_id}`;
             const movKey = articuloMovKey(a.origen, a.registro_id);
             const movAnchor = movAnchorByKey.get(movKey);
             const movCount = a.movimientos_count ?? 0;
             const movLinkText = movCount > 0 ? `Ver movimientos (${movCount})` : "";
 
+            /** Movimientos del artículo: se unen todos en la misma fila del artículo, separados por ";". */
+            const joinMov = (mapper: (m: MovimientoArticuloRow) => string): string => a.movimientos.map(mapper).join(";");
+
             const artRowMain = addMainRow(wsMain, [
-                artId,
-                String(r.puesto_id),
-                1,
-                "Artículo",
                 ...general,
                 "",
                 a.origen,
@@ -794,7 +785,16 @@ export async function buildArticulosPuestoExcelConsolidado(
                 a.combo_nombre,
                 a.nomenclador_nombre,
                 movLinkText,
-                ...blank(10),
+                joinMov((m) => excelCellString(m.nombre_persona_entrega)),
+                joinMov((m) => excelCellString(m.nombre_persona_recibe)),
+                joinMov((m) => excelCellString(m.departamento)),
+                joinMov((m) => excelCellString(m.telefono)),
+                joinMov((m) => excelCellString(m.entrega)),
+                joinMov((m) => excelCellString(m.recibe)),
+                joinMov((m) => formatDateOnlyDMY(m.fecha)),
+                joinMov((m) => formatTimeOnlyHMS(m.hora)),
+                joinMov((m) => (m.firma_entrega ? "Sí" : "No")),
+                joinMov((m) => (m.firma_recibe ? "Sí" : "No")),
             ]);
             if (movAnchor && movCount > 0) {
                 const cell = artRowMain.getCell(SHEET_COL_VER_MOVIMIENTOS);
@@ -803,31 +803,6 @@ export async function buildArticulosPuestoExcelConsolidado(
             }
             styleDataRow(artRowMain, 1);
             totalDataRows += 1;
-
-            for (const m of a.movimientos) {
-                const movRow = addMainRow(wsMain, [
-                    String(m.id),
-                    artId,
-                    2,
-                    "Movimiento",
-                    ...general,
-                    "",
-                    ...blank(11),
-                    "",
-                    excelCellString(m.nombre_persona_entrega),
-                    excelCellString(m.nombre_persona_recibe),
-                    excelCellString(m.departamento),
-                    excelCellString(m.telefono),
-                    excelCellString(m.entrega),
-                    excelCellString(m.recibe),
-                    formatDateOnlyDMY(m.fecha),
-                    formatTimeOnlyHMS(m.hora),
-                    m.firma_entrega ? "Sí" : "No",
-                    m.firma_recibe ? "Sí" : "No",
-                ]);
-                styleDataRow(movRow, 2);
-                totalDataRows += 1;
-            }
         }
     }
 
@@ -838,7 +813,7 @@ export async function buildArticulosPuestoExcelConsolidado(
 
     wsMain.columns = [
         { width: 3 },
-        { width: 14 }, { width: 16 }, { width: 8 }, { width: 20 }, { width: 10 },
+        { width: 10 },
         { width: 28 }, { width: 24 }, { width: 22 }, { width: 28 }, { width: 24 }, { width: 28 },
         { width: 18 },
         { width: 16 }, { width: 14 }, { width: 28 }, { width: 10 }, { width: 14 }, { width: 14 }, { width: 20 }, { width: 14 }, { width: 12 }, { width: 28 }, { width: 20 },

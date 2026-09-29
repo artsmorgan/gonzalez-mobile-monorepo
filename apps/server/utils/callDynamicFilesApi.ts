@@ -131,6 +131,65 @@ export async function fetchDynamicFile(params: {
     };
 }
 
+/**
+ * Variante en streaming de `fetchDynamicFile`, para archivos grandes (p. ej. instaladores .apk): evita
+ * bufferear la respuesta completa en memoria del servidor antes de reenviarla al cliente móvil. Con
+ * archivos de decenas/cientos de MB, el buffer completo (`responseType: "arraybuffer"`) agrega
+ * suficiente latencia como para que el cliente agote su timeout de red esperando el primer byte.
+ */
+export async function fetchDynamicFileStream(params: {
+    req: NextRequest;
+    type: DynamicFileType;
+    url: string;
+    shouldVerifyAccessToken?: boolean;
+    download?: boolean;
+}) {
+    const { req, type, url, shouldVerifyAccessToken = true, download } = params;
+    const baseUrl = resolveBaseUrl(req);
+    const endpoint = `${baseUrl}/api/dynamic-prisma/files`;
+    const mobileAccessToken = (process.env.MOBILE_ACCESS_TOKEN || "").trim();
+    const accessToken = resolveUserAccessToken(req);
+
+    const response = await axios.get(endpoint, {
+        params: {
+            type,
+            url,
+            token: accessToken || undefined,
+            mobileAccessToken,
+            shouldVerifyAccessToken,
+            ...(typeof download === "boolean" ? { download } : {}),
+        },
+        headers: buildAuthHeaders(req),
+        responseType: "stream",
+        validateStatus: () => true,
+    });
+
+    if (response.status < 200 || response.status >= 300) {
+        const chunks: Buffer[] = [];
+        for await (const chunk of response.data as NodeJS.ReadableStream) {
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        let payloadMessage = "";
+        try {
+            const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+            payloadMessage = parsed?.message || parsed?.error || "";
+        } catch {
+            payloadMessage = "";
+        }
+        throw new Error(payloadMessage || `Error en ${endpoint} (HTTP ${response.status})`);
+    }
+
+    return {
+        stream: response.data as NodeJS.ReadableStream,
+        headers: {
+            contentType: String(response.headers["content-type"] ?? "application/octet-stream"),
+            contentDisposition: String(response.headers["content-disposition"] ?? ""),
+            cacheControl: String(response.headers["cache-control"] ?? "public, max-age=31536000"),
+            contentLength: String(response.headers["content-length"] ?? ""),
+        },
+    };
+}
+
 export async function fetchDynamicReportsDownload(params: {
     req: NextRequest;
     ids: number[];

@@ -48,6 +48,7 @@ import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampT
 import { eventBus } from '@/hooks/eventBus';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { deleteFile, getFile, getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
+import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 
 type AttendanceControlScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'AttendanceControl'>;
 
@@ -2124,7 +2125,7 @@ export default function AttendanceControlScreen() {
                             return (
                               <ThemedView key={`${record.id || record.id_local}-img-r-${img?.id ?? img?.name ?? Math.random()}`} style={styles.photoItemMini}>
                                 {!!uri && (
-                                  <Image source={{ uri }} style={styles.photoPreviewMini} resizeMode="contain" />
+                                  <ZoomableThumbnailImage uri={uri} style={styles.photoPreviewMini} resizeMode="contain" />
                                 )}
                                 {!!String(img?.original_name || '').trim() && (
                                   <ThemedText style={styles.photoCaption}>{String(img.original_name).trim()}</ThemedText>
@@ -2143,8 +2144,8 @@ export default function AttendanceControlScreen() {
                           })}
                           {(record.images_local || []).map((img: any) => (
                             <ThemedView key={`${record.id || record.id_local}-img-l-${img?.id_local ?? img?.original_name ?? Math.random()}`} style={styles.photoItemMini}>
-                              <Image
-                                source={{ uri: attendanceLocalImageUri(img as AttendanceControlImageLocal) }}
+                              <ZoomableThumbnailImage
+                                uri={attendanceLocalImageUri(img as AttendanceControlImageLocal)}
                                 style={styles.photoPreviewMini}
                                 resizeMode="contain"
                               />
@@ -2523,7 +2524,7 @@ export default function AttendanceControlScreen() {
                   <ThemedView style={styles.photosContainer}>
                     {imagenesLocal.map((img) => (
                       <ThemedView key={`l-${img.id_local}`} style={styles.photoItem}>
-                        <Image source={{ uri: attendanceLocalImageUri(img) }} style={styles.photoPreview} resizeMode="contain" />
+                        <ZoomableThumbnailImage uri={attendanceLocalImageUri(img)} style={styles.photoPreview} resizeMode="contain" />
                         <TouchableOpacity style={styles.removePhotoButton} onPress={() => removeLocalImage(img.id_local)}>
                           <Ionicons name="trash" size={20} color="#FF3B30" />
                         </TouchableOpacity>

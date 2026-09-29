@@ -437,14 +437,12 @@ export async function buildLlaverosExcelConsolidado(
         wsDet.addRow([]);
     }
 
-    /** Cuadrícula jerárquica: Llavero (nivel 0) → Movimiento (nivel 1, `e_movimiento_llavero`) y Llave vinculada (nivel 1, `e_llave_en_llavero` → `e_llave`), hermanos. */
-    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
+    /**
+     * Un llavero = una sola fila: `e_movimiento_llavero` (Movimientos) y `e_llave_en_llavero` → `e_llave`
+     * (Llave vinculada) son 2 listas hijas independientes del llavero (no anidadas entre sí), así que ambas
+     * se unen con ";" en columnas propias sobre esa misma fila.
+     */
     const headers = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Llavero",
         "N° llavero",
         "Nombre llavero",
@@ -478,7 +476,6 @@ export async function buildLlaverosExcelConsolidado(
     ];
     const COL_VER_MOV = headers.indexOf("Ver movimientos") + 1;
     const COL_VER_LLAVES = headers.indexOf("Ver llaves") + 1;
-    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 1;
 
     applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
 
@@ -490,21 +487,41 @@ export async function buildLlaverosExcelConsolidado(
         cell.border = border;
         cell.alignment = { vertical: "middle", wrapText: true };
     });
+    for (const sheet of [wsMain, wsMov, wsDet]) {
+        sheet.views = [{ showGridLines: false }];
+    }
 
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((cell, colNumber) => {
             if (colNumber === 1) return;
             cell.border = border;
             cell.alignment = { vertical: "top", wrapText: true };
         });
-        row.getCell(COL_TIPO_FILA + 1).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
-        row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(COL_TIPO_FILA + 1).font = { bold: true };
+        row.height = 22;
     };
+
+    /** Todos los ítems de un grupo hijo de 1 llavero se unen en 1 sola fila, separados por punto y coma. */
+    const joinDetalle = (detalleRows: Array<Record<string, unknown>>, key: string): string =>
+        detalleRows.map((item) => String(item?.[key] ?? "")).join(";");
 
     let totalDataRows = 0;
     for (const r of rows) {
         const cambio = cambiosByRegistro.get(Number(r.id));
+        const movs = Array.isArray(r.e_movimiento_llavero) ? r.e_movimiento_llavero : [];
+        const movsFlat = movs.map((m: any) => ({
+            entrega: m.nombre_persona_entrega,
+            recibe: m.nombre_persona_recibe,
+            departamento: m.departamento,
+            telefono: m.telefono,
+            fecha: formatDateOnlyDMY(m.fecha),
+            hora: formatTimeOnlyHMS(m.hora),
+            firmaEntrega: m.firma_entrega ? "Sí" : "No",
+            firmaRecibe: m.firma_recibe ? "Sí" : "No",
+            firmaResponsable: m.firma_responsable ?? "",
+        }));
+        const links = Array.isArray(r.e_llave_en_llavero) ? r.e_llave_en_llavero : [];
+        const llavesRows = links.map((x: any) => x?.e_llave).filter(Boolean);
+
         const general: Record<number, unknown> = {
             [headers.indexOf("ID Llavero") + 1]: String(r.id),
             [headers.indexOf("N° llavero") + 1]: excelCellString(r.numero_llavero),
@@ -519,72 +536,42 @@ export async function buildLlaverosExcelConsolidado(
             [headers.indexOf("Creado (fecha)") + 1]: formatDateOnlyDMY(r.created_at),
             [headers.indexOf("Creado (hora)") + 1]: formatTimeOnlyHMS(r.created_at),
             [headers.indexOf("Creado por") + 1]: fmtCreadorEmpleado(creadorById.get(Number(r.created_by))),
-            [headers.indexOf("Usuario modifica") + 1]: cambio?.cedula ?? "",
+            [headers.indexOf("Usuario modifica") + 1]: cambio?.nombreCompleto ?? "",
             [headers.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
+            [headers.indexOf("Entrega (movimiento)") + 1]: joinDetalle(movsFlat, "entrega"),
+            [headers.indexOf("Recibe (movimiento)") + 1]: joinDetalle(movsFlat, "recibe"),
+            [headers.indexOf("Departamento (movimiento)") + 1]: joinDetalle(movsFlat, "departamento"),
+            [headers.indexOf("Teléfono (movimiento)") + 1]: joinDetalle(movsFlat, "telefono"),
+            [headers.indexOf("Fecha (movimiento)") + 1]: joinDetalle(movsFlat, "fecha"),
+            [headers.indexOf("Hora (movimiento)") + 1]: joinDetalle(movsFlat, "hora"),
+            [headers.indexOf("Tiene firma entrega (movimiento)") + 1]: joinDetalle(movsFlat, "firmaEntrega"),
+            [headers.indexOf("Tiene firma recibe (movimiento)") + 1]: joinDetalle(movsFlat, "firmaRecibe"),
+            [headers.indexOf("Firma responsable (movimiento)") + 1]: joinDetalle(movsFlat, "firmaResponsable"),
+            [headers.indexOf("N° llave (vinculada)") + 1]: joinDetalle(llavesRows, "numero_llave"),
+            [headers.indexOf("Lugar abre (llave vinculada)") + 1]: joinDetalle(llavesRows, "lugar_abre"),
+            [headers.indexOf("Cantidad copias (llave vinculada)") + 1]: joinDetalle(llavesRows, "cantidad_copias"),
+            [headers.indexOf("Observaciones (llave vinculada)") + 1]: joinDetalle(llavesRows, "observaciones"),
         };
 
-        const rootValues = new Array(headers.length).fill("");
-        rootValues[0] = String(r.id);
-        rootValues[2] = 0;
-        rootValues[3] = "Llavero";
-        for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
-        rootValues[COL_VER_MOV - 1] = "Ver movimientos";
-        if (Number(r.llaves_vinculadas_count) > 0) rootValues[COL_VER_LLAVES - 1] = "Ver llaves";
-        const rootRow = addMainRow(wsMain, rootValues);
+        const rowValues = new Array(headers.length).fill("");
+        for (const [col, val] of Object.entries(general)) rowValues[Number(col) - 1] = val;
+        rowValues[COL_VER_MOV - 1] = "Ver movimientos";
+        if (Number(r.llaves_vinculadas_count) > 0) rowValues[COL_VER_LLAVES - 1] = "Ver llaves";
+        const row = addMainRow(wsMain, rowValues);
         const movRow = movAnchorByKey.get(Number(r.id));
         if (movRow) {
-            const c = rootRow.getCell(COL_VER_MOV + 1);
+            const c = row.getCell(COL_VER_MOV + 1);
             c.value = { text: "Ver movimientos", hyperlink: `#'Movimientos'!A${movRow}` };
             c.font = { color: { argb: "FF0563C1" }, underline: true };
         }
         const detRow = detAnchorByKey.get(Number(r.id));
         if (detRow && Number(r.llaves_vinculadas_count) > 0) {
-            const c = rootRow.getCell(COL_VER_LLAVES + 1);
+            const c = row.getCell(COL_VER_LLAVES + 1);
             c.value = { text: "Ver llaves", hyperlink: `#'Detalles'!A${detRow}` };
             c.font = { color: { argb: "FF0563C1" }, underline: true };
         }
-        styleDataRow(rootRow, 0);
+        styleDataRow(row);
         totalDataRows += 1;
-
-        const movs = Array.isArray(r.e_movimiento_llavero) ? r.e_movimiento_llavero : [];
-        movs.forEach((m: any, idx: number) => {
-            const values = new Array(headers.length).fill("");
-            values[0] = `${r.id}.mov${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = "Movimiento";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[headers.indexOf("Entrega (movimiento)")] = excelCellString(m.nombre_persona_entrega);
-            values[headers.indexOf("Recibe (movimiento)")] = excelCellString(m.nombre_persona_recibe);
-            values[headers.indexOf("Departamento (movimiento)")] = excelCellString(m.departamento);
-            values[headers.indexOf("Teléfono (movimiento)")] = excelCellString(m.telefono);
-            values[headers.indexOf("Fecha (movimiento)")] = formatDateOnlyDMY(m.fecha);
-            values[headers.indexOf("Hora (movimiento)")] = formatTimeOnlyHMS(m.hora);
-            values[headers.indexOf("Tiene firma entrega (movimiento)")] = m.firma_entrega ? "Sí" : "No";
-            values[headers.indexOf("Tiene firma recibe (movimiento)")] = m.firma_recibe ? "Sí" : "No";
-            values[headers.indexOf("Firma responsable (movimiento)")] = excelCellString(m.firma_responsable ?? "");
-            const movRowMain = addMainRow(wsMain, values);
-            styleDataRow(movRowMain, 1);
-            totalDataRows += 1;
-        });
-
-        const links = Array.isArray(r.e_llave_en_llavero) ? r.e_llave_en_llavero : [];
-        const llavesRows = links.map((x: any) => x?.e_llave).filter(Boolean);
-        llavesRows.forEach((ll: any, idx: number) => {
-            const values = new Array(headers.length).fill("");
-            values[0] = `${r.id}.llave${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = "Llave vinculada";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[headers.indexOf("N° llave (vinculada)")] = excelCellString(ll.numero_llave);
-            values[headers.indexOf("Lugar abre (llave vinculada)")] = excelCellString(ll.lugar_abre);
-            values[headers.indexOf("Cantidad copias (llave vinculada)")] = String(ll.cantidad_copias ?? "");
-            values[headers.indexOf("Observaciones (llave vinculada)")] = excelCellString(ll.observaciones);
-            const llaveRow = addMainRow(wsMain, values);
-            styleDataRow(llaveRow, 1);
-            totalDataRows += 1;
-        });
     }
 
     wsMain.autoFilter = {
@@ -595,7 +582,7 @@ export async function buildLlaverosExcelConsolidado(
     wsMain.columns = [
         { width: 3 },
         ...[
-            12, 14, 8, 20, 10,
+            10,
             12, 22, 26, 22, 18, 22, 22, 22, 28,
             14, 12, 20, 16, 20,
             16, 14,

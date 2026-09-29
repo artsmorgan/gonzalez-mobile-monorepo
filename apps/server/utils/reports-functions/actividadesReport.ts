@@ -18,7 +18,6 @@ import {
     applyConsolidadoReportBanner,
     fetchLatestCambiosPorRegistro,
     formatDateOnlyDMY,
-    formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
 } from "./reportConsolidadoBanner";
 
@@ -30,7 +29,7 @@ const ACTIVIDADES_REPORT_INCLUDE = {
     },
 };
 
-export type ActividadesModuleFilters = ActaEntregaModuleFilters;
+export type ActividadesModuleFilters = ActaEntregaModuleFilters & { tipoTurno?: string | null };
 export type ActividadesOrderKey = "fecha" | "nombre_actividad";
 
 function parseBoundaryDate(s: string | undefined | null): Date | null {
@@ -41,7 +40,12 @@ function parseBoundaryDate(s: string | undefined | null): Date | null {
 }
 
 export function normalizeActividadesFilters(raw: unknown): ActividadesModuleFilters {
-    return normalizeActaEntregaFilters(raw);
+    const base = normalizeActaEntregaFilters(raw);
+    const tipoTurnoRaw = String((raw as Record<string, unknown> | null | undefined)?.tipoTurno ?? "").trim().toUpperCase();
+    return {
+        ...base,
+        tipoTurno: ["D", "M", "N"].includes(tipoTurnoRaw) ? tipoTurnoRaw : null,
+    };
 }
 
 export function hasActividadesListModuleFiltersContent(f: ActividadesModuleFilters): boolean {
@@ -53,6 +57,7 @@ export function hasActividadesListModuleFiltersContent(f: ActividadesModuleFilte
     if (f.contratoIds && f.contratoIds.length > 0) return true;
     if (f.corpoIds && f.corpoIds.length > 0) return true;
     if (f.puestoIds && f.puestoIds.length > 0) return true;
+    if (f.tipoTurno) return true;
     return false;
 }
 
@@ -73,6 +78,7 @@ export function filtersMatchActividadesListQuery(parsedRowFilters: any, listModu
     if (!overlaps(listModuleFilters.contratoIds ?? undefined, saved.contratoIds ?? undefined)) return false;
     if (!overlaps(listModuleFilters.corpoIds ?? undefined, saved.corpoIds ?? undefined)) return false;
     if (!overlaps(listModuleFilters.puestoIds ?? undefined, saved.puestoIds ?? undefined)) return false;
+    if (listModuleFilters.tipoTurno && String(saved.tipoTurno || "") !== String(listModuleFilters.tipoTurno)) return false;
     return true;
 }
 
@@ -387,6 +393,7 @@ export async function queryActividadesReportRows(prisma: ReportDataAccess, filte
         where: {
             ...(Object.keys(fechaWhere).length ? { fecha_inicio: fechaWhere } : {}),
             ...(puestoClause ? { e_actividades_puesto: puestoClause } : {}),
+            ...(filters.tipoTurno ? { tipo_turno: filters.tipoTurno } : {}),
         },
         ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
         take: 50_000,
@@ -580,41 +587,30 @@ export async function buildActividadesExcelConsolidado(
         wsP.addRow([]);
     }
 
-    /** Cuadrícula jerárquica: Actividad (nivel 0) → Puesto vinculado (nivel 1) → Plaza vinculada (nivel 2) → Artículo (nivel 3). */
-    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
+    /** Cada actividad (registro de negocio) ocupa una única fila; los artículos se aplanan en columnas propias. */
     const headers = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Actividad",
         "Nombre actividad",
         "Fecha inicio",
         "Fecha fin",
         "Frecuencia (título)",
+        "Tipo de turno",
         "Es revisión equipo",
         "Descripción",
         "Puestos vinculados",
-        "Puesto (vínculo)",
-        "Código puesto (vínculo)",
-        "Plaza (vínculo)",
-        "Marcada (vínculo)",
-        "Creado (vínculo) (fecha)",
-        "Creado (vínculo) (hora)",
         "Nombre artículo",
         "Tipo artículo",
         "Marca artículo",
         "Modelo artículo",
         "Serie artículo",
-        "Cant. req. artículo",
-        "Cant. real artículo",
+        "Cant. Req. artículo",
+        "Cant. Real artículo",
         "Estado artículo",
         "Observaciones artículo",
         "Usuario modifica",
         "Fecha y hora modifica",
     ];
-    const COL_PUESTOS_VINCULADOS = 12;
+    const COL_PUESTOS_VINCULADOS = headers.indexOf("Puestos vinculados") + 2;
 
     applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
 
@@ -634,23 +630,14 @@ export async function buildActividadesExcelConsolidado(
     wsMain.columns = [
         { width: 3 },
         { width: 12 },
-        { width: 14 },
-        { width: 8 },
-        { width: 20 },
-        { width: 12 },
         { width: 40 },
         { width: 16 },
         { width: 16 },
         { width: 36 },
+        { width: 14 },
         { width: 20 },
         { width: 65 },
         { width: 20 },
-        { width: 36 },
-        { width: 20 },
-        { width: 30 },
-        { width: 14 },
-        { width: 14 },
-        { width: 12 },
         { width: 32 },
         { width: 18 },
         { width: 18 },
@@ -664,17 +651,36 @@ export async function buildActividadesExcelConsolidado(
         { width: 20 },
     ];
 
-    const blank = (n: number) => Array.from({ length: n }, () => "");
-
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((c, colNumber) => {
             if (colNumber === 1) return;
             c.border = borderThin;
             c.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
         });
-        row.getCell(5).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
-        row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(5).font = { bold: true };
+        row.height = 22;
+    };
+
+    const tipoTurnoLabel = (v: unknown): string => {
+        const s = String(v ?? "").trim().toUpperCase();
+        if (s === "D") return "Diurno";
+        if (s === "M") return "Mixto";
+        if (s === "N") return "Nocturno";
+        return "";
+    };
+
+    /** Todos los artículos de todas las plazas vinculadas a la actividad se unen en 1 sola fila, separados por punto y coma. */
+    const joinDetalle = (detalleRows: Array<Record<string, unknown>>, key: string): string =>
+        detalleRows.map((item) => String(item?.[key] ?? "")).join(";");
+
+    const collectArticulos = (act: any): Array<Record<string, unknown>> => {
+        const out: Array<Record<string, unknown>> = [];
+        for (const ap of act.e_actividades_puesto || []) {
+            for (const pl of ap.e_actividades_puesto_plaza || []) {
+                if (!actividadPuestoPlazaIncluyeReporteConsolidado(pl)) continue; // Consolidado
+                out.push(...parseArticles(pl.articles));
+            }
+        }
+        return out;
     };
 
     let totalDataRows = 0;
@@ -682,94 +688,34 @@ export async function buildActividadesExcelConsolidado(
         const pRow = actToPuestosRow.get(act.id) ?? 1;
         const frecTit = frecuenciaTitleOnly(act.frecuencia);
         const cambio = cambiosByRegistro.get(Number(act.id));
-        const cambioVals = [cambio?.cedula ?? "", cambio?.fechaHoraTexto ?? ""];
-        const general = [
+        const articulos = collectArticulos(act);
+
+        const rootRow = addMainRow(wsMain, [
             String(act.id),
             act.nombre_actividad,
             formatDateOnlyDMY(act.fecha_inicio),
             formatDateOnlyDMY(act.fecha_fin),
             frecTit,
+            tipoTurnoLabel(act.tipo_turno),
             act.es_revision_equipo ? "Sí" : "No",
             String(act.descripcion_actividad ?? "").slice(0, 5000),
-        ];
-
-        const rootRow = addMainRow(wsMain, [
-            String(act.id),
-            "",
-            0,
-            "Actividad",
-            ...general,
             "Puestos vinculados",
-            ...blank(2),
-            ...blank(4),
-            ...blank(9),
-            ...cambioVals,
+            joinDetalle(articulos, "nombre"),
+            joinDetalle(articulos, "tipo"),
+            joinDetalle(articulos, "marca"),
+            joinDetalle(articulos, "modelo"),
+            joinDetalle(articulos, "serie"),
+            joinDetalle(articulos, "cantidad_requerida"),
+            joinDetalle(articulos, "cantidad_real"),
+            joinDetalle(articulos, "estado"),
+            joinDetalle(articulos, "observaciones"),
+            cambio?.nombreCompleto ?? "",
+            cambio?.fechaHoraTexto ?? "",
         ]);
-        rootRow.getCell(COL_PUESTOS_VINCULADOS + 1).value = { text: "Puestos vinculados", hyperlink: `#'${SHEET_PUESTOS}'!A${pRow}` };
-        rootRow.getCell(COL_PUESTOS_VINCULADOS + 1).font = { color: { argb: "FF0563C1" }, underline: true };
-        styleDataRow(rootRow, 0);
+        rootRow.getCell(COL_PUESTOS_VINCULADOS).value = { text: "Puestos vinculados", hyperlink: `#'${SHEET_PUESTOS}'!A${pRow}` };
+        rootRow.getCell(COL_PUESTOS_VINCULADOS).font = { color: { argb: "FF0563C1" }, underline: true };
+        styleDataRow(rootRow);
         totalDataRows += 1;
-
-        for (const ap of act.e_actividades_puesto || []) {
-            const apRow = addMainRow(wsMain, [
-                String(ap.id),
-                String(act.id),
-                1,
-                "Puesto vinculado",
-                ...general,
-                "",
-                String(ap.e_estructura_puesto?.nombre ?? ap.puesto_id ?? ""),
-                String(ap.e_estructura_puesto?.codigo ?? ""),
-                ...blank(4),
-                ...blank(9),
-                ...cambioVals,
-            ]);
-            styleDataRow(apRow, 1);
-            totalDataRows += 1;
-
-            for (const pl of ap.e_actividades_puesto_plaza || []) {
-                if (!actividadPuestoPlazaIncluyeReporteConsolidado(pl)) continue; // Consolidado
-                const plRow = addMainRow(wsMain, [
-                    String(pl.id),
-                    String(ap.id),
-                    2,
-                    "Plaza vinculada",
-                    ...general,
-                    ...blank(3),
-                    String(pl.e_estructura_plazas?.nombre ?? pl.plaza_id ?? ""),
-                    pl.marcada ? "Sí" : "No",
-                    formatDateOnlyDMY(pl.created_at),
-                    formatTimeOnlyHMS(pl.created_at),
-                    ...blank(9),
-                    ...cambioVals,
-                ]);
-                styleDataRow(plRow, 2);
-                totalDataRows += 1;
-
-                parseArticles(pl.articles).forEach((art, idx) => {
-                    const artRow = addMainRow(wsMain, [
-                        `${pl.id}.art${idx + 1}`,
-                        String(pl.id),
-                        3,
-                        "Artículo",
-                        ...general,
-                        ...blank(7),
-                        String(art?.nombre ?? ""),
-                        String(art?.tipo ?? ""),
-                        String(art?.marca ?? ""),
-                        String(art?.modelo ?? ""),
-                        String(art?.serie ?? ""),
-                        art?.cantidad_requerida != null ? String(art.cantidad_requerida) : "",
-                        art?.cantidad_real != null ? String(art.cantidad_real) : "",
-                        String(art?.estado ?? ""),
-                        String(art?.observaciones ?? ""),
-                        ...cambioVals,
-                    ]);
-                    styleDataRow(artRow, 3);
-                    totalDataRows += 1;
-                });
-            }
-        }
     }
 
     wsMain.autoFilter = {

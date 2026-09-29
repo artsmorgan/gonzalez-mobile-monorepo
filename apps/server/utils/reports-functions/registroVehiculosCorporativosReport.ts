@@ -638,14 +638,8 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
         }
     }
 
-    /** Cuadrícula jerárquica: Vehículo (nivel 0) → Uso (nivel 1, `c_usos_vehiculos_corporativos`) y Mantenimiento (nivel 1, `c_mantenimiento_vehiculos_corporativos`), hermanos. */
-    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
+    /** Una fila por vehículo: los usos y mantenimientos se aplanan en columnas separadas por `;`. */
     const mainHeaders = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID vehículo",
         "Empresa",
         "Cliente",
@@ -698,11 +692,9 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
     // Posiciones dentro de `mainHeaders` (sin la columna de margen que agrega `addMainRow`).
     const colUsos = mainHeaders.indexOf("Ver usos") + 1;
     const colMant = mainHeaders.indexOf("Ver mantenimientos") + 1;
-    const COL_TIPO_FILA = mainHeaders.indexOf("Tipo de fila") + 1;
     // +1 más: columna real en la hoja tras el margen que agrega `addMainRow`.
     const SHEET_COL_USOS = colUsos + 1;
     const SHEET_COL_MANT = colMant + 1;
-    const SHEET_COL_TIPO_FILA = COL_TIPO_FILA + 1;
     const linkCols = new Set([SHEET_COL_USOS, SHEET_COL_MANT]);
 
     const creadorIds = [...new Set(rows.map((r) => Number(r.created_by)).filter((n) => Number.isFinite(n) && n > 0))];
@@ -735,16 +727,17 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
         cell.alignment = { vertical: "middle", wrapText: true };
     }
 
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((cell, colNumber) => {
             if (colNumber === 1) return;
             cell.border = borderThin;
             cell.alignment = { wrapText: true, vertical: "top" };
         });
-        row.getCell(SHEET_COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
-        row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(SHEET_COL_TIPO_FILA).font = { bold: true };
     };
+
+    /** Une los valores de un campo de los hijos (usos o mantenimientos) de 1 vehículo en 1 sola celda, separados por `;`. */
+    const joinDetalle = <T,>(items: T[], pick: (item: T) => unknown): string =>
+        items.map((item) => String(pick(item) ?? "")).join(";");
 
     for (const r of rows) {
         const usoLink = r.usos_count > 0 ? `Ver usos (${r.usos_count})` : "";
@@ -775,15 +768,39 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
             [mainHeaders.indexOf("Fecha de creación") + 1]: formatDateOnlyDMY(r.created_at),
             [mainHeaders.indexOf("Hora de creación") + 1]: formatTimeOnlyHMS(r.created_at),
             [mainHeaders.indexOf("Creado por") + 1]: fmtCreador(creadorById.get(Number(r.created_by))),
-            [mainHeaders.indexOf("Usuario modifica") + 1]: cambio?.cedula ?? "",
+            [mainHeaders.indexOf("Usuario modifica") + 1]: cambio?.nombreCompleto ?? "",
             [mainHeaders.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
         };
 
         const rootValues = new Array(mainHeaders.length).fill("");
         rootValues[0] = String(r.id);
-        rootValues[2] = 0;
-        rootValues[3] = "Vehículo";
         for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
+
+        rootValues[mainHeaders.indexOf("Conductor (uso)")] = joinDetalle(r.usos, (u) => excelCellString(u.nombre_conductor));
+        rootValues[mainHeaders.indexOf("Código conductor (uso)")] = joinDetalle(r.usos, (u) => excelCellString(u.codigo_conductor));
+        rootValues[mainHeaders.indexOf("Fecha (uso)")] = joinDetalle(r.usos, (u) => formatDateOnlyDMY(u.fecha));
+        rootValues[mainHeaders.indexOf("Hora (uso)")] = joinDetalle(r.usos, (u) => formatTimeOnlyHMS(u.fecha));
+        rootValues[mainHeaders.indexOf("Inicio (uso)")] = joinDetalle(r.usos, (u) => formatDateOnlyDMY(u.inicio));
+        rootValues[mainHeaders.indexOf("Hora inicio (uso)")] = joinDetalle(r.usos, (u) => formatTimeOnlyHMS(u.inicio));
+        rootValues[mainHeaders.indexOf("Fin (uso)")] = joinDetalle(r.usos, (u) => formatDateOnlyDMY(u.fin));
+        rootValues[mainHeaders.indexOf("Hora fin (uso)")] = joinDetalle(r.usos, (u) => formatTimeOnlyHMS(u.fin));
+        rootValues[mainHeaders.indexOf("Km inicio (uso)")] = joinDetalle(r.usos, (u) => u.km_inicio);
+        rootValues[mainHeaders.indexOf("Km fin (uso)")] = joinDetalle(r.usos, (u) => u.km_fin);
+        rootValues[mainHeaders.indexOf("Motivo (uso)")] = joinDetalle(r.usos, (u) => excelCellString(u.motivo));
+        rootValues[mainHeaders.indexOf("Combustible inicio (uso)")] = joinDetalle(r.usos, (u) => excelCellString(u.combustible_inicio));
+        rootValues[mainHeaders.indexOf("Combustible fin (uso)")] = joinDetalle(r.usos, (u) => excelCellString(u.combustible_fin));
+
+        rootValues[mainHeaders.indexOf("Fecha (mantenimiento)")] = joinDetalle(r.mantenimientos, (m) => formatDateOnlyDMY(m.fecha));
+        rootValues[mainHeaders.indexOf("Hora (mantenimiento)")] = joinDetalle(r.mantenimientos, (m) => formatTimeOnlyHMS(m.fecha));
+        rootValues[mainHeaders.indexOf("Tipo (mantenimiento)")] = joinDetalle(r.mantenimientos, (m) => excelCellString(m.tipo));
+        rootValues[mainHeaders.indexOf("Mantenimiento")] = joinDetalle(r.mantenimientos, (m) => excelCellString(m.mantenimiento));
+        rootValues[mainHeaders.indexOf("Diagnóstico (mantenimiento)")] = joinDetalle(r.mantenimientos, (m) => excelCellString(m.diagnostico));
+        rootValues[mainHeaders.indexOf("Km próxima revisión (mantenimiento)")] = joinDetalle(
+            r.mantenimientos,
+            (m) => m.kilometraje_siguiente_revision,
+        );
+        rootValues[mainHeaders.indexOf("Mecánico (mantenimiento)")] = joinDetalle(r.mantenimientos, (m) => excelCellString(m.nombre_mecanico));
+
         const rootRow = addMainRow(wsMain, rootValues);
         const usoAnchor = usoAnchorByVehiculoId.get(r.id);
         if (usoAnchor && r.usos_count > 0) {
@@ -797,49 +814,7 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
             cell.value = { text: mantLink, hyperlink: `#'Detalles'!A${mantAnchor}` };
             cell.font = { color: { argb: "FF0563C1" }, underline: true };
         }
-        styleDataRow(rootRow, 0);
-
-        r.usos.forEach((u, idx) => {
-            const values = new Array(mainHeaders.length).fill("");
-            values[0] = `${r.id}.uso${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = "Uso";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[mainHeaders.indexOf("Conductor (uso)")] = excelCellString(u.nombre_conductor);
-            values[mainHeaders.indexOf("Código conductor (uso)")] = excelCellString(u.codigo_conductor);
-            values[mainHeaders.indexOf("Fecha (uso)")] = formatDateOnlyDMY(u.fecha);
-            values[mainHeaders.indexOf("Hora (uso)")] = formatTimeOnlyHMS(u.fecha);
-            values[mainHeaders.indexOf("Inicio (uso)")] = formatDateOnlyDMY(u.inicio);
-            values[mainHeaders.indexOf("Hora inicio (uso)")] = formatTimeOnlyHMS(u.inicio);
-            values[mainHeaders.indexOf("Fin (uso)")] = formatDateOnlyDMY(u.fin);
-            values[mainHeaders.indexOf("Hora fin (uso)")] = formatTimeOnlyHMS(u.fin);
-            values[mainHeaders.indexOf("Km inicio (uso)")] = u.km_inicio;
-            values[mainHeaders.indexOf("Km fin (uso)")] = u.km_fin;
-            values[mainHeaders.indexOf("Motivo (uso)")] = excelCellString(u.motivo);
-            values[mainHeaders.indexOf("Combustible inicio (uso)")] = excelCellString(u.combustible_inicio);
-            values[mainHeaders.indexOf("Combustible fin (uso)")] = excelCellString(u.combustible_fin);
-            const row = addMainRow(wsMain, values);
-            styleDataRow(row, 1);
-        });
-
-        r.mantenimientos.forEach((m, idx) => {
-            const values = new Array(mainHeaders.length).fill("");
-            values[0] = `${r.id}.mant${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = "Mantenimiento";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[mainHeaders.indexOf("Fecha (mantenimiento)")] = formatDateOnlyDMY(m.fecha);
-            values[mainHeaders.indexOf("Hora (mantenimiento)")] = formatTimeOnlyHMS(m.fecha);
-            values[mainHeaders.indexOf("Tipo (mantenimiento)")] = excelCellString(m.tipo);
-            values[mainHeaders.indexOf("Mantenimiento")] = excelCellString(m.mantenimiento);
-            values[mainHeaders.indexOf("Diagnóstico (mantenimiento)")] = excelCellString(m.diagnostico);
-            values[mainHeaders.indexOf("Km próxima revisión (mantenimiento)")] = m.kilometraje_siguiente_revision;
-            values[mainHeaders.indexOf("Mecánico (mantenimiento)")] = excelCellString(m.nombre_mecanico);
-            const row = addMainRow(wsMain, values);
-            styleDataRow(row, 1);
-        });
+        styleDataRow(rootRow);
     }
 
     wsMain.autoFilter = {
@@ -850,7 +825,7 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
     wsMain.columns = [
         { width: 3 },
         ...[
-            12, 14, 8, 20, 12,
+            12,
             28, 24, 22, 28, 24, 28,
             14, 14, 14, 16, 8, 12, 14, 12, 14, 24, 12, 8, 10, 8,
             14, 12, 16, 16, 20,

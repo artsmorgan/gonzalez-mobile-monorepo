@@ -491,12 +491,13 @@ export async function buildManualesPuestoExcelConsolidado(
         sheet.views = [{ showGridLines: false }];
     }
 
-    /** Cuadrícula jerárquica: Manual (nivel 0) → Pregunta plantilla / Puesto vinculado / Visualización, hermanos (nivel 1) → Respuesta (nivel 2, hija de Visualización). */
+    /**
+     * Una fila por visualización (o una fila "No visto" por cada empleado vinculado sin visualización
+     * todavía); si un manual no tiene ninguna visualización ni empleado vinculado, se emite 1 fila con
+     * los datos del manual y las columnas de visualización en blanco. Plantilla/Puestos vinculados/
+     * Empleados vinculados se unen en la misma fila con ";" (no tienen fila propia).
+     */
     const mainHeaders = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Manual",
         "Título",
         "Descripción",
@@ -516,7 +517,6 @@ export async function buildManualesPuestoExcelConsolidado(
         "Puestos vinculados",
         "Empleados vinculados",
         "Visualización empleados",
-        "Quices",
         "ID pregunta (plantilla)",
         "Enunciado (plantilla)",
         "Tipo pregunta (plantilla)",
@@ -525,23 +525,25 @@ export async function buildManualesPuestoExcelConsolidado(
         "Empleado (vínculo)",
         "Empleado (visualización)",
         "Estado (visualización)",
-        "ID pregunta (respuesta)",
+        "Ver respuestas",
+        "Ver firma manual",
+        "Pregunta (respuesta)",
         "Respuesta empleado",
     ];
-    // Posiciones dentro de `mainHeaders` (sin la columna de margen que agrega `addMainRow`); se usan para escribir en los arreglos `values`/`rootValues`.
+    // Posiciones dentro de `mainHeaders` (sin la columna de margen que agrega `addMainRow`); se usan para escribir en los arreglos `values`.
     const COL_VER_ESTRUCTURA = mainHeaders.indexOf("Ver estructura") + 1;
     const COL_PUESTOS_VINC = mainHeaders.indexOf("Puestos vinculados") + 1;
     const COL_EMPLEADOS_VINC = mainHeaders.indexOf("Empleados vinculados") + 1;
     const COL_VIS_EMPLEADOS = mainHeaders.indexOf("Visualización empleados") + 1;
-    const COL_QUICES = mainHeaders.indexOf("Quices") + 1;
-    const COL_TIPO_FILA = mainHeaders.indexOf("Tipo de fila") + 1;
+    const COL_VER_RESPUESTAS = mainHeaders.indexOf("Ver respuestas") + 1;
+    const COL_VER_FIRMA_MANUAL = mainHeaders.indexOf("Ver firma manual") + 1;
     // +1 más: columna real en la hoja tras el margen que agrega `addMainRow`.
     const SHEET_COL_VER_ESTRUCTURA = COL_VER_ESTRUCTURA + 1;
     const SHEET_COL_PUESTOS_VINC = COL_PUESTOS_VINC + 1;
     const SHEET_COL_EMPLEADOS_VINC = COL_EMPLEADOS_VINC + 1;
     const SHEET_COL_VIS_EMPLEADOS = COL_VIS_EMPLEADOS + 1;
-    const SHEET_COL_QUICES = COL_QUICES + 1;
-    const SHEET_COL_TIPO_FILA = COL_TIPO_FILA + 1;
+    const SHEET_COL_VER_RESPUESTAS = COL_VER_RESPUESTAS + 1;
+    const SHEET_COL_VER_FIRMA_MANUAL = COL_VER_FIRMA_MANUAL + 1;
 
     const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
         reportDb,
@@ -559,17 +561,13 @@ export async function buildManualesPuestoExcelConsolidado(
         cell.border = borderThin as ExcelJS.Borders;
         cell.alignment = { vertical: "middle", wrapText: true };
     }
-    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
 
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((cell, colNumber) => {
             if (colNumber === 1) return;
             cell.border = borderThin as ExcelJS.Borders;
             cell.alignment = { wrapText: true, vertical: "top" };
         });
-        row.getCell(SHEET_COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
-        row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(SHEET_COL_TIPO_FILA).font = { bold: true };
     };
 
     let quizRow = 0;
@@ -642,6 +640,8 @@ export async function buildManualesPuestoExcelConsolidado(
     const anchorPuestos = new Map<number, number>();
     const anchorEmpleadosVinc = new Map<number, number>();
     const anchorVis = new Map<number, number>();
+    /** Fila en «Firmas manuales» de la firma dibujada de una visualización (para enlazar desde la fila de Visualización en `wsMain`). */
+    const anchorFirmaManualByVisualizationId = new Map<number, number>();
 
     for (const r of rows) {
         const id = Number(r.id);
@@ -852,6 +852,7 @@ export async function buildManualesPuestoExcelConsolidado(
                 } catch {
                     wsFirmasManuales.getCell(firmasManualesRow, 5).value = "(No se pudo recrear la firma)";
                 }
+                anchorFirmaManualByVisualizationId.set(Number(v.id), firmaManualAnchorRow);
             }
 
             const row = wsVis.addRow([
@@ -914,7 +915,6 @@ export async function buildManualesPuestoExcelConsolidado(
         const desc = excelCellString(r.description);
         const descShort = desc.length > 500 ? `${desc.slice(0, 497)}...` : desc;
         const qStruct = anchorQuizStructure.get(id) ?? 2;
-        const qAns = anchorQuizAnswers.get(id) ?? qStruct;
         const pA = anchorPuestos.get(id) ?? 2;
         const eA = anchorEmpleadosVinc.get(id) ?? 2;
         const vA = anchorVis.get(id) ?? 2;
@@ -934,123 +934,134 @@ export async function buildManualesPuestoExcelConsolidado(
             [mainHeaders.indexOf("Creado en (fecha)") + 1]: formatDateOnlyDMY(r.created_at),
             [mainHeaders.indexOf("Creado en (hora)") + 1]: formatTimeOnlyHMS(r.created_at),
             [mainHeaders.indexOf("Creado por") + 1]: r.created_by_nombre,
-            [mainHeaders.indexOf("Usuario modifica") + 1]: cambio?.cedula ?? "",
+            [mainHeaders.indexOf("Usuario modifica") + 1]: cambio?.nombreCompleto ?? "",
             [mainHeaders.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
         };
 
-        const rootValues = new Array(mainHeaders.length).fill("");
-        rootValues[0] = String(id);
-        rootValues[2] = 0;
-        rootValues[3] = "Manual";
-        for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
-        rootValues[COL_VER_ESTRUCTURA - 1] = "Ver estructura";
-        rootValues[COL_PUESTOS_VINC - 1] = "Puestos vinculados";
-        rootValues[COL_EMPLEADOS_VINC - 1] = "Empleados vinculados";
-        rootValues[COL_VIS_EMPLEADOS - 1] = "Visualización empleados";
-        rootValues[COL_QUICES - 1] = "Quices";
-        const rootRow = addMainRow(wsMain, rootValues);
-        rootRow.getCell(SHEET_COL_VER_ESTRUCTURA).value = { text: "Ver estructura", hyperlink: `#'Quices'!A${qStruct}` };
-        rootRow.getCell(SHEET_COL_VER_ESTRUCTURA).font = { color: { argb: "FF0563C1" }, underline: true };
-        rootRow.getCell(SHEET_COL_PUESTOS_VINC).value = { text: "Puestos vinculados", hyperlink: `#'Puestos del manual'!A${pA}` };
-        rootRow.getCell(SHEET_COL_PUESTOS_VINC).font = { color: { argb: "FF0563C1" }, underline: true };
-        rootRow.getCell(SHEET_COL_EMPLEADOS_VINC).value = { text: "Empleados vinculados", hyperlink: `#'Empleados del manual'!A${eA}` };
-        rootRow.getCell(SHEET_COL_EMPLEADOS_VINC).font = { color: { argb: "FF0563C1" }, underline: true };
-        rootRow.getCell(SHEET_COL_VIS_EMPLEADOS).value = { text: "Visualización empleados", hyperlink: `#'Visualización'!A${vA}` };
-        rootRow.getCell(SHEET_COL_VIS_EMPLEADOS).font = { color: { argb: "FF0563C1" }, underline: true };
-        rootRow.getCell(SHEET_COL_QUICES).value = { text: "Quices", hyperlink: `#'Quices'!A${qAns}` };
-        rootRow.getCell(SHEET_COL_QUICES).font = { color: { argb: "FF0563C1" }, underline: true };
-        styleDataRow(rootRow, 0);
-
+        // Plantilla, puestos vinculados y empleados vinculados: unidos en la misma fila, separados por ";".
         const questionObjs = extractQuizQuestionArray(r.quiz);
-        questionObjs.forEach((q: any, idx: number) => {
-            const values = new Array(mainHeaders.length).fill("");
-            values[0] = `${id}.preg${idx + 1}`;
-            values[1] = String(id);
-            values[2] = 1;
-            values[3] = "Pregunta (plantilla)";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[mainHeaders.indexOf("ID pregunta (plantilla)")] = String(q?.id ?? "").trim() || "—";
-            values[mainHeaders.indexOf("Enunciado (plantilla)")] = excelCellString(q?.title ?? q?.titulo ?? "");
-            values[mainHeaders.indexOf("Tipo pregunta (plantilla)")] = quizTypeKeyToSpanishLabel(q?.type);
-            const ptsRaw = q?.points;
-            const ptsNum = typeof ptsRaw === "number" ? ptsRaw : Number(ptsRaw);
-            values[mainHeaders.indexOf("Puntos (plantilla)")] = Number.isFinite(ptsNum) ? String(ptsNum) : "—";
-            const row = addMainRow(wsMain, values);
-            styleDataRow(row, 1);
+        const qTitleById = new Map(
+            questionObjs.map((q: any) => [String(q?.id ?? "").trim(), excelCellString(q?.title ?? q?.titulo ?? "")]),
+        );
+        const joinQ = (mapper: (q: any) => string): string => questionObjs.map(mapper).join(";");
+        general[mainHeaders.indexOf("ID pregunta (plantilla)") + 1] = joinQ((q) => String(q?.id ?? "").trim() || "—");
+        general[mainHeaders.indexOf("Enunciado (plantilla)") + 1] = joinQ((q) => excelCellString(q?.title ?? q?.titulo ?? ""));
+        general[mainHeaders.indexOf("Tipo pregunta (plantilla)") + 1] = joinQ((q) => quizTypeKeyToSpanishLabel(q?.type));
+        general[mainHeaders.indexOf("Puntos (plantilla)") + 1] = joinQ((q) => {
+            const ptsNum = typeof q?.points === "number" ? q.points : Number(q?.points);
+            return Number.isFinite(ptsNum) ? String(ptsNum) : "—";
         });
 
         const links = r.e_puestos_manual_puesto || [];
-        links.forEach((link: any, idx: number) => {
-            const p = link.e_estructura_puesto;
-            const ptxt = p ? `${p.codigo ? `${p.codigo} - ` : ""}${p.nombre}` : String(link.puesto_id);
-            const values = new Array(mainHeaders.length).fill("");
-            values[0] = `${id}.puesto${idx + 1}`;
-            values[1] = String(id);
-            values[2] = 1;
-            values[3] = "Puesto vinculado";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[mainHeaders.indexOf("Puesto (vínculo)")] = excelCellString(ptxt);
-            const row = addMainRow(wsMain, values);
-            styleDataRow(row, 1);
-        });
+        general[mainHeaders.indexOf("Puesto (vínculo)") + 1] = links
+            .map((link: any) => {
+                const p = link.e_estructura_puesto;
+                return excelCellString(p ? `${p.codigo ? `${p.codigo} - ` : ""}${p.nombre}` : String(link.puesto_id));
+            })
+            .join(";");
 
         const empleadoLinksMain = r.e_empleados_manual_puesto || [];
-        empleadoLinksMain.forEach((link: any, idx: number) => {
+        const empleadoLinkTxt = (link: any): string => {
             const e = link.c_empleado;
-            const etxt = e
+            return e
                 ? [e.codigo, e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean).join(" ")
                 : String(link.empleado_id);
-            const values = new Array(mainHeaders.length).fill("");
-            values[0] = `${id}.empleado${idx + 1}`;
-            values[1] = String(id);
-            values[2] = 1;
-            values[3] = "Empleado vinculado";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[mainHeaders.indexOf("Empleado (vínculo)")] = excelCellString(etxt);
-            const row = addMainRow(wsMain, values);
-            styleDataRow(row, 1);
-        });
+        };
+        general[mainHeaders.indexOf("Empleado (vínculo)") + 1] = empleadoLinksMain
+            .map((link: any) => excelCellString(empleadoLinkTxt(link)))
+            .join(";");
 
+        /** Fila por visualización: 1 fila por empleado que ya visualizó, o "No visto" por cada empleado
+         * vinculado que aún no tiene visualización. `Respuesta` se agrupa por visualización con ";". */
+        type VisRowData = {
+            empTxt: string;
+            estado: "No visto" | "Visto" | "Firmado";
+            verRespuestasAnchor: number | null;
+            verFirmaManualAnchor: number | null;
+            preguntasJoined: string;
+            respuestasJoined: string;
+        };
         const vizList = r.e_empleado_visualizacion_manual_puesto || [];
-        vizList.forEach((v: any, idx: number) => {
+        const visualizadoEmpleadoIds = new Set(
+            vizList.map((v: any) => Number(v.empleado_id)).filter((n: number) => Number.isFinite(n)),
+        );
+        const visRows: VisRowData[] = vizList.map((v: any) => {
             const emp = v.c_empleado;
             const empTxt = emp
                 ? [emp.codigo, emp.nombre, emp.primer_apellido, emp.segundo_apellido].filter(Boolean).join(" ")
                 : excelCellString(v.nombre_empleado);
-            const visId = `${id}.vis${idx + 1}`;
-            const visValues = new Array(mainHeaders.length).fill("");
-            visValues[0] = visId;
-            visValues[1] = String(id);
-            visValues[2] = 1;
-            visValues[3] = "Visualización";
-            for (const [col, val] of Object.entries(general)) visValues[Number(col) - 1] = val;
-            visValues[mainHeaders.indexOf("Empleado (visualización)")] = excelCellString(empTxt);
-            visValues[mainHeaders.indexOf("Estado (visualización)")] = approvedLabel(v.approved);
-            const visRow = addMainRow(wsMain, visValues);
-            styleDataRow(visRow, 1);
-
             const ansItems = parseQuizAnswersPayload(v.quiz_answear);
-            ansItems.forEach((ans: any, ansIdx: number) => {
-                const values = new Array(mainHeaders.length).fill("");
-                values[0] = `${visId}.resp${ansIdx + 1}`;
-                values[1] = visId;
-                values[2] = 2;
-                values[3] = "Respuesta";
-                for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-                values[mainHeaders.indexOf("ID pregunta (respuesta)")] = String(ans?.question_id ?? "").trim() || "—";
-                values[mainHeaders.indexOf("Respuesta empleado")] = displayUserAnswerCell(ans);
-                const row = addMainRow(wsMain, values);
-                styleDataRow(row, 2);
-            });
+            return {
+                empTxt: excelCellString(empTxt),
+                estado: (v as any).firma_empleado_manual ? "Firmado" : "Visto",
+                verRespuestasAnchor: anchorQuizByVisualizationId.get(Number(v.id)) ?? null,
+                verFirmaManualAnchor: anchorFirmaManualByVisualizationId.get(Number(v.id)) ?? null,
+                preguntasJoined: ansItems
+                    .map((ans: any) => qTitleById.get(String(ans?.question_id ?? "").trim()) || "—")
+                    .join(";"),
+                respuestasJoined: ansItems.map((ans: any) => displayUserAnswerCell(ans)).join(";"),
+            };
         });
+        for (const link of empleadoLinksMain) {
+            const empleadoId = Number(link.empleado_id);
+            if (Number.isFinite(empleadoId) && visualizadoEmpleadoIds.has(empleadoId)) continue;
+            visRows.push({
+                empTxt: excelCellString(empleadoLinkTxt(link)),
+                estado: "No visto",
+                verRespuestasAnchor: null,
+                verFirmaManualAnchor: null,
+                preguntasJoined: "",
+                respuestasJoined: "",
+            });
+        }
+
+        const emitRow = (vis: VisRowData | null) => {
+            const values = new Array(mainHeaders.length).fill("");
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[COL_VER_ESTRUCTURA - 1] = "Ver estructura";
+            values[COL_PUESTOS_VINC - 1] = "Puestos vinculados";
+            values[COL_EMPLEADOS_VINC - 1] = "Empleados vinculados";
+            values[COL_VIS_EMPLEADOS - 1] = "Visualización empleados";
+            if (vis) {
+                values[mainHeaders.indexOf("Empleado (visualización)")] = vis.empTxt;
+                values[mainHeaders.indexOf("Estado (visualización)")] = vis.estado;
+                if (vis.verRespuestasAnchor != null) values[COL_VER_RESPUESTAS - 1] = "Ver respuestas";
+                if (vis.verFirmaManualAnchor != null) values[COL_VER_FIRMA_MANUAL - 1] = "Ver firma manual";
+                values[mainHeaders.indexOf("Pregunta (respuesta)")] = vis.preguntasJoined;
+                values[mainHeaders.indexOf("Respuesta empleado")] = vis.respuestasJoined;
+            }
+            const row = addMainRow(wsMain, values);
+            row.getCell(SHEET_COL_VER_ESTRUCTURA).value = { text: "Ver estructura", hyperlink: `#'Quices'!A${qStruct}` };
+            row.getCell(SHEET_COL_VER_ESTRUCTURA).font = { color: { argb: "FF0563C1" }, underline: true };
+            row.getCell(SHEET_COL_PUESTOS_VINC).value = { text: "Puestos vinculados", hyperlink: `#'Puestos del manual'!A${pA}` };
+            row.getCell(SHEET_COL_PUESTOS_VINC).font = { color: { argb: "FF0563C1" }, underline: true };
+            row.getCell(SHEET_COL_EMPLEADOS_VINC).value = { text: "Empleados vinculados", hyperlink: `#'Empleados del manual'!A${eA}` };
+            row.getCell(SHEET_COL_EMPLEADOS_VINC).font = { color: { argb: "FF0563C1" }, underline: true };
+            row.getCell(SHEET_COL_VIS_EMPLEADOS).value = { text: "Visualización empleados", hyperlink: `#'Visualización'!A${vA}` };
+            row.getCell(SHEET_COL_VIS_EMPLEADOS).font = { color: { argb: "FF0563C1" }, underline: true };
+            if (vis?.verRespuestasAnchor != null) {
+                row.getCell(SHEET_COL_VER_RESPUESTAS).value = { text: "Ver respuestas", hyperlink: `#'Quices'!A${vis.verRespuestasAnchor}` };
+                row.getCell(SHEET_COL_VER_RESPUESTAS).font = { color: { argb: "FF0563C1" }, underline: true };
+            }
+            if (vis?.verFirmaManualAnchor != null) {
+                row.getCell(SHEET_COL_VER_FIRMA_MANUAL).value = {
+                    text: "Ver firma manual",
+                    hyperlink: `#'Firmas manuales'!A${vis.verFirmaManualAnchor}`,
+                };
+                row.getCell(SHEET_COL_VER_FIRMA_MANUAL).font = { color: { argb: "FF0563C1" }, underline: true };
+            }
+            styleDataRow(row);
+        };
+
+        if (visRows.length === 0) {
+            emitRow(null);
+        } else {
+            for (const vis of visRows) emitRow(vis);
+        }
     }
 
     wsMain.columns = [
         { width: 3 },
-        { width: 12 },
-        { width: 14 },
-        { width: 8 },
-        { width: 20 },
         { width: 10 },
         { width: 32 },
         { width: 40 },
@@ -1070,17 +1081,18 @@ export async function buildManualesPuestoExcelConsolidado(
         { width: 18 },
         { width: 18 },
         { width: 22 },
-        { width: 12 },
-        { width: 16 },
-        { width: 40 },
-        { width: 18 },
-        { width: 12 },
-        { width: 26 },
-        { width: 26 },
+        { width: 30 },
+        { width: 50 },
+        { width: 30 },
+        { width: 20 },
+        { width: 34 },
+        { width: 34 },
         { width: 28 },
         { width: 16 },
         { width: 16 },
-        { width: 32 },
+        { width: 16 },
+        { width: 50 },
+        { width: 40 },
     ];
 
     return Buffer.from(await wb.xlsx.writeBuffer());

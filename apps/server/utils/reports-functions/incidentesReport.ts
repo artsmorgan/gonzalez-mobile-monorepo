@@ -387,14 +387,8 @@ export async function buildIncidenteExcelConsolidado(
         wsDet.addRow([]);
     }
 
-    /** Cuadrícula jerárquica: Incidente (nivel 0) → Involucrado / Novedad (libro) / Aporte, hermanos (nivel 1). */
-    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
+    /** Un incidente = una sola fila: Involucrado, Novedad (libro) y Aporte se unen con ";" en columnas propias. */
     const headers = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Incidente",
         "Empresa",
         "Cliente",
@@ -430,7 +424,6 @@ export async function buildIncidenteExcelConsolidado(
         "Creado por",
     ];
     const COL_VER_DETALLE = headers.indexOf("Ver detalle") + 1;
-    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 1;
 
     applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
 
@@ -442,22 +435,40 @@ export async function buildIncidenteExcelConsolidado(
         cell.border = border;
         cell.alignment = { vertical: "middle", wrapText: true };
     });
+    for (const sheet of [wsMain, wsDet]) {
+        sheet.views = [{ showGridLines: false }];
+    }
 
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((cell, colNumber) => {
             if (colNumber === 1) return;
             cell.border = border;
             cell.alignment = { vertical: "top", wrapText: true };
         });
-        row.getCell(COL_TIPO_FILA + 1).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
-        row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(COL_TIPO_FILA + 1).font = { bold: true };
+        row.height = 22;
     };
+
+    /** Todos los ítems de un grupo hijo de 1 incidente se unen en 1 sola fila, separados por punto y coma. */
+    const joinDetalle = (detalleRows: Array<Record<string, unknown>>, key: string): string =>
+        detalleRows.map((item) => String(item?.[key] ?? "")).join(";");
 
     for (const r of rows) {
         const invol = Array.isArray(r.involucrados_list) ? r.involucrados_list : [];
         const libro = Array.isArray(r.libro_novedades_list) ? r.libro_novedades_list : [];
         const aportes = Array.isArray(r.c_contribucion_incidente) ? r.c_contribucion_incidente : [];
+        const aportesFlat = aportes.map((c: any) => {
+            const emp = [c.c_empleado?.nombre, c.c_empleado?.primer_apellido, c.c_empleado?.segundo_apellido].filter(Boolean).join(" ").trim();
+            return {
+                rol: c.rol_aporte,
+                empleado: emp || c.c_empleado?.codigo || "",
+                nombreTercero: c.nombre_aporte || "",
+                aporte: c.aporte || "",
+                firma: c.firma_aporte_tercero ? "Sí" : "No",
+                fecha: fmtDate(c.created_at),
+                archivos: String(Array.isArray(c.c_archivos_aporte_incidente) ? c.c_archivos_aporte_incidente.length : 0),
+            };
+        });
+
         const general: Record<number, unknown> = {
             [headers.indexOf("ID Incidente") + 1]: r.id,
             [headers.indexOf("Empresa") + 1]: excelCellString(r.empresa_nombre),
@@ -480,74 +491,35 @@ export async function buildIncidenteExcelConsolidado(
             [headers.indexOf("Consecutivo informe") + 1]: excelCellString(r.consecutivo_informe),
             [headers.indexOf("Link informe") + 1]: excelCellString(r.link_informe),
             [headers.indexOf("Creado por") + 1]: fmtCreadorEmpleado(creadorById.get(Number(r.created_by))),
+            [headers.indexOf("Nombre (involucrado)") + 1]: joinDetalle(invol, "nombre"),
+            [headers.indexOf("Código (involucrado)") + 1]: joinDetalle(invol, "codigo"),
+            [headers.indexOf("Número (novedad libro)") + 1]: joinDetalle(libro, "numero"),
+            [headers.indexOf("Fecha (novedad libro)") + 1]: joinDetalle(libro, "fecha"),
+            [headers.indexOf("Rol (aporte)") + 1]: joinDetalle(aportesFlat, "rol"),
+            [headers.indexOf("Empleado (aporte)") + 1]: joinDetalle(aportesFlat, "empleado"),
+            [headers.indexOf("Nombre tercero (aporte)") + 1]: joinDetalle(aportesFlat, "nombreTercero"),
+            [headers.indexOf("Aporte") + 1]: joinDetalle(aportesFlat, "aporte"),
+            [headers.indexOf("Tiene firma tercero (aporte)") + 1]: joinDetalle(aportesFlat, "firma"),
+            [headers.indexOf("Fecha (aporte)") + 1]: joinDetalle(aportesFlat, "fecha"),
+            [headers.indexOf("Archivos adjuntos (aporte)") + 1]: joinDetalle(aportesFlat, "archivos"),
         };
 
-        const rootValues = new Array(headers.length).fill("");
-        rootValues[0] = String(r.id);
-        rootValues[2] = 0;
-        rootValues[3] = "Incidente";
-        for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
+        const rowValues = new Array(headers.length).fill("");
+        for (const [col, val] of Object.entries(general)) rowValues[Number(col) - 1] = val;
         const detRow = detAnchorById.get(Number(r.id));
-        if (detRow) rootValues[COL_VER_DETALLE - 1] = "Ver detalle";
-        const rootRow = addMainRow(wsMain, rootValues);
+        if (detRow) rowValues[COL_VER_DETALLE - 1] = "Ver detalle";
+        const row = addMainRow(wsMain, rowValues);
         if (detRow) {
-            const c = rootRow.getCell(COL_VER_DETALLE + 1);
+            const c = row.getCell(COL_VER_DETALLE + 1);
             c.value = { text: "Ver detalle", hyperlink: `#'Detalles'!A${detRow}` };
             c.font = { color: { argb: "FF0563C1" }, underline: true };
         }
-        styleDataRow(rootRow, 0);
-
-        invol.forEach((x: any, idx: number) => {
-            const values = new Array(headers.length).fill("");
-            values[0] = `${r.id}.inv${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = "Involucrado";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[headers.indexOf("Nombre (involucrado)")] = excelCellString(x?.nombre ?? "");
-            values[headers.indexOf("Código (involucrado)")] = excelCellString(x?.codigo ?? "");
-            const row = addMainRow(wsMain, values);
-            styleDataRow(row, 1);
-        });
-
-        libro.forEach((x: any, idx: number) => {
-            const values = new Array(headers.length).fill("");
-            values[0] = `${r.id}.nov${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = "Novedad (libro)";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[headers.indexOf("Número (novedad libro)")] = excelCellString(x?.numero ?? "");
-            values[headers.indexOf("Fecha (novedad libro)")] = excelCellString(x?.fecha ?? "");
-            const row = addMainRow(wsMain, values);
-            styleDataRow(row, 1);
-        });
-
-        aportes.forEach((c: any, idx: number) => {
-            const emp = [c.c_empleado?.nombre, c.c_empleado?.primer_apellido, c.c_empleado?.segundo_apellido].filter(Boolean).join(" ").trim();
-            const values = new Array(headers.length).fill("");
-            values[0] = `${r.id}.ap${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = "Aporte";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[headers.indexOf("Rol (aporte)")] = excelCellString(c.rol_aporte);
-            values[headers.indexOf("Empleado (aporte)")] = excelCellString(emp || c.c_empleado?.codigo || "");
-            values[headers.indexOf("Nombre tercero (aporte)")] = excelCellString(c.nombre_aporte || "");
-            values[headers.indexOf("Aporte")] = excelCellString(c.aporte || "");
-            values[headers.indexOf("Tiene firma tercero (aporte)")] = c.firma_aporte_tercero ? "Sí" : "No";
-            values[headers.indexOf("Fecha (aporte)")] = fmtDate(c.created_at);
-            values[headers.indexOf("Archivos adjuntos (aporte)")] = String(
-                Array.isArray(c.c_archivos_aporte_incidente) ? c.c_archivos_aporte_incidente.length : 0,
-            );
-            const row = addMainRow(wsMain, values);
-            styleDataRow(row, 1);
-        });
+        styleDataRow(row);
     }
 
     wsMain.columns = [
         3,
-        12, 14, 8, 20, 10,
+        10,
         24, 24, 18, 24, 24, 24, 18, 14, 24, 24, 44, 14, 14, 40, 14, 18, 16, 18, 24,
         14,
         24, 14,

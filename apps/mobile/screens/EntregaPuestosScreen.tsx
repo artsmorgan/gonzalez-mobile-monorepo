@@ -34,6 +34,7 @@ import { prioritizePlanByArticuloNomencladorId } from '@/hooks/prioritizePlanByA
 import { isStoredPlanillasTokenValid } from '@/hooks/planillasTokenStorage';
 import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRevalidationModal';
 import { getEmployeeProfilePhotoDisplayUri } from '@/hooks/employeeProfilePhotoStorage';
+import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 
 type EntregaPuestosScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'EntregaPuestos'>;
 
@@ -1814,7 +1815,7 @@ export default function EntregaPuestosScreen() {
               <ThemedText style={styles.signatureHintMuted}>Aún no hay foto de quien recibe.</ThemedText>
             ) : (
               <ThemedView style={styles.photoPreviewContainer}>
-                <Image source={{ uri: photoRecibeUri }} style={styles.photoPreviewImage} resizeMode="cover" />
+                <ZoomableThumbnailImage uri={photoRecibeUri} style={styles.photoPreviewImage} resizeMode="cover" />
                 <TouchableOpacity
                   style={styles.photoPreviewDeleteButton}
                   onPress={() => {
@@ -1845,7 +1846,7 @@ export default function EntregaPuestosScreen() {
                   <ThemedText style={styles.signatureHintMuted}>No se agregó foto de quien entrega.</ThemedText>
                 ) : (
                   <ThemedView style={styles.photoPreviewContainer}>
-                    <Image source={{ uri: photoEntregaUri }} style={styles.photoPreviewImage} resizeMode="cover" />
+                    <ZoomableThumbnailImage uri={photoEntregaUri} style={styles.photoPreviewImage} resizeMode="cover" />
                     <TouchableOpacity
                       style={styles.photoPreviewDeleteButton}
                       onPress={() => {

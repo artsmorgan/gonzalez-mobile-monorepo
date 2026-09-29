@@ -24,6 +24,7 @@ import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampT
 import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
+import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -2515,8 +2516,8 @@ export default function OpeningClosingPositionScreen() {
                       <ThemedView style={styles.collapsableContent}>
                         {imagesRemoteArr.map((img: any) => (
                           <ThemedView key={`${itemKey}-img-r-${img?.id ?? img?.name ?? Math.random()}`} style={styles.photoItemMini}>
-                            <Image
-                              source={{ uri: appendTokenToUrl(String(img?.url || '')) }}
+                            <ZoomableThumbnailImage
+                              uri={appendTokenToUrl(String(img?.url || ''))}
                               style={styles.photoPreviewMini}
                               resizeMode="contain"
                             />
@@ -2548,7 +2549,7 @@ export default function OpeningClosingPositionScreen() {
                           const localKey = String(img?.id_local || '');
                           return (
                             <ThemedView key={`${itemKey}-img-l-${img?.id_local ?? img?.original_name ?? Math.random()}`} style={styles.photoItemMini}>
-                              <Image source={{ uri }} style={styles.photoPreviewMini} resizeMode="contain" />
+                              <ZoomableThumbnailImage uri={uri} style={styles.photoPreviewMini} resizeMode="contain" />
                               {!!localKey && (
                                 <TouchableOpacity
                                   style={styles.removePhotoButton}
@@ -3017,7 +3018,7 @@ export default function OpeningClosingPositionScreen() {
                     <ThemedView style={styles.photosContainer}>
                       {imagenesRemote.map((img) => (
                         <ThemedView key={`r-${img.id}`} style={styles.photoItem}>
-                          <Image source={{ uri: appendTokenToUrl(String(img.url || '')) }} style={styles.photoPreview} resizeMode="contain" />
+                          <ZoomableThumbnailImage uri={appendTokenToUrl(String(img.url || ''))} style={styles.photoPreview} resizeMode="contain" />
                           <TouchableOpacity style={styles.removePhotoButton} onPress={() => removeRemoteImage(img.id)}>
                             <Ionicons name="trash" size={20} color="#FF3B30" />
                           </TouchableOpacity>
@@ -3025,7 +3026,7 @@ export default function OpeningClosingPositionScreen() {
                       ))}
                       {imagenesLocal.map((img) => (
                         <ThemedView key={`l-${img.id_local}`} style={styles.photoItem}>
-                          <Image source={{ uri: img.uri || getLocalFileDisplayUri(img.localFileName) }} style={styles.photoPreview} resizeMode="contain" />
+                          <ZoomableThumbnailImage uri={img.uri || getLocalFileDisplayUri(img.localFileName)} style={styles.photoPreview} resizeMode="contain" />
                           <TouchableOpacity style={styles.removePhotoButton} onPress={() => removeLocalImage(img.id_local)}>
                             <Ionicons name="trash" size={20} color="#FF3B30" />
                           </TouchableOpacity>

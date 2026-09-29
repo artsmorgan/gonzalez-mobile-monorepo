@@ -546,7 +546,7 @@ export async function buildMantenimientoArticulosExcelConsolidado(
     );
     const rowsWithCambios = rows.map((r) => ({
         ...r,
-        usuario_modifica: cambiosByRegistro.get(r.id)?.cedula ?? "",
+        usuario_modifica: cambiosByRegistro.get(r.id)?.nombreCompleto ?? "",
         fecha_hora_modifica: cambiosByRegistro.get(r.id)?.fechaHoraTexto ?? "",
     }));
 

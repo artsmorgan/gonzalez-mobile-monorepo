@@ -26,6 +26,7 @@ import getHoraAccion from '../hooks/getHoraAccion';
 import getValidAccessTokenOrLogout from '../hooks/getValidAccessTokenOrLogout';
 import { useQRScanner } from '../hooks/useQRScanner';
 import authedFetch from '../hooks/authedFetch';
+import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 import {
   createChecklistSupervision,
   deleteChecklistSupervision,
@@ -4583,9 +4584,9 @@ export default function ChecklistSupervisionScreen() {
                                   const uri = getPhotoItemUriForList(photo, input, it);
                                   if (!uri) return null;
                                   return (
-                                    <Image
+                                    <ZoomableThumbnailImage
                                       key={photo.id}
-                                      source={{ uri }}
+                                      uri={uri}
                                       style={[
                                         styles.questionImagePreviewList,
                                         photo.imageOrientation === 'vertical'
@@ -4601,8 +4602,8 @@ export default function ChecklistSupervisionScreen() {
                             {input.type === 'photo' &&
                               photoItems.length === 0 &&
                               listPhotoUri.length > 0 && (
-                              <Image
-                                source={{ uri: listPhotoUri }}
+                              <ZoomableThumbnailImage
+                                uri={listPhotoUri}
                                 style={[
                                   styles.questionImagePreviewList,
                                   input.imageOrientation === 'vertical'
@@ -5059,8 +5060,8 @@ export default function ChecklistSupervisionScreen() {
                                       }
                                       return (
                                         <View key={photo.id} style={styles.photoThumbWrap}>
-                                          <Image
-                                            source={{ uri }}
+                                          <ZoomableThumbnailImage
+                                            uri={uri}
                                             style={[
                                               styles.photoThumb,
                                               photo.imageOrientation === 'vertical'

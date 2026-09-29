@@ -22,6 +22,7 @@ import { ThemedView } from '@/components/ThemedView';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import RecordAudioButton from '@/components/RecordAudioButton';
 import AudioPreviewModal from '@/components/AudioPreviewModal';
+import { FullscreenMediaModal, FullscreenVideoButton } from '@/components/FullscreenMediaViewer';
 import { RootStackParamList } from '../App';
 import { useAuth } from '@/contexts/AuthContext';
 import authedFetch from '@/hooks/authedFetch';
@@ -4236,6 +4237,7 @@ function ContributionFilesViewer({
 // Image viewer que ajusta el contenedor basado en dimensiones
 function IncidentImageViewer({ imageUrl }: { imageUrl: string }) {
   const [containerStyle, setContainerStyle] = useState<any>(styles.viewerImage);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const maxContainerWidth = Dimensions.get('window').width - 64;
 
   const handleImageLoad = (event: any) => {
@@ -4272,12 +4274,22 @@ function IncidentImageViewer({ imageUrl }: { imageUrl: string }) {
   };
 
   return (
-    <Image
-      source={{ uri: imageUrl }}
-      style={containerStyle}
-      resizeMode="contain"
-      onLoad={handleImageLoad}
-    />
+    <>
+      <TouchableOpacity activeOpacity={0.85} onPress={() => setIsFullscreen(true)}>
+        <Image
+          source={{ uri: imageUrl }}
+          style={containerStyle}
+          resizeMode="contain"
+          onLoad={handleImageLoad}
+        />
+      </TouchableOpacity>
+      <FullscreenMediaModal
+        visible={isFullscreen}
+        onClose={() => setIsFullscreen(false)}
+        type="image"
+        uri={imageUrl}
+      />
+    </>
   );
 }
 
@@ -4398,6 +4410,7 @@ function IncidentVideoPlayer({ sourceUrl }: { sourceUrl: string }) {
         allowsFullscreen={true}
         allowsPictureInPicture={false}
       />
+      <FullscreenVideoButton uri={sourceUrl} />
     </View>
   );
 }

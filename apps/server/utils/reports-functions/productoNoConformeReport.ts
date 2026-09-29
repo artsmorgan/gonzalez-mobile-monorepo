@@ -500,7 +500,7 @@ export async function buildProductoNoConformeExcelConsolidado(
             formatDateOnlyDMY(r.created_at),
             formatTimeOnlyHMS(r.created_at),
             excelCellString(r.created_by_nombre ?? r.created_by),
-            cambio?.cedula ?? "",
+            cambio?.nombreCompleto ?? "",
             cambio?.fechaHoraTexto ?? "",
             excelCellString(r.responsable_aprobar),
             previewFirmaResponsableOTextoLargo(r.firma_responsable),

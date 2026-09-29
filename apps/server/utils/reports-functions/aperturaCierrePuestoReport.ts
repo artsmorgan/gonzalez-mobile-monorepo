@@ -316,14 +316,9 @@ export async function buildAperturaCierrePuestoExcelConsolidado(
         rows.map((r) => Number(r.id)),
     );
 
-    /** Cuadrícula jerárquica: el registro (nivel 0) más sus subregistros hermanos (actividades del checklist / inventario, nivel 1). */
-    main.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
+    /** Cada registro (apertura/cierre) es una sola fila; las preguntas del checklist y los ítems de
+     * inventario se aplanan en columnas propias, uniendo todos los valores de cada registro con ";". */
     const headers = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Apertura-Cierre",
         "Creador",
         "Usuario modifica",
@@ -339,20 +334,20 @@ export async function buildAperturaCierrePuestoExcelConsolidado(
         "Tipo (Apertura/Cierre)",
         "Ver actividades",
         "Ver inventario",
+        "Otras observaciones",
+        "Preguntas",
+        "Respuestas",
         "Observaciones",
-        "Pregunta (actividad)",
-        "Respuesta (actividad)",
-        "Observaciones (actividad)",
-        "Activos o equipos (inventario)",
-        "Tipo de activo (inventario)",
-        "# Activo (inventario)",
-        "Número de serie (inventario)",
-        "Marca (inventario)",
-        "Modelo (inventario)",
-        "Descripción (inventario)",
+        "Activos o equipos",
+        "Tipo de activo",
+        "# de activo",
+        "Número de serie",
+        "Marca",
+        "Modelo",
+        "Descripción",
     ];
-    const COL_VER_ACTIVIDADES = 19;
-    const COL_VER_INVENTARIO = 20;
+    const COL_VER_ACTIVIDADES = headers.indexOf("Ver actividades") + 2;
+    const COL_VER_INVENTARIO = headers.indexOf("Ver inventario") + 2;
 
     applyConsolidadoReportBanner(main, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
 
@@ -371,10 +366,6 @@ export async function buildAperturaCierrePuestoExcelConsolidado(
     }
     main.columns = [
         { width: 3 },
-        { width: 12 },
-        { width: 14 },
-        { width: 8 },
-        { width: 22 },
         { width: 14 },
         { width: 30 },
         { width: 16 },
@@ -463,27 +454,30 @@ export async function buildAperturaCierrePuestoExcelConsolidado(
     }
     details.columns = [{ width: 36 }, { width: 20 }, { width: 24 }, { width: 18 }, { width: 16 }, { width: 16 }, { width: 36 }];
 
-    const blank = (n: number) => Array.from({ length: n }, () => "");
-
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((c, colNumber) => {
             if (colNumber === 1) return;
             c.border = borderThin;
             c.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
         });
-        row.getCell(5).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
-        row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(5).font = { bold: true };
+        row.height = 22;
     };
+
+    /** Todos los ítems de `actividades`/`inventario` de 1 registro se unen en 1 sola fila, separados por punto y coma. */
+    const joinDetalle = (detalleRows: Array<Record<string, unknown>>, key: string): string =>
+        detalleRows.map((item) => String(item?.[key] ?? "")).join(";");
 
     let totalDataRows = 0;
     for (const r of rows) {
         const detailRow = detailsStartById.get(Number(r.id)) ?? 1;
         const cambio = cambiosByRegistro.get(Number(r.id));
-        const general = [
+        const actividades = parseArrayJSON(r.actividades);
+        const inventario = parseArrayJSON(r.inventario);
+
+        const rootRow = addMainRow(main, [
             String(r.id),
             r.creador_nombre,
-            cambio?.cedula ?? "",
+            cambio?.nombreCompleto ?? "",
             cambio?.fechaHoraTexto ?? "",
             r.empresa_nombre,
             r.cliente_nombre,
@@ -494,62 +488,26 @@ export async function buildAperturaCierrePuestoExcelConsolidado(
             formatDateOnlyDMY(r.fecha),
             formatTimeOnlyHMS(r.fecha),
             r.tipo_txt,
-        ];
-
-        const rootRow = addMainRow(main, [
-            String(r.id),
-            "",
-            0,
-            "Registro",
-            ...general,
             "Ver actividades",
             "Ver inventario",
             r.otras_observaciones ?? "",
-            ...blank(10),
+            joinDetalle(actividades, "pregunta"),
+            joinDetalle(actividades, "respuesta"),
+            joinDetalle(actividades, "observaciones"),
+            joinDetalle(inventario, "activos_equipos"),
+            joinDetalle(inventario, "tipo_nombre"),
+            joinDetalle(inventario, "numero_activo"),
+            joinDetalle(inventario, "numero_serie"),
+            joinDetalle(inventario, "marca"),
+            joinDetalle(inventario, "modelo"),
+            joinDetalle(inventario, "descripcion"),
         ]);
         rootRow.getCell(COL_VER_ACTIVIDADES).value = { text: "Ver actividades", hyperlink: `#'Detalles'!A${detailRow}` };
         rootRow.getCell(COL_VER_INVENTARIO).value = { text: "Ver inventario", hyperlink: `#'Detalles'!A${detailRow}` };
         rootRow.getCell(COL_VER_ACTIVIDADES).font = { color: { argb: "FF0563C1" }, underline: true };
         rootRow.getCell(COL_VER_INVENTARIO).font = { color: { argb: "FF0563C1" }, underline: true };
-        styleDataRow(rootRow, 0);
+        styleDataRow(rootRow);
         totalDataRows += 1;
-
-        parseArrayJSON(r.actividades).forEach((a, idx) => {
-            const row = addMainRow(main, [
-                `${r.id}.act${idx + 1}`,
-                String(r.id),
-                1,
-                "Actividad (checklist)",
-                ...general,
-                ...blank(3),
-                String(a.pregunta ?? ""),
-                String(a.respuesta ?? ""),
-                String(a.observaciones ?? ""),
-                ...blank(7),
-            ]);
-            styleDataRow(row, 1);
-            totalDataRows += 1;
-        });
-
-        parseArrayJSON(r.inventario).forEach((inv, idx) => {
-            const row = addMainRow(main, [
-                `${r.id}.inv${idx + 1}`,
-                String(r.id),
-                1,
-                "Inventario",
-                ...general,
-                ...blank(6),
-                String(inv.activos_equipos ?? ""),
-                String(inv.tipo_nombre ?? ""),
-                String(inv.numero_activo ?? ""),
-                String(inv.numero_serie ?? ""),
-                String(inv.marca ?? ""),
-                String(inv.modelo ?? ""),
-                String(inv.descripcion ?? ""),
-            ]);
-            styleDataRow(row, 1);
-            totalDataRows += 1;
-        });
     }
     main.autoFilter = {
         from: { row: 12, column: 2 },

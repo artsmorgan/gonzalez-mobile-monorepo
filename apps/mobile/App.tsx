@@ -833,32 +833,43 @@ function AppContent() {
   const SYNC_CACHES_EVENT = 'syncCachesRequested' as const;
   const MOBILE_VERSION_EVENT = 'mobileVersionAvailabilityChanged' as const;
 
-  const compareSemver = (a: string, b: string): number => {
-    const pa = String(a || '0.0.0').split('.').map((x) => parseInt(x, 10) || 0);
-    const pb = String(b || '0.0.0').split('.').map((x) => parseInt(x, 10) || 0);
-    const len = Math.max(pa.length, pb.length);
-    for (let i = 0; i < len; i++) {
-      const av = pa[i] ?? 0;
-      const bv = pb[i] ?? 0;
-      if (av > bv) return 1;
-      if (av < bv) return -1;
-    }
-    return 0;
+  /**
+   * `last_app_version` (AsyncStorage): última versión conocida vía `/api/mobile-versions`. Por
+   * defecto (antes de la primera respuesta del servidor) es `APP_VERSION_INFO.version` embebida; la
+   * petición la reemplaza cada vez que responde. Hay nueva versión disponible cuando, al remover los
+   * puntos de ambas versiones y compararlas como números, la última conocida es mayor que la embebida
+   * (p. ej. "1.0.0" -> 100 vs "1.0.1" -> 101).
+   */
+  const LAST_APP_VERSION_KEY = 'last_app_version';
+
+  const versionToComparableNumber = (v: string): number => {
+    const n = parseInt(String(v || '').replace(/\./g, ''), 10);
+    return Number.isFinite(n) ? n : 0;
   };
 
   const checkMobileVersionAvailability = useCallback(async () => {
+    const appVersionInfo = Constants.expoConfig?.extra?.APP_VERSION_INFO;
+    const appVersion = String(appVersionInfo?.version || '0.0.0');
+    const storedLastVersion = await AsyncStorage.getItem(LAST_APP_VERSION_KEY);
+    if (!storedLastVersion) {
+      await AsyncStorage.setItem(LAST_APP_VERSION_KEY, appVersion);
+    }
+    const emitFromLastKnown = (data: any) => {
+      const lastVersion = storedLastVersion || appVersion;
+      const available = versionToComparableNumber(lastVersion) > versionToComparableNumber(appVersion);
+      eventBus.emit(MOBILE_VERSION_EVENT, { available, data, appVersion });
+    };
+
     try {
       const connectivity = await resolveAppConnectivity();
-      const appVersionInfo = Constants.expoConfig?.extra?.APP_VERSION_INFO;
-      const appVersion = String(appVersionInfo?.version || '0.0.0');
       if (!connectivity.ok) {
-        eventBus.emit(MOBILE_VERSION_EVENT, { available: false, data: null, appVersion });
-      return;
-    }
+        emitFromLastKnown(null);
+        return;
+      }
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl || !appVersionInfo) {
-        eventBus.emit(MOBILE_VERSION_EVENT, { available: false, data: null, appVersion });
+        emitFromLastKnown(null);
         return;
       }
 
@@ -874,23 +885,25 @@ function AppContent() {
         shouldUpdateServerTime: true,
       });
       if (!response || !response.ok) {
-        eventBus.emit(MOBILE_VERSION_EVENT, { available: false, data: null, appVersion });
+        emitFromLastKnown(null);
         return;
       }
 
       const versionData = await response.json().catch(() => null);
-      const serverVersion = String(versionData?.version || '0.0.0');
-      const isNewer = compareSemver(serverVersion, appVersion) === 1;
+      const serverVersion = String(versionData?.version || '').trim();
+      if (serverVersion) {
+        await AsyncStorage.setItem(LAST_APP_VERSION_KEY, serverVersion);
+      }
+      const lastVersion = serverVersion || storedLastVersion || appVersion;
 
       eventBus.emit(MOBILE_VERSION_EVENT, {
-        available: isNewer,
+        available: versionToComparableNumber(lastVersion) > versionToComparableNumber(appVersion),
         data: versionData,
         appVersion,
       });
     } catch (error) {
       console.error('Error checking mobile versions:', error);
-      const appVersionInfo = Constants.expoConfig?.extra?.APP_VERSION_INFO;
-      eventBus.emit(MOBILE_VERSION_EVENT, { available: false, data: null, appVersion: String(appVersionInfo?.version || '0.0.0') });
+      emitFromLastKnown(null);
     }
   }, [authedFetchCb]);
 
@@ -1013,7 +1026,7 @@ function AppContent() {
 
       await Promise.all([
           updateServerTime(),
-          //checkMobileVersionAvailability(),
+          checkMobileVersionAvailability(),
       ]);
         await checkManualSignatureCache();
 

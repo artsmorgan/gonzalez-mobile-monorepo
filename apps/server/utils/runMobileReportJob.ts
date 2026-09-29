@@ -313,7 +313,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildActaEntregaExcelBufferByType(rows, "Individual", individualReportName)
-                    : await buildActaEntregaExcelBuffer(rows);
+                    : await buildActaEntregaExcelBuffer(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }

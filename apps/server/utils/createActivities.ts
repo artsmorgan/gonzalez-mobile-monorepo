@@ -68,6 +68,12 @@ export async function getActivities(req: NextRequest, id: number) {
                 ? (actividad.fecha_fin instanceof Date ? actividad.fecha_fin : new Date(actividad.fecha_fin))
                 : null;
 
+            // Actividades con tipo_turno definido solo aplican al turno de la marca actual.
+            // Si la actividad no tiene tipo_turno (registros previos a esta funcionalidad), no se restringe.
+            if (actividad.tipo_turno && actividad.tipo_turno !== marcaDia.tipo_turno) {
+                continue;
+            }
+
             is_today = validateDates(fechaInicio, fechaMarca, actividad.frecuencia, fechaFin);
 
             let pendiente = false;

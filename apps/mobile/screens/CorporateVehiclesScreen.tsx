@@ -28,6 +28,7 @@ import {
 } from '@/hooks/bitacoraMainStructureCache';
 import * as Network from 'expo-network';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
+import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 import Constants from 'expo-constants';
 import { Picker } from '@react-native-picker/picker';
 import { useAuth } from '@/contexts/AuthContext';
@@ -4447,7 +4448,7 @@ export default function CorporateVehiclesScreen() {
             if (!uri) return null;
             return (
               <ThemedView key={`${recordKey}_img_${idx}`} style={styles.imageWideWrap}>
-                <Image source={{ uri }} style={styles.imageWide} resizeMode="contain" />
+                <ZoomableThumbnailImage uri={uri} style={styles.imageWide} resizeMode="contain" />
                 <TouchableOpacity
                   style={styles.removeImageBtn}
                   onPress={() => confirmRemoveListImage(r, img, idx)}
@@ -4766,7 +4767,7 @@ export default function CorporateVehiclesScreen() {
                     return (
                       <ThemedView key={img.id} style={styles.imageWideWrap}>
                         <ThemedText style={styles.imagePreviewTitle}>Nueva imagen</ThemedText>
-                        <Image source={{ uri }} style={styles.imageWide} resizeMode="contain" />
+                        <ZoomableThumbnailImage uri={uri} style={styles.imageWide} resizeMode="contain" />
                         <TouchableOpacity style={styles.removeImageBtn} onPress={() => confirmRemoveFormImage(img.id)} activeOpacity={0.85}>
                           <Ionicons name="trash-outline" size={18} color="#FF3B30" />
                         </TouchableOpacity>
@@ -5537,7 +5538,7 @@ export default function CorporateVehiclesScreen() {
                   {maintenanceImagenAntes ? (
                     <ThemedView style={styles.imageWideWrap}>
                       <ThemedText style={styles.imagePreviewTitle}>Nueva foto</ThemedText>
-                      <Image source={{ uri: maintenanceImagenAntes }} style={styles.imageWide} resizeMode="contain" />
+                      <ZoomableThumbnailImage uri={maintenanceImagenAntes} style={styles.imageWide} resizeMode="contain" />
                       <TouchableOpacity
                         style={styles.removeImageBtn}
                         onPress={async () => {
@@ -5567,7 +5568,7 @@ export default function CorporateVehiclesScreen() {
                   {maintenanceImagenDespues ? (
                     <ThemedView style={styles.imageWideWrap}>
                       <ThemedText style={styles.imagePreviewTitle}>Nueva foto</ThemedText>
-                      <Image source={{ uri: maintenanceImagenDespues }} style={styles.imageWide} resizeMode="contain" />
+                      <ZoomableThumbnailImage uri={maintenanceImagenDespues} style={styles.imageWide} resizeMode="contain" />
                       <TouchableOpacity
                         style={styles.removeImageBtn}
                         onPress={async () => {
@@ -5760,7 +5761,7 @@ export default function CorporateVehiclesScreen() {
                               <ThemedView style={styles.maintenanceListImageBlock}>
                                 <ThemedText style={styles.maintenanceListImageLabel}>Antes</ThemedText>
                                 <ThemedView style={styles.maintenanceListImageWrap}>
-                                  <Image source={{ uri: uriAntes }} style={styles.maintenanceListThumb} resizeMode="cover" />
+                                  <ZoomableThumbnailImage uri={uriAntes} style={styles.maintenanceListThumb} resizeMode="cover" />
                                   <TouchableOpacity
                                     style={styles.removeImageBtn}
                                     onPress={() => confirmRemoveMaintenanceListImage(m, 'antes')}
@@ -5780,7 +5781,7 @@ export default function CorporateVehiclesScreen() {
                               <ThemedView style={styles.maintenanceListImageBlock}>
                                 <ThemedText style={styles.maintenanceListImageLabel}>Después</ThemedText>
                                 <ThemedView style={styles.maintenanceListImageWrap}>
-                                  <Image source={{ uri: uriDespues }} style={styles.maintenanceListThumb} resizeMode="cover" />
+                                  <ZoomableThumbnailImage uri={uriDespues} style={styles.maintenanceListThumb} resizeMode="cover" />
                                   <TouchableOpacity
                                     style={styles.removeImageBtn}
                                     onPress={() => confirmRemoveMaintenanceListImage(m, 'despues')}

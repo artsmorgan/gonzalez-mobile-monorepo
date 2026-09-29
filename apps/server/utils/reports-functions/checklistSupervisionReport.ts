@@ -758,14 +758,14 @@ export async function buildChecklistSupervisionExcelConsolidado(
 
     wsDet.columns = [36, 44, 14, 14, 16, 28].map((w) => ({ width: w }));
 
-    /** Cuadrícula jerárquica: Checklist (nivel 0) → Sección (nivel 1, de `evaluacion`) → Subsección (nivel 2) → Pregunta (nivel 3); Artículo es hermano de Sección (nivel 1, de `articulos_puesto`). */
+    /**
+     * Cuadrícula jerárquica: Checklist (nivel 0) → Sección (nivel 1, de `evaluacion`) → Subsección (nivel 2,
+     * con las preguntas/respuestas/imágenes de sus `inputs` agrupadas y unidas con ";" en la misma fila, sin
+     * fila propia por pregunta); Artículo es hermano de Sección (nivel 1, de `articulos_puesto`).
+     */
     wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
 
     const headers = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Checklist",
         "Empresa",
         "Cliente",
@@ -800,9 +800,9 @@ export async function buildChecklistSupervisionExcelConsolidado(
         "Estado artículo",
         "Observaciones artículo",
     ];
-    const COL_VER_EVAL = 24;
-    const COL_VER_ART = 25;
-    const COL_VER_FIR = 26;
+    const COL_VER_EVAL = headers.indexOf("Ver evaluación") + 2;
+    const COL_VER_ART = headers.indexOf("Ver artículos") + 2;
+    const COL_VER_FIR = headers.indexOf("Ver firma") + 2;
 
     applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FF1F3D63", mainColumnCount: headers.length });
 
@@ -836,7 +836,7 @@ export async function buildChecklistSupervisionExcelConsolidado(
         sheet.views = [{ showGridLines: false }];
     }
     const colWidths = [
-        12, 16, 8, 20, 10, 26, 22, 18, 24, 24, 22, 24, 22, 14, 12, 12, 12, 14, 12, 16, 16, 20, 16, 16, 16, 22, 26, 32, 34, 26, 30, 26, 16, 14, 14, 16, 30,
+        10, 26, 22, 18, 24, 24, 22, 24, 22, 14, 12, 12, 12, 14, 12, 16, 16, 20, 16, 16, 16, 22, 26, 32, 34, 26, 30, 26, 16, 14, 14, 16, 30,
     ];
     wsMain.columns = [{ width: 3 }, ...colWidths.map((w) => ({ width: w }))];
 
@@ -848,9 +848,9 @@ export async function buildChecklistSupervisionExcelConsolidado(
             cell.border = border;
             cell.alignment = { vertical: "middle", wrapText: true };
         });
-        row.getCell(5).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(2).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(5).font = { bold: true };
+        if (nivel === 0) row.getCell(2).font = { bold: true };
     };
 
     const imagesJoinedFromInput = (inp: any): string => {
@@ -880,7 +880,7 @@ export async function buildChecklistSupervisionExcelConsolidado(
             formatDateOnlyDMY(r.created_at),
             formatTimeOnlyHMS(r.created_at),
             fmtCreadorEmpleado(creadorById.get(Number(r.created_by))),
-            cambio?.cedula ?? "",
+            cambio?.nombreCompleto ?? "",
             cambio?.fechaHoraTexto ?? "",
         ];
 
@@ -888,10 +888,6 @@ export async function buildChecklistSupervisionExcelConsolidado(
         const articulos = parseArticulosJson(r.articulos_puesto);
 
         const rootRow = addMainRow(wsMain, [
-            String(r.id),
-            "",
-            0,
-            "Checklist",
             ...general,
             evaluacion.length ? "Ver evaluación" : "",
             articulos.length ? "Ver artículos" : "",
@@ -918,12 +914,7 @@ export async function buildChecklistSupervisionExcelConsolidado(
 
         evaluacion.forEach((sec: any, secIdx: number) => {
             const secTitle = excelCellString(sec?.title ?? "").trim() || `Sección ${secIdx + 1}`;
-            const secId = `${r.id}.s${secIdx + 1}`;
             const secRow = addMainRow(wsMain, [
-                secId,
-                String(r.id),
-                1,
-                "Sección",
                 ...general,
                 ...blank(3),
                 secTitle,
@@ -936,49 +927,30 @@ export async function buildChecklistSupervisionExcelConsolidado(
             subs.forEach((sub: any, subIdx: number) => {
                 const subTitle = excelCellString(sub?.title ?? "").trim() || `Subsección ${subIdx + 1}`;
                 const subDetalle = excelCellString(sub?.detalle ?? "").trim();
-                const subId = `${secId}.sub${subIdx + 1}`;
+
+                /** Preguntas de la subsección: todas sus preguntas/respuestas/imágenes se unen en la misma fila, separadas por ";". */
+                const inputs = Array.isArray(sub?.inputs) ? sub.inputs : [];
+                const preguntasJoined = inputs.map((inp: any) => resolveChecklistEvalInputLabel(inp, subTitle)).join(";");
+                const respuestasJoined = inputs.map((inp: any) => formatEvalInputDisplayValue(inp)).join(";");
+                const imagenesJoined = inputs.map((inp: any) => imagesJoinedFromInput(inp)).join(";");
+
                 const subRow = addMainRow(wsMain, [
-                    subId,
-                    secId,
-                    2,
-                    "Subsección",
                     ...general,
                     ...blank(4),
                     subTitle,
                     subDetalle,
-                    ...blank(9),
+                    preguntasJoined,
+                    respuestasJoined,
+                    imagenesJoined,
+                    ...blank(6),
                 ]);
                 styleDataRow(subRow, 2);
                 totalDataRows += 1;
-
-                const inputs = Array.isArray(sub?.inputs) ? sub.inputs : [];
-                inputs.forEach((inp: any, inpIdx: number) => {
-                    const label = resolveChecklistEvalInputLabel(inp, subTitle);
-                    const val = formatEvalInputDisplayValue(inp);
-                    const row = addMainRow(wsMain, [
-                        `${subId}.q${inpIdx + 1}`,
-                        subId,
-                        3,
-                        "Pregunta",
-                        ...general,
-                        ...blank(6),
-                        label,
-                        val,
-                        imagesJoinedFromInput(inp),
-                        ...blank(6),
-                    ]);
-                    styleDataRow(row, 3);
-                    totalDataRows += 1;
-                });
             });
         });
 
-        articulos.forEach((a: any, idx: number) => {
+        articulos.forEach((a: any) => {
             const row = addMainRow(wsMain, [
-                `${r.id}.art${idx + 1}`,
-                String(r.id),
-                1,
-                "Artículo",
                 ...general,
                 ...blank(9),
                 excelCellString(a?.nombre ?? ""),

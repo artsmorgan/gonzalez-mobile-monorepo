@@ -568,14 +568,8 @@ export async function buildRegistroVisitasExcelConsolidado(
         wsDet.addRow([]);
     }
 
-    /** Cuadrícula jerárquica: Visita (nivel 0) → Activo del visitante (nivel 1, `e_activo_visitante`) → Detalle del activo (nivel 2, JSON `detalles`). */
-    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
+    /** Una fila por visita: los activos del visitante (y sus detalles) se aplanan en columnas separadas por `;`. */
     const mainHeaders = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Visita",
         "Empresa",
         "Cliente",
@@ -611,7 +605,6 @@ export async function buildRegistroVisitasExcelConsolidado(
     const fotoCedulaCol = mainHeaders.indexOf("Foto cédula") + 2;
     const firmaCol = mainHeaders.indexOf("Firma") + 2;
     const activosLinkCol = mainHeaders.indexOf("Ver activos") + 2;
-    const COL_TIPO_FILA = mainHeaders.indexOf("Tipo de fila") + 2;
 
     applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: mainHeaders.length });
 
@@ -623,10 +616,6 @@ export async function buildRegistroVisitasExcelConsolidado(
     };
     wsMain.columns = [
         { width: 3 },
-        { width: 12 },
-        { width: 14 },
-        { width: 8 },
-        { width: 20 },
         { width: 10 },
         { width: 22 },
         { width: 22 },
@@ -659,15 +648,40 @@ export async function buildRegistroVisitasExcelConsolidado(
         { width: 20 },
     ];
 
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((c, colNumber) => {
             if (colNumber === 1) return;
             c.border = BORDER;
             c.alignment = { vertical: "top", wrapText: true };
         });
-        row.getCell(COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
-        row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+    };
+
+    /** Une los valores de un campo de los hijos (activos, o sus detalles) de 1 visita en 1 sola celda, separados por `;`. */
+    const joinDetalle = <T,>(items: T[], pick: (item: T) => unknown): string =>
+        items.map((item) => String(pick(item) ?? "")).join(";");
+
+    /** Detalles (`{ detalle, descripcion }`) de 1 activo, unidos en 1 texto (`detalle: descripcion`, separados por coma). */
+    const joinActivoDetalles = (raw: unknown): string => {
+        let arr: any[] = [];
+        if (Array.isArray(raw)) {
+            arr = raw;
+        } else if (typeof raw === "string" && raw.trim()) {
+            try {
+                const p = JSON.parse(raw);
+                arr = Array.isArray(p) ? p : [];
+            } catch {
+                arr = [];
+            }
+        }
+        return arr
+            .map((d) => {
+                const det = d?.detalle != null ? String(d.detalle).trim() : "";
+                const desc = d?.descripcion != null ? String(d.descripcion).trim() : "";
+                if (!det && !desc) return "";
+                return det && desc ? `${det}: ${desc}` : det || desc;
+            })
+            .filter(Boolean)
+            .join(", ");
     };
 
     for (const r of rows) {
@@ -694,7 +708,7 @@ export async function buildRegistroVisitasExcelConsolidado(
             [mainHeaders.indexOf("Responsable") + 1]: excelCellString(r.responsable_label),
             [mainHeaders.indexOf("Creado en (fecha)") + 1]: formatDateOnlyDMY(r.created_at),
             [mainHeaders.indexOf("Creado en (hora)") + 1]: formatTimeOnlyHMS(r.created_at),
-            [mainHeaders.indexOf("Usuario modifica") + 1]: cambiosByRegistro.get(vid)?.cedula ?? "",
+            [mainHeaders.indexOf("Usuario modifica") + 1]: cambiosByRegistro.get(vid)?.nombreCompleto ?? "",
             [mainHeaders.indexOf("Fecha y hora modifica") + 1]: cambiosByRegistro.get(vid)?.fechaHoraTexto ?? "",
         };
 
@@ -704,12 +718,17 @@ export async function buildRegistroVisitasExcelConsolidado(
 
         const rootValues = new Array(mainHeaders.length).fill("");
         rootValues[0] = String(vid);
-        rootValues[2] = 0;
-        rootValues[3] = "Visita";
         for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
         if (activos.length > 0) rootValues[activosLinkCol - 2] = "Ver activos";
+
+        rootValues[mainHeaders.indexOf("Tipo activo")] = joinDetalle(activos, (a: any) => excelCellString(a?.n_tipo_activo_visitas?.nombre ?? ""));
+        rootValues[mainHeaders.indexOf("Nombre activo")] = joinDetalle(activos, (a: any) => excelCellString(a?.nombre ?? ""));
+        rootValues[mainHeaders.indexOf("N° identificación (activo)")] = joinDetalle(activos, (a: any) => excelCellString(a?.numero_id ?? ""));
+        rootValues[mainHeaders.indexOf("N° activo")] = joinDetalle(activos, (a: any) => excelCellString(a?.numero_activo ?? ""));
+        rootValues[mainHeaders.indexOf("Detalle / descripción")] = joinDetalle(activos, (a: any) => joinActivoDetalles(a?.detalles));
+
         const rootRow = addMainRow(wsMain, rootValues);
-        styleDataRow(rootRow, 0);
+        styleDataRow(rootRow);
 
         const fotoCell = rootRow.getCell(fotoCedulaCol);
         if (tieneFotoCedula && anchor) {
@@ -728,47 +747,6 @@ export async function buildRegistroVisitasExcelConsolidado(
             c.value = { text: "Ver activos", hyperlink: `#'Detalles'!A${anchor}` };
             c.font = { color: { argb: "FF0563C1" }, underline: true };
         }
-
-        activos.forEach((a: any, idx: number) => {
-            const activoId = `${vid}.act${idx + 1}`;
-            const activoValues = new Array(mainHeaders.length).fill("");
-            activoValues[0] = activoId;
-            activoValues[1] = String(vid);
-            activoValues[2] = 1;
-            activoValues[3] = "Activo del visitante";
-            for (const [col, val] of Object.entries(general)) activoValues[Number(col) - 1] = val;
-            activoValues[mainHeaders.indexOf("Tipo activo")] = excelCellString(a?.n_tipo_activo_visitas?.nombre ?? "");
-            activoValues[mainHeaders.indexOf("Nombre activo")] = excelCellString(a?.nombre ?? "");
-            activoValues[mainHeaders.indexOf("N° identificación (activo)")] = excelCellString(a?.numero_id ?? "");
-            activoValues[mainHeaders.indexOf("N° activo")] = excelCellString(a?.numero_activo ?? "");
-            const activoRow = addMainRow(wsMain, activoValues);
-            styleDataRow(activoRow, 1);
-
-            let detalles: any[] = [];
-            const raw = a?.detalles;
-            if (Array.isArray(raw)) detalles = raw;
-            else if (typeof raw === "string" && raw.trim()) {
-                try {
-                    const p = JSON.parse(raw);
-                    detalles = Array.isArray(p) ? p : [];
-                } catch {
-                    detalles = [];
-                }
-            }
-            detalles.forEach((d: any, dIdx: number) => {
-                const det = d?.detalle != null ? String(d.detalle).trim() : "";
-                const desc = d?.descripcion != null ? String(d.descripcion).trim() : "";
-                const detValues = new Array(mainHeaders.length).fill("");
-                detValues[0] = `${activoId}.det${dIdx + 1}`;
-                detValues[1] = activoId;
-                detValues[2] = 2;
-                detValues[3] = "Detalle del activo";
-                for (const [col, val] of Object.entries(general)) detValues[Number(col) - 1] = val;
-                detValues[mainHeaders.indexOf("Detalle / descripción")] = det && desc ? `${det}: ${desc}` : det || desc;
-                const detRow = addMainRow(wsMain, detValues);
-                styleDataRow(detRow, 2);
-            });
-        });
     }
 
     wsDet.columns = [10, 24, 14, 18, 22, 18, 14, 52].map((w) => ({ width: w }));

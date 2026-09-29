@@ -16,6 +16,7 @@ import {
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import RecordAudioButton from '@/components/RecordAudioButton';
 import AudioPreviewModal from '@/components/AudioPreviewModal';
+import { ZoomableThumbnailImage, FullscreenVideoButton } from '@/components/FullscreenMediaViewer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { resolveAppConnectivity } from '@/hooks/resolveAppConnectivity';
@@ -417,7 +418,7 @@ export default function NonConformingProductScreen() {
   // form
   const [fechaIdentificacion, setFechaIdentificacion] = useState<Date>(new Date());
   const [showFechaIdentPicker, setShowFechaIdentPicker] = useState(false);
-  const [fechaSolucion, setFechaSolucion] = useState<Date>(new Date());
+  const [fechaSolucion, setFechaSolucion] = useState<Date | null>(null);
   const [showFechaSolPicker, setShowFechaSolPicker] = useState(false);
 
   const [responsableCuenta, setResponsableCuenta] = useState('');
@@ -1026,7 +1027,7 @@ export default function NonConformingProductScreen() {
     const d = new Date(horaAccion);
     const base = isValidDate(d) ? d : new Date();
     setFechaIdentificacion(base);
-    setFechaSolucion(new Date(base.getTime()));
+    setFechaSolucion(null);
     setResponsableCuenta('');
     setTipoServicioNoConforme('');
     setPersonaIdentifico('');
@@ -1102,7 +1103,7 @@ export default function NonConformingProductScreen() {
     }
 
     setFechaIdentificacion(parseRecordDateField(r.fecha_identificacion, horaAccion));
-    setFechaSolucion(parseRecordDateField(r.fecha_solucion, horaAccion));
+    setFechaSolucion(r.fecha_solucion ? parseRecordDateField(r.fecha_solucion, horaAccion) : null);
     setResponsableCuenta(r.responsable_cuenta || '');
     setTipoServicioNoConforme(r.tipo_servicio_no_conforme || '');
     setPersonaIdentifico(r.persona_identifico_pnc || '');
@@ -1541,13 +1542,7 @@ export default function NonConformingProductScreen() {
       if (!selectedContratoId) return 'Contrato es obligatorio';
       if (!selectedPuestoId) return 'Debe seleccionar un puesto';
     }
-    if (!responsableCuenta.trim()) return 'Responsable de la cuenta es requerido';
-    if (!tipoServicioNoConforme.trim()) return 'Tipo de producto no conforme es requerido';
-    if (!personaIdentifico.trim()) return 'Persona que identificó el PNC es requerida';
-    if (!descripcion.trim()) return 'Descripción es requerida';
     if (!personaOrigino.trim()) return 'Persona que originó el PNC es requerida';
-    if (!accionImplementada.trim()) return 'Acción implementada es requerida';
-    if (!responsableAprobar.trim()) return 'Responsable de aprobar es requerido';
     const firmaHash = getFirmaResponsableHashForSave();
     if (!firmaHash.trim()) return 'Firma del responsable (QR o Generar) es requerida';
     return null;
@@ -1569,16 +1564,16 @@ export default function NonConformingProductScreen() {
       contrato_id: Number(contratoId),
       puesto_id: Number(puestoId),
       fecha_identificacion: datePickedToSafeIso(fechaIdentificacion),
-      responsable_cuenta: responsableCuenta.trim(),
-      tipo_servicio_no_conforme: tipoServicioNoConforme.trim(),
-      persona_identifico_pnc: personaIdentifico.trim(),
+      responsable_cuenta: responsableCuenta.trim() || null,
+      tipo_servicio_no_conforme: tipoServicioNoConforme.trim() || null,
+      persona_identifico_pnc: personaIdentifico.trim() || null,
       firma_persona_identifico_pnc: getBase64Only(firmaPersonaIdentifico) || null,
-      descripcion: descripcion.trim(),
+      descripcion: descripcion.trim() || null,
       persona_origino_pnc: personaOrigino.trim(),
       firma_persona_origino_pnc: getBase64Only(firmaPersonaOrigino) || null,
-      accion_implementada: accionImplementada.trim(),
-      fecha_solucion: datePickedToSafeIso(fechaSolucion),
-      responsable_aprobar: responsableAprobar.trim(),
+      accion_implementada: accionImplementada.trim() || null,
+      fecha_solucion: fechaSolucion ? datePickedToSafeIso(fechaSolucion) : null,
+      responsable_aprobar: responsableAprobar.trim() || null,
       firma_responsable: firmaHash,
       archivos: buildArchivosPayload(),
     };
@@ -2075,10 +2070,10 @@ export default function NonConformingProductScreen() {
           />
         )}
 
-        <ThemedText style={styles.label}>Responsable de la cuenta *</ThemedText>
+        <ThemedText style={styles.label}>Responsable de la cuenta</ThemedText>
         <TextInput style={styles.input} value={responsableCuenta} onChangeText={setResponsableCuenta} placeholder="Responsable de la cuenta" placeholderTextColor="#999" />
 
-        <ThemedText style={styles.label}>Tipo de producto no conforme *</ThemedText>
+        <ThemedText style={styles.label}>Tipo de producto no conforme</ThemedText>
         {tiposProductoNoConforme.length > 0 ? (
           <ThemedView style={styles.pickerWrapper}>
             <Picker
@@ -2096,7 +2091,7 @@ export default function NonConformingProductScreen() {
           <TextInput style={styles.input} value={tipoServicioNoConforme} onChangeText={setTipoServicioNoConforme} placeholder="Tipo de producto no conforme" placeholderTextColor="#999" />
         )}
 
-        <ThemedText style={styles.label}>Persona que identificó el PNC *</ThemedText>
+        <ThemedText style={styles.label}>Persona que identificó el PNC</ThemedText>
         <TextInput style={styles.input} value={personaIdentifico} onChangeText={setPersonaIdentifico} placeholder="Nombre" placeholderTextColor="#999" />
 
         <ThemedText style={styles.label}>Firma persona que identificó el PNC (Opcional)</ThemedText>
@@ -2108,7 +2103,7 @@ export default function NonConformingProductScreen() {
           <ThemedText style={styles.signatureButtonText}>{firmaPersonaIdentifico ? 'Editar firma' : 'Agregar firma'}</ThemedText>
         </TouchableOpacity>
 
-        <ThemedText style={styles.label}>Descripción *</ThemedText>
+        <ThemedText style={styles.label}>Descripción</ThemedText>
         <TextInput style={[styles.input, styles.textArea]} value={descripcion} onChangeText={setDescripcion} placeholder="Descripción" placeholderTextColor="#999" multiline />
 
         <ThemedText style={styles.label}>Persona que originó el PNC *</ThemedText>
@@ -2123,17 +2118,26 @@ export default function NonConformingProductScreen() {
           <ThemedText style={styles.signatureButtonText}>{firmaPersonaOrigino ? 'Editar firma' : 'Agregar firma'}</ThemedText>
         </TouchableOpacity>
 
-        <ThemedText style={styles.label}>Acción implementada *</ThemedText>
+        <ThemedText style={styles.label}>Acción implementada</ThemedText>
         <TextInput style={[styles.input, styles.textArea]} value={accionImplementada} onChangeText={setAccionImplementada} placeholder="Acción implementada" placeholderTextColor="#999" multiline />
 
-        <ThemedText style={styles.label}>Fecha solución *</ThemedText>
-        <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaSolPicker(true)} activeOpacity={0.85}>
-          <ThemedText style={styles.dateButtonText}>{formatDateForDisplay(fechaSolucion)}</ThemedText>
-          <Ionicons name="calendar-outline" size={18} color="#007AFF" />
-        </TouchableOpacity>
+        <ThemedText style={styles.label}>Fecha solución</ThemedText>
+        <ThemedView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TouchableOpacity style={[styles.dateButton, { flex: 1 }]} onPress={() => setShowFechaSolPicker(true)} activeOpacity={0.85}>
+            <ThemedText style={styles.dateButtonText}>
+              {fechaSolucion ? formatDateForDisplay(fechaSolucion) : 'Sin definir'}
+            </ThemedText>
+            <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+          </TouchableOpacity>
+          {fechaSolucion && (
+            <TouchableOpacity onPress={() => setFechaSolucion(null)} hitSlop={8}>
+              <Ionicons name="close-circle" size={22} color="#999" />
+            </TouchableOpacity>
+          )}
+        </ThemedView>
         {showFechaSolPicker && (
           <DateTimePicker
-            value={coerceToValidDate(fechaSolucion)}
+            value={coerceToValidDate(fechaSolucion ?? new Date())}
             mode="date"
             display={Platform.OS === 'ios' ? 'spinner' : 'default'}
             onChange={(_, d) => {
@@ -2143,7 +2147,7 @@ export default function NonConformingProductScreen() {
           />
         )}
 
-        <ThemedText style={styles.label}>Responsable de aprobar *</ThemedText>
+        <ThemedText style={styles.label}>Responsable de aprobar</ThemedText>
         <TextInput style={styles.input} value={responsableAprobar} onChangeText={setResponsableAprobar} placeholder="Responsable de aprobar" placeholderTextColor="#999" />
 
         <ThemedText style={styles.sectionTitle}>Adjuntos</ThemedText>
@@ -2403,7 +2407,7 @@ export default function NonConformingProductScreen() {
                           const fk = pncFileDeletingKey(r, f, idx);
                           return (
                             <ThemedView key={`${recordKey}_img_${idx}`} style={styles.imageWideWrap}>
-                              <Image source={{ uri }} style={styles.imageWide} resizeMode="contain" />
+                              <ZoomableThumbnailImage uri={uri} style={styles.imageWide} resizeMode="contain" />
                               <TouchableOpacity
                                 style={styles.attachmentTrashBtn}
                                 onPress={() => handleDeleteRecordAttachment(r, f, idx)}
@@ -2819,6 +2823,7 @@ function PncVideoPlayer({ sourceUrl }: { sourceUrl: string }) {
         allowsFullscreen={false}
         allowsPictureInPicture={false}
       />
+      <FullscreenVideoButton uri={sourceUrl} />
     </View>
   );
 }

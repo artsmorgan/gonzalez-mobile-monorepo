@@ -14,7 +14,6 @@ import { RootStackParamList } from '../App';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Linking from 'expo-linking';
 import {
   getPendingSyncActions,
   removePendingAction,
@@ -32,6 +31,7 @@ import {
   LAST_LOCATION_UPDATED_EVENT,
 } from '@/hooks/updateLastLocation';
 import * as Location from 'expo-location';
+import { downloadAndShareLargeAuthedFile } from '@/hooks/downloadReportFileToDevice';
 
 type HomeScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 
@@ -72,29 +72,14 @@ function formatVersionReleaseDate(createdAt?: string): string {
   }
 }
 
-const appendTokenToUrl = (url: string, accessToken?: string | null): string => {
-  if (!url) return '';
-  if (!accessToken || accessToken.trim().length === 0) return url;
-  if (/[?&]token=/.test(url)) return url;
-  const sep = url.includes('?') ? '&' : '?';
-  return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
-};
-
-const compareSemver = (a: string, b: string): number => {
-  const pa = String(a || '0.0.0').split('.').map((x) => parseInt(x, 10) || 0);
-  const pb = String(b || '0.0.0').split('.').map((x) => parseInt(x, 10) || 0);
-  const len = Math.max(pa.length, pb.length);
-  for (let i = 0; i < len; i++) {
-    const av = pa[i] ?? 0;
-    const bv = pb[i] ?? 0;
-    if (av > bv) return 1;
-    if (av < bv) return -1;
-  }
-  return 0;
-};
+/** Compara versiones removiendo los puntos y comparando como número (p. ej. "1.0.0" -> 100 vs "1.0.1" -> 101). */
+function versionToComparableNumber(v: string): number {
+  const n = parseInt(String(v || '').replace(/\./g, ''), 10);
+  return Number.isFinite(n) ? n : 0;
+}
 
 export default function HomeScreen() {
-  const { isAuthenticated, isLoading, employee } = useAuth();
+  const { isAuthenticated, isLoading, employee, refreshAccessToken, logout } = useAuth();
   const [currentCompany, setCurrentCompany] = useState<string | null>(null);
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<HomeScreenNavigationProp>();
@@ -105,6 +90,7 @@ export default function HomeScreen() {
   const [expandedActions, setExpandedActions] = useState<{ [key: string]: string | null }>({});
   const [isLoadingActions, setIsLoadingActions] = useState(false);
   const [isUpdateButtonVisible, setIsUpdateButtonVisible] = useState(false);
+  const [isDownloadingApk, setIsDownloadingApk] = useState(false);
   const [isVersionModalVisible, setIsVersionModalVisible] = useState(false);
   const [versionModalMode, setVersionModalMode] = useState<'current' | 'update'>('current');
   const [mobileVersionInfo, setMobileVersionInfo] = useState<MobileVersionPayload['data']>(null);
@@ -118,7 +104,7 @@ export default function HomeScreen() {
   const [isLocationGpsOff, setIsLocationGpsOff] = useState(false);
   const isNewerServerVersion =
     !!mobileVersionInfo?.version &&
-    compareSemver(String(mobileVersionInfo.version || '0.0.0'), currentAppVersion) === 1;
+    versionToComparableNumber(String(mobileVersionInfo.version)) > versionToComparableNumber(currentAppVersion);
   const versionInfoForModal: AppVersionInfo =
     versionModalMode === 'update' && isNewerServerVersion && mobileVersionInfo
       ? mobileVersionInfo
@@ -416,10 +402,12 @@ export default function HomeScreen() {
   };
 
   const handleDownloadMobileApk = async () => {
+    if (isDownloadingApk) return;
+    setIsDownloadingApk(true);
     try {
-      const id = String(mobileVersionInfo?.id || '').trim();
-      if (!id) {
-        Alert.alert('Error', 'No se encontró el identificador de la versión.');
+      const version = String(mobileVersionInfo?.version || '').trim();
+      if (!version) {
+        Alert.alert('Error', 'No se encontró la versión a descargar.');
         return;
       }
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
@@ -427,11 +415,22 @@ export default function HomeScreen() {
         Alert.alert('Error', 'No se encontró la URL del servidor.');
         return;
       }
-      const token = (await AsyncStorage.getItem('access_token'))?.trim() || '';
-      const downloadUrl = appendTokenToUrl(`${apiUrl}/api/mobile-versions/${encodeURIComponent(id)}`, token);
-      await Linking.openURL(downloadUrl);
+      const result = await downloadAndShareLargeAuthedFile({
+        url: `${apiUrl}/api/mobile-versions/${encodeURIComponent(version)}`,
+        fileName: `MonitoreApp-${version}.apk`,
+        mimeType: 'application/vnd.android.package-archive',
+        dialogTitle: 'Instalar actualización',
+        refreshAccessToken,
+        logout,
+      });
+
+      if (result.ok) return;
+      if (result.cancelled) return;
+      Alert.alert('Error', result.message || 'No se pudo descargar el archivo');
     } catch (error: any) {
       Alert.alert('Error', error?.message || 'No se pudo iniciar la descarga del APK');
+    } finally {
+      setIsDownloadingApk(false);
     }
   };
 
@@ -732,15 +731,15 @@ export default function HomeScreen() {
 
         {isUpdateButtonVisible && (
           <TouchableOpacity
-            style={[styles.updateBarButton, { marginTop: 8, backgroundColor: '#FF3B30' }]}
+            style={styles.updateBarButtonCompact}
             onPress={() => {
               setVersionModalMode('update');
               setIsVersionModalVisible(true);
             }}
             activeOpacity={0.9}
           >
-            <Ionicons name="download-outline" size={20} color="#fff" />
-            <ThemedText style={styles.updateBarButtonText}>Actualización disponible</ThemedText>
+            <Ionicons name="download-outline" size={12} color="#fff" />
+            <ThemedText style={styles.updateBarButtonCompactText}>Actualización disponible</ThemedText>
           </TouchableOpacity>
         )}
       </View>
@@ -805,12 +804,19 @@ export default function HomeScreen() {
               )}
               {versionModalMode === 'update' && isNewerServerVersion && (
                 <TouchableOpacity
-                  style={[styles.updateBarButton, { marginTop: 14 }]}
+                  style={[styles.updateBarButton, { marginTop: 14 }, isDownloadingApk && { opacity: 0.7 }]}
                   onPress={handleDownloadMobileApk}
                   activeOpacity={0.9}
+                  disabled={isDownloadingApk}
                 >
-                  <Ionicons name="download-outline" size={20} color="#fff" />
-                  <ThemedText style={styles.updateBarButtonText}>Descargar APK</ThemedText>
+                  {isDownloadingApk ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Ionicons name="download-outline" size={20} color="#fff" />
+                  )}
+                  <ThemedText style={styles.updateBarButtonText}>
+                    {isDownloadingApk ? 'Descargando...' : 'Descargar APK'}
+                  </ThemedText>
                 </TouchableOpacity>
               )}
             </ScrollView>
@@ -1096,7 +1102,24 @@ const styles = StyleSheet.create({
   versionFooterContainer: {
     paddingHorizontal: 16,
     paddingVertical: 8,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  updateBarButtonCompact: {
+    backgroundColor: '#FF3B30',
+    borderRadius: 10,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  updateBarButtonCompactText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 10,
   },
 });
 

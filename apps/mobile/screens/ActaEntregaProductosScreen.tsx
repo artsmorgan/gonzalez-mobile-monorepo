@@ -33,6 +33,7 @@ import SlideMenu from '@/components/SlideMenu';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 import { useAuth } from '@/contexts/AuthContext';
 import { RootStackParamList } from '../App';
 import { eventBus } from '@/hooks/eventBus';
@@ -2119,7 +2120,7 @@ export default function ActaEntregaProductosScreen() {
                   >
                     <Ionicons name="trash" size={14} color="#fff" />
                   </TouchableOpacity>
-                  <Image source={{ uri }} style={styles.fullSizeImage} resizeMode="contain" />
+                  <ZoomableThumbnailImage uri={uri} style={styles.fullSizeImage} resizeMode="contain" />
                 </View>
               );
             })}
@@ -2290,7 +2291,7 @@ export default function ActaEntregaProductosScreen() {
               if (!uri) return null;
               return (
                 <ThemedView key={`img-${img.id_local || img.name || idx}`} style={styles.thumbWrapper}>
-                  <Image source={{ uri }} style={styles.thumb} />
+                  <ZoomableThumbnailImage uri={uri} style={styles.thumb} />
                   <TouchableOpacity style={styles.thumbDelete} onPress={() => removeImage(idx)}>
                     <Ionicons name="close" size={16} color="#FFFFFF" />
                   </TouchableOpacity>

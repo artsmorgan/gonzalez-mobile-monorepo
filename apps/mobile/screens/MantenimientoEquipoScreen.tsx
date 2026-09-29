@@ -21,6 +21,7 @@ import { ThemedView } from '../components/ThemedView';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import RecordAudioButton from '@/components/RecordAudioButton';
 import AudioPreviewModal from '@/components/AudioPreviewModal';
+import { FullscreenMediaModal, FullscreenVideoButton } from '@/components/FullscreenMediaViewer';
 import { useAuth } from '../contexts/AuthContext';
 import { downloadAuthedUrlToDevice } from '@/hooks/downloadReportFileToDevice';
 import { eventBus } from '../hooks/eventBus';
@@ -530,6 +531,7 @@ function ActivoAudioPlayer({ sourceUrl, label }: { sourceUrl: string; label?: st
 // Image viewer para activos
 function ActivoImageViewer({ imageUrl }: { imageUrl: string }) {
     const [containerStyle, setContainerStyle] = useState<any>(styles.viewerImage);
+    const [isFullscreen, setIsFullscreen] = useState(false);
     const maxContainerWidth = Dimensions.get('window').width - 64;
 
     const handleImageLoad = (event: any) => {
@@ -566,12 +568,22 @@ function ActivoImageViewer({ imageUrl }: { imageUrl: string }) {
     };
 
     return (
-        <Image
-            source={{ uri: imageUrl }}
-            style={containerStyle}
-            resizeMode="contain"
-            onLoad={handleImageLoad}
-        />
+        <>
+            <TouchableOpacity activeOpacity={0.85} onPress={() => setIsFullscreen(true)}>
+                <Image
+                    source={{ uri: imageUrl }}
+                    style={containerStyle}
+                    resizeMode="contain"
+                    onLoad={handleImageLoad}
+                />
+            </TouchableOpacity>
+            <FullscreenMediaModal
+                visible={isFullscreen}
+                onClose={() => setIsFullscreen(false)}
+                type="image"
+                uri={imageUrl}
+            />
+        </>
     );
 }
 
@@ -605,6 +617,7 @@ function ActivoVideoPlayer({ sourceUrl }: { sourceUrl: string }) {
                 allowsFullscreen={false}
                 allowsPictureInPicture={false}
             />
+            <FullscreenVideoButton uri={sourceUrl} />
         </View>
     );
 }

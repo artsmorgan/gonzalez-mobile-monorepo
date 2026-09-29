@@ -18,6 +18,7 @@ import { ThemedView } from '@/components/ThemedView';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import RecordAudioButton from '@/components/RecordAudioButton';
 import AudioPreviewModal from '@/components/AudioPreviewModal';
+import { FullscreenMediaModal, FullscreenVideoButton } from '@/components/FullscreenMediaViewer';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
@@ -4355,6 +4356,7 @@ function ComplaintImageViewer({
   onDeleteFile?: () => void;
 }) {
   const [containerStyle, setContainerStyle] = useState<any>(styles.viewerImage);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const maxContainerWidth = Dimensions.get('window').width - 64;
 
   const handleImageLoad = (event: any) => {
@@ -4392,11 +4394,19 @@ function ComplaintImageViewer({
 
   return (
     <ThemedView style={{ position: 'relative', backgroundColor: 'transparent' }}>
-      <Image
-        source={{ uri: imageUrl }}
-        style={containerStyle}
-        resizeMode="contain"
-        onLoad={handleImageLoad}
+      <TouchableOpacity activeOpacity={0.85} onPress={() => setIsFullscreen(true)}>
+        <Image
+          source={{ uri: imageUrl }}
+          style={containerStyle}
+          resizeMode="contain"
+          onLoad={handleImageLoad}
+        />
+      </TouchableOpacity>
+      <FullscreenMediaModal
+        visible={isFullscreen}
+        onClose={() => setIsFullscreen(false)}
+        type="image"
+        uri={imageUrl}
       />
       {onDeleteFile && (
         <TouchableOpacity
@@ -4550,6 +4560,7 @@ function ComplaintVideoPlayer({
         allowsFullscreen={true}
         allowsPictureInPicture={false}
       />
+      <FullscreenVideoButton uri={sourceUrl} style={{ top: 8, left: 8, right: undefined }} />
       {onDeleteFile && (
         <TouchableOpacity
           style={{

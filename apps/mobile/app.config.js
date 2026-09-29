@@ -57,7 +57,8 @@ module.exports = ({ config }) => {
           "android.permission.MODIFY_AUDIO_SETTINGS",
           "android.permission.POST_NOTIFICATIONS",
           "android.permission.RECEIVE_BOOT_COMPLETED",
-          "android.permission.VIBRATE"
+          "android.permission.VIBRATE",
+          "android.permission.REQUEST_INSTALL_PACKAGES"
         ],
         package: isLite ? "com.abrjpo98.MonitoreApp.lite" : "com.abrjpo98.MonitoreApp.full"
       },

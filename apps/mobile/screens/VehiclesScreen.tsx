@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Text, Alert, ActivityIndicator, Modal, View, Platform, Image, Dimensions } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
@@ -2058,7 +2059,7 @@ export default function VehiclesScreen() {
               <ThemedView style={styles.imagePreviewContainer}>
                 <ThemedText style={styles.imagePreviewTitle}>Nueva imagen:</ThemedText>
                 <View style={{ position: 'relative' }}>
-                  <Image source={{ uri: displayUri }} style={styles.imagePreview} resizeMode="contain" />
+                  <ZoomableThumbnailImage uri={displayUri} style={styles.imagePreview} resizeMode="contain" />
                   <TouchableOpacity
                     style={styles.vehicleImageTrashButton}
                     onPress={() => {
@@ -2905,8 +2906,8 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
               ) : imageBase64 ? (
                 <ThemedView style={styles.imagePreviewContainer}>
                   <View style={{ position: 'relative' }}>
-                  <Image
-                    source={{ uri: imageBase64 }}
+                  <ZoomableThumbnailImage
+                    uri={imageBase64}
                     style={styles.imagePreview}
                     resizeMode="contain"
                   />

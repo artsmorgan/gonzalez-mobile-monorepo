@@ -340,14 +340,8 @@ export async function buildTiempoAlmuerzoExcelConsolidado(
         anchorPausasById.set(Number(r.id), appendPausasDetailBlock(wsPausas, r));
     }
 
-    /** Cuadrícula jerárquica: Registro (nivel 0) → Pausa (nivel 1, de `pausas`). */
-    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
+    /** 1 fila por registro: las "Pausas" se agrupan y separan por punto y coma en la fila del registro. */
     const headers = [
-        "ID de fila",
-        "ID fila padre",
-        "Nivel",
-        "Tipo de fila",
         "ID Registro",
         "Empresa",
         "Cliente",
@@ -369,10 +363,12 @@ export async function buildTiempoAlmuerzoExcelConsolidado(
         "Motivo (pausa)",
     ];
     const colPausasLink = headers.indexOf("Ver pausas") + 1;
-    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 1;
-    // +1 adicional: columnas reales en la hoja (con margen de `addMainRow` en A).
+    // +1 adicional: columna real en la hoja (con margen de `addMainRow` en A).
     const colPausasLinkReal = colPausasLink + 1;
-    const colTipoFilaReal = COL_TIPO_FILA + 1;
+
+    /** Todas las pausas de un registro se unen en 1 sola fila, separadas por punto y coma. */
+    const joinPausas = (pausas: PausaParsed[], key: keyof PausaParsed): string =>
+        pausas.map((p) => String(p?.[key] ?? "")).join(";");
 
     applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
 
@@ -387,10 +383,6 @@ export async function buildTiempoAlmuerzoExcelConsolidado(
     }
     wsMain.columns = [
         { width: 3 },
-        { width: 12 },
-        { width: 14 },
-        { width: 8 },
-        { width: 20 },
         { width: 10 },
         { width: 26 },
         { width: 22 },
@@ -412,15 +404,12 @@ export async function buildTiempoAlmuerzoExcelConsolidado(
         { width: 34 },
     ];
 
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((cell, col) => {
             if (col === 1) return;
             cell.border = borderThin;
             cell.alignment = { vertical: "top", wrapText: true };
         });
-        row.getCell(colTipoFilaReal).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
-        row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(colTipoFilaReal).font = { bold: true };
     };
 
     for (const r of rows) {
@@ -443,31 +432,18 @@ export async function buildTiempoAlmuerzoExcelConsolidado(
             [headers.indexOf("Es manual") + 1]: r.es_manual ? "Sí" : "No",
         };
 
+        const pausas: PausaParsed[] = r.pausas_list?.length ? r.pausas_list : parsePausasJson(r.pausas);
+        general[headers.indexOf("Inicio (pausa)") + 1] = joinPausas(pausas, "startTime");
+        general[headers.indexOf("Fin (pausa)") + 1] = joinPausas(pausas, "endTime");
+        general[headers.indexOf("Motivo (pausa)") + 1] = joinPausas(pausas, "reason");
+
         const rootValues = new Array(headers.length).fill("");
-        rootValues[0] = String(r.id);
-        rootValues[2] = 0;
-        rootValues[3] = "Registro";
         for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
         rootValues[colPausasLink - 1] = "Ver pausas";
         const rootRow = addMainRow(wsMain, rootValues);
         rootRow.getCell(colPausasLinkReal).value = { text: "Ver pausas", hyperlink: `#'Pausas'!A${paRow}` };
         rootRow.getCell(colPausasLinkReal).font = { color: { argb: "FF0563C1" }, underline: true };
-        styleDataRow(rootRow, 0);
-
-        const pausas: PausaParsed[] = r.pausas_list?.length ? r.pausas_list : parsePausasJson(r.pausas);
-        pausas.forEach((p, idx) => {
-            const values = new Array(headers.length).fill("");
-            values[0] = `${r.id}.pausa${idx + 1}`;
-            values[1] = String(r.id);
-            values[2] = 1;
-            values[3] = "Pausa";
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[headers.indexOf("Inicio (pausa)")] = p.startTime;
-            values[headers.indexOf("Fin (pausa)")] = p.endTime;
-            values[headers.indexOf("Motivo (pausa)")] = p.reason;
-            const row = addMainRow(wsMain, values);
-            styleDataRow(row, 1);
-        });
+        styleDataRow(rootRow);
     }
 
     wsMain.autoFilter = {
