@@ -18,8 +18,13 @@ function getGitCommitLast4() {
 module.exports = ({ config }) => {
 
   /** Lite por defecto si no se define APP_VARIANT (prebuild local, EAS preview-lite, etc.). */
-  const variant = process.env.APP_VARIANT ?? "lite";
-  const isLite = variant !== "full";
+  const variant = process.env.APP_VARIANT ?? "lite"; // "lite" | "full" | "prod"
+  const APPLICATION_ID_BY_VARIANT = {
+    lite: "com.abrjpo98.MonitoreApp.lite",
+    full: "com.abrjpo98.MonitoreApp.full",
+    prod: "com.abrjpo98.MonitoreApp.prod",
+  };
+  const applicationId = APPLICATION_ID_BY_VARIANT[variant] || APPLICATION_ID_BY_VARIANT.lite;
   const gitCommitLast4 = getGitCommitLast4();
 
   return {
@@ -40,9 +45,7 @@ module.exports = ({ config }) => {
       newArchEnabled: true,
       ios: {
         supportsTablet: true,
-        bundleIdentifier: isLite
-          ? "com.abrjpo98.MonitoreApp.lite"
-          : "com.abrjpo98.MonitoreApp.full"
+        bundleIdentifier: applicationId
       },
       android: {
         googleServicesFile: "./google-services.json",
@@ -60,7 +63,7 @@ module.exports = ({ config }) => {
           "android.permission.VIBRATE",
           "android.permission.REQUEST_INSTALL_PACKAGES"
         ],
-        package: isLite ? "com.abrjpo98.MonitoreApp.lite" : "com.abrjpo98.MonitoreApp.full"
+        package: applicationId
       },
       web: {
         bundler: "metro",
@@ -120,8 +123,9 @@ module.exports = ({ config }) => {
         API_SERVER: process.env.EXPO_PUBLIC_API_SERVER ||
           process.env.API_SERVER ||
           process.env.NEXT_PUBLIC_API_SERVER ||
-          // https://api-gonzalez-mobile-monorepo-production.up.railway.app
-          "https://api-gonzalez-mobile-monorepo-production.up.railway.app",
+          // test https://api-gonzalez-mobile-monorepo-production.up.railway.app
+          // prod https://gonzalez-mobile-app-production.up.railway.app
+          "https://gonzalez-mobile-app-production.up.railway.app",
         /** Debe coincidir con `MOBILE_ACCESS_TOKEN` del servidor (query en `/api/main-structure`). */
         MOBILE_ACCESS_TOKEN:
           process.env.EXPO_PUBLIC_MOBILE_ACCESS_TOKEN ||
