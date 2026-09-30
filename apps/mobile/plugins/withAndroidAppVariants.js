@@ -9,6 +9,7 @@ const path = require("path");
 /** Lite-first: namespace Kotlin/R/BuildConfig + applicationId por defecto. */
 const LITE_PACKAGE = "com.abrjpo98.MonitoreApp.lite";
 const FULL_APPLICATION_ID = "com.abrjpo98.MonitoreApp.full";
+const PROD_APPLICATION_ID = "com.abrjpo98.MonitoreApp.prod";
 
 const FLAVORS_BLOCK = `flavorDimensions "appVariant"
     productFlavors {
@@ -19,6 +20,10 @@ const FLAVORS_BLOCK = `flavorDimensions "appVariant"
         full {
             dimension "appVariant"
             applicationId '${FULL_APPLICATION_ID}'
+        }
+        prod {
+            dimension "appVariant"
+            applicationId '${PROD_APPLICATION_ID}'
         }
     }`;
 
@@ -53,12 +58,18 @@ function ensureBuildFeatures(contents) {
 }
 
 function ensureDebuggableVariants(contents) {
-  if (contents.includes('debuggableVariants = ["liteDebug", "fullDebug"]')) {
+  if (contents.includes('debuggableVariants = ["liteDebug", "fullDebug", "prodDebug"]')) {
     return contents;
+  }
+  if (contents.includes('debuggableVariants = ["liteDebug", "fullDebug"]')) {
+    return contents.replace(
+      'debuggableVariants = ["liteDebug", "fullDebug"]',
+      'debuggableVariants = ["liteDebug", "fullDebug", "prodDebug"]'
+    );
   }
   return contents.replace(
     /\/\/\s*debuggableVariants\s*=\s*\[[^\]]*\]/,
-    'debuggableVariants = ["liteDebug", "fullDebug"]'
+    'debuggableVariants = ["liteDebug", "fullDebug", "prodDebug"]'
   );
 }
 
@@ -69,10 +80,11 @@ function stripFlavorNamespaces(contents) {
 function ensureProductFlavors(contents) {
   contents = stripFlavorNamespaces(contents);
 
-  if (/productFlavors\s*\{[\s\S]*?\blite\b[\s\S]*?\bfull\b/.test(contents)) {
+  if (/productFlavors\s*\{[\s\S]*?\blite\b[\s\S]*?\bfull\b[\s\S]*?\bprod\b/.test(contents)) {
     return contents
       .replace(/(lite\s*\{[\s\S]*?applicationId\s+')[^']+(')/, `$1${LITE_PACKAGE}$2`)
-      .replace(/(full\s*\{[\s\S]*?applicationId\s+')[^']+(')/, `$1${FULL_APPLICATION_ID}$2`);
+      .replace(/(full\s*\{[\s\S]*?applicationId\s+')[^']+(')/, `$1${FULL_APPLICATION_ID}$2`)
+      .replace(/(prod\s*\{[\s\S]*?applicationId\s+')[^']+(')/, `$1${PROD_APPLICATION_ID}$2`);
   }
 
   if (/flavorDimensions/.test(contents)) {

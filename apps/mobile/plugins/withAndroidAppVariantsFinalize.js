@@ -4,6 +4,7 @@ const path = require("path");
 
 const LITE_PACKAGE = "com.abrjpo98.MonitoreApp.lite";
 const FULL_APPLICATION_ID = "com.abrjpo98.MonitoreApp.full";
+const PROD_APPLICATION_ID = "com.abrjpo98.MonitoreApp.prod";
 
 const FLAVORS_BLOCK = `flavorDimensions "appVariant"
     productFlavors {
@@ -14,6 +15,10 @@ const FLAVORS_BLOCK = `flavorDimensions "appVariant"
         full {
             dimension "appVariant"
             applicationId '${FULL_APPLICATION_ID}'
+        }
+        prod {
+            dimension "appVariant"
+            applicationId '${PROD_APPLICATION_ID}'
         }
     }`;
 
@@ -48,12 +53,18 @@ function ensureBuildFeatures(contents) {
 }
 
 function ensureDebuggableVariants(contents) {
-  if (contents.includes('debuggableVariants = ["liteDebug", "fullDebug"]')) {
+  if (contents.includes('debuggableVariants = ["liteDebug", "fullDebug", "prodDebug"]')) {
     return contents;
+  }
+  if (contents.includes('debuggableVariants = ["liteDebug", "fullDebug"]')) {
+    return contents.replace(
+      'debuggableVariants = ["liteDebug", "fullDebug"]',
+      'debuggableVariants = ["liteDebug", "fullDebug", "prodDebug"]'
+    );
   }
   return contents.replace(
     /\/\/\s*debuggableVariants\s*=\s*\[[^\]]*\]/,
-    'debuggableVariants = ["liteDebug", "fullDebug"]'
+    'debuggableVariants = ["liteDebug", "fullDebug", "prodDebug"]'
   );
 }
 
@@ -64,10 +75,11 @@ function stripFlavorNamespaces(contents) {
 function ensureProductFlavors(contents) {
   contents = stripFlavorNamespaces(contents);
 
-  if (/productFlavors\s*\{[\s\S]*?\blite\b[\s\S]*?\bfull\b/.test(contents)) {
+  if (/productFlavors\s*\{[\s\S]*?\blite\b[\s\S]*?\bfull\b[\s\S]*?\bprod\b/.test(contents)) {
     return contents
       .replace(/(lite\s*\{[\s\S]*?applicationId\s+')[^']+(')/, `$1${LITE_PACKAGE}$2`)
-      .replace(/(full\s*\{[\s\S]*?applicationId\s+')[^']+(')/, `$1${FULL_APPLICATION_ID}$2`);
+      .replace(/(full\s*\{[\s\S]*?applicationId\s+')[^']+(')/, `$1${FULL_APPLICATION_ID}$2`)
+      .replace(/(prod\s*\{[\s\S]*?applicationId\s+')[^']+(')/, `$1${PROD_APPLICATION_ID}$2`);
   }
 
   if (/flavorDimensions/.test(contents)) {
@@ -147,7 +159,7 @@ function removeAllKotlinUnder(javaRoot) {
 }
 
 function writeFlavorSources(projectRoot, sourceContentsByFile) {
-  for (const flavor of ["lite", "full"]) {
+  for (const flavor of ["lite", "full", "prod"]) {
     removeAllKotlinUnder(path.join(projectRoot, "android", "app", "src", flavor, "java"));
 
     const destDir = path.join(
@@ -167,7 +179,9 @@ function writeFlavorSources(projectRoot, sourceContentsByFile) {
   }
 }
 
-/** Copia google-services.json a src/lite (y app/) para que el plugin de Google Services resuelva el flavor. */
+/** Copia google-services.json a src/lite, src/prod (y app/) para que el plugin de Google Services
+ * resuelva cada flavor — el archivo raíz trae un cliente por cada `package_name` (lite/prod/etc.),
+ * y cada copia solo necesita coincidir con el `applicationId` de su propio flavor. */
 function ensureGoogleServicesForLiteFlavor(projectRoot) {
   const candidates = [
     path.join(projectRoot, "google-services.json"),
@@ -182,6 +196,7 @@ function ensureGoogleServicesForLiteFlavor(projectRoot) {
   const targets = [
     path.join(projectRoot, "android", "app", "google-services.json"),
     path.join(projectRoot, "android", "app", "src", "lite", "google-services.json"),
+    path.join(projectRoot, "android", "app", "src", "prod", "google-services.json"),
   ];
 
   const contents = fs.readFileSync(source);
