@@ -1,0 +1,16 @@
+id: F-001
+module_id: incidents
+severity: high
+status: fixed
+file: apps/mobile/App.tsx
+lines: "7512-7629"
+category: offline
+title: Snapshot stale de incidents_actions reencola items
+description: |
+  actions parseado una vez; filter desde snapshot original tras cada éxito.
+reproduction: |
+  1. Cola [create, delete].
+  2. Sync un ciclo.
+impact: Duplicados o loop infinito.
+suggested_fix: |
+  Re-leer storage o actions = updatedActions tras cada éxito.

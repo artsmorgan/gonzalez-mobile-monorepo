@@ -1,33 +1,78 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
-import React, { createContext, ReactNode, useContext, useEffect, useState } from 'react';
+import React, { createContext, ReactNode, useContext, useEffect, useState, useRef } from 'react';
+import { eventBus } from '../hooks/eventBus';
+import { resolveAppConnectivity } from '../hooks/resolveAppConnectivity';
+import * as Device from 'expo-device';
+import {
+  MAIN_STRUCTURE_FRAG_ASYNC_PREFIX,
+  MAIN_STRUCTURE_SWEEP_PRESERVE_ASYNC_KEYS,
+} from '@/hooks/mainStructureFragmentsStorage';
+import {
+  extractPlanillasTokenFromResponse,
+  persistStoredPlanillasToken,
+} from '@/hooks/planillasTokenStorage';
+import { persistLegacySession } from '@/hooks/authTokenStorage';
+import {
+  deleteEmployeeProfilePhoto,
+  saveEmployeeProfilePhotoFromBase64,
+} from '@/hooks/employeeProfilePhotoStorage';
 
-interface ServerUser {
-  id: string;
-  username: string;
-  nombre: string;
-  apellidos?: string;
-  email?: string;
-  Email?: string;
-  telefono?: string;
+interface Role {
+  id: number;
+  name: string;
 }
 
-interface User {
+interface Division {
+  id: number;
+  name: string;
+}
+
+interface EmployeeRole {
+  role: Role;
+  division: Division;
+}
+
+interface ServerEmpleado {
+  id: string;
+  cedula: string;
+  nombre: string;
+  apellido: string;
+  segundo_apellido?: string;
+  Email: string;
+  telefono?: string;
+  tipoCedula?: string;
+  fechaContratacion?: string;
+  roles?: EmployeeRole[];
+  codigo?: string;
+  isSuperAdmin?: boolean;
+}
+
+interface Employee {
   id: string;
   name: string;
   email: string;
-  username: string;
+  cedula: string;
   telefono: string;
-  createdAt: string;
+  tipoCedula?: string;
+  fechaContratacion: string;
+  codigo: string;
+  isSuperAdmin?: boolean;
+  roles: EmployeeRole[];
+  firmaManual: string;
+  supervisor_id: number | null;
+  /** Nombre bajo Paths.document (`employee_profile_photo_{id}.ext`). */
+  fotoLocalFileName?: string | null;
 }
 
 interface AuthContextType {
-  user: User | null;
+  employee: Employee | null;
   accessToken: string | null;
   refreshToken: string | null;
+  tokenCreatedAt: number | null;
   isLoading: boolean;
   isAuthenticated: boolean;
-  login: (username: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  login: (cedula: string, password: string) => Promise<{ success: boolean; passwordExpired?: boolean; error?: string }>;
   logout: () => Promise<{ status: boolean; message: string }>;
   refreshAccessToken: () => Promise<boolean>;
 }
@@ -40,15 +85,35 @@ interface AuthProviderProps {
 
 const ACCESS_TOKEN_KEY = 'access_token';
 const REFRESH_TOKEN_KEY = 'refresh_token';
-const USER_KEY = 'user_data';
+const PLANILLAS_TOKEN_TOKEN_KEY = 'planillas_token';
+const PLANILLAS_TOKEN_EXPIRES_AT_TOKEN_KEY = 'planillas_token_expires_at';
+const EMPLOYEE_KEY = 'employee_data';
+const TOKEN_CREATED_AT_KEY = 'token_created_at';
+
+async function parseJsonResponseSafe(response: Response): Promise<{ data: any | null; raw: string }> {
+  const raw = await response.text();
+  if (!raw || raw.trim().length === 0) {
+    return { data: null, raw: '' };
+  }
+  try {
+    return { data: JSON.parse(raw), raw };
+  } catch {
+    return { data: null, raw };
+  }
+}
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [employee, setEmployee] = useState<Employee | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState<string | null>(null);
+  const [planillasToken, setPlanillasToken] = useState<string | null>(null);
+  const [planillasTokenExpiresAt, setPlanillasTokenExpiresAt] = useState<string | null>(null);
+  const [tokenCreatedAt, setTokenCreatedAt] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const isRefreshingRef = useRef(false);
+  const refreshPromiseRef = useRef<Promise<boolean> | null>(null);
 
-  const isAuthenticated = !!user && !!accessToken;
+  const isAuthenticated = !!employee && !!accessToken;
 
   // Load stored authentication data on app start
   useEffect(() => {
@@ -57,16 +122,27 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const loadStoredAuth = async () => {
     try {
-      const [storedAccessToken, storedRefreshToken, storedUser] = await Promise.all([
+      const [storedAccessToken, storedRefreshToken, storedEmployee, storedTokenCreatedAt, storedPlanillasToken, storedPlanillasTokenExpiresAt] = await Promise.all([
         AsyncStorage.getItem(ACCESS_TOKEN_KEY),
         AsyncStorage.getItem(REFRESH_TOKEN_KEY),
-        AsyncStorage.getItem(USER_KEY),
+        AsyncStorage.getItem(EMPLOYEE_KEY),
+        AsyncStorage.getItem(TOKEN_CREATED_AT_KEY),
+        AsyncStorage.getItem(PLANILLAS_TOKEN_TOKEN_KEY),
+        AsyncStorage.getItem(PLANILLAS_TOKEN_EXPIRES_AT_TOKEN_KEY),
       ]);
 
-      if (storedAccessToken && storedUser) {
+      if (storedAccessToken && storedEmployee) {
         setAccessToken(storedAccessToken);
         setRefreshToken(storedRefreshToken);
-        setUser(JSON.parse(storedUser));
+        setEmployee(JSON.parse(storedEmployee));
+        if (storedTokenCreatedAt) {
+          const parsed = parseInt(storedTokenCreatedAt, 10);
+          if (!Number.isNaN(parsed)) setTokenCreatedAt(parsed);
+        }
+        if (storedPlanillasToken && storedPlanillasTokenExpiresAt) {
+          setPlanillasToken(storedPlanillasToken);
+          setPlanillasTokenExpiresAt(storedPlanillasTokenExpiresAt);
+        }
       }
     } catch (error) {
       console.error('Error loading stored auth:', error);
@@ -75,12 +151,15 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
-  const login = async (username: string, password: string): Promise<{ success: boolean; error?: string }> => {
+  const login = async (cedula: string, password: string): Promise<{ success: boolean; passwordExpired?: boolean; error?: string }> => {
     try {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) {
         return { success: false, error: 'Server URL not configured' };
       }
+
+      console.log(Device.brand);
+      console.log(Device.modelName);
 
       const response = await fetch(`${apiUrl}/api/auth/login`, {
         method: 'POST',
@@ -89,52 +168,166 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           'ngrok-skip-browser-warning': '69420'
         },
         body: JSON.stringify({
-          username: username,
-          password: password
+          cedula: cedula,
+          password: password,
+          deviceName: `${Device.brand}-${Device.modelName}`
         }),
       });
 
-      const responseData = await response.json();
-
-      if (!responseData.status) {
-        return { success: false, error: responseData.message || 'Error de autenticación' };
+      const { data: responseData, raw: responseRaw } = await parseJsonResponseSafe(response);
+      if (!responseData) {
+        const compactRaw = String(responseRaw || '').replace(/\s+/g, ' ').trim();
+        console.error('Error parsing login response: non-JSON payload:', compactRaw.slice(0, 300));
+        if (!response.ok) {
+          return { success: false, error: compactRaw || `Error HTTP ${response.status}` };
+        }
+        return { success: false, error: 'Respuesta inválida del servidor (no JSON)' };
       }
 
-      const userServerData = responseData.user;
-      
+      if (!response.ok) {
+        return {
+          success: false,
+          passwordExpired: responseData?.passwordExpired || false,
+          error: responseData?.message || 'Error de autenticación',
+        };
+      }
+
+      if (!responseData.status) {
+        return { success: false, passwordExpired: responseData.passwordExpired || false, error: responseData.message || 'Error de autenticación' };
+      }
+
+      const empleadoData = responseData.empleado;
+
       // Use real tokens from server response
       const accessToken = responseData.accessToken;
       const refreshToken = responseData.refreshToken;
-      
+      const tokenCreatedAt = responseData.createdAt;
+
       if (!accessToken || !refreshToken) {
-        return { success: false, error: 'Tokens no recibidos del servidor' };
+        return { success: false, passwordExpired: false, error: 'Tokens no recibidos del servidor' };
       }
 
-      // Create user object from server user data
-      const userData: User = {
-        id: userServerData.id,
-        name: userServerData.nombre || `${userServerData.nombre} ${userServerData.apellidos || ''}`.trim(),
-        email: userServerData.email || userServerData.Email,
-        username: userServerData.username,
-        telefono: userServerData.telefono || '',
-        createdAt: new Date().toISOString(), // Since we don't have this from the API
+      let fotoLocalFileName: string | null = null;
+      try {
+        fotoLocalFileName = await saveEmployeeProfilePhotoFromBase64(
+          empleadoData.id,
+          empleadoData.foto,
+        );
+      } catch (fotoError) {
+        console.warn('No se pudo guardar la foto de perfil localmente:', fotoError);
+      }
+
+      // Create employee object from server empleado data (sin base64; solo referencia a disco)
+      const employeeData: Employee = {
+        id: empleadoData.id,
+        codigo: empleadoData.codigo,
+        name: `${empleadoData.nombre} ${empleadoData.apellido} ${empleadoData.segundo_apellido || ''}`.trim(),
+        email: empleadoData.Email ?? empleadoData.email ?? '',
+        cedula: empleadoData.cedula,
+        telefono: empleadoData.telefono || '',
+        tipoCedula: empleadoData.tipoCedula || '',
+        fechaContratacion: empleadoData.fechaContratacion || null,
+        isSuperAdmin: empleadoData.isSuperAdmin || false,
+        roles: empleadoData.roles || [],
+        firmaManual: empleadoData.firmaManual || '',
+        supervisor_id: empleadoData.supervisor_id || null,
+        fotoLocalFileName,
       };
 
-      // Store tokens and user data
-      await Promise.all([
-        AsyncStorage.setItem(ACCESS_TOKEN_KEY, accessToken),
-        AsyncStorage.setItem(REFRESH_TOKEN_KEY, refreshToken),
-        AsyncStorage.setItem(USER_KEY, JSON.stringify(userData)),
-      ]);
+      await persistLegacySession({
+        accessToken,
+        refreshToken,
+        createdAt: tokenCreatedAt,
+      });
+      await AsyncStorage.setItem(EMPLOYEE_KEY, JSON.stringify(employeeData));
 
       setAccessToken(accessToken);
       setRefreshToken(refreshToken);
-      setUser(userData);
+      setTokenCreatedAt(tokenCreatedAt);
+      setEmployee(employeeData);
 
-      return { success: true };
+      const planillasPayload = extractPlanillasTokenFromResponse(responseData);
+      if (!planillasPayload) {
+        try {
+          await deleteEmployeeProfilePhoto(employeeData.id);
+        } catch {
+          /* noop */
+        }
+        await Promise.all([
+          AsyncStorage.removeItem(ACCESS_TOKEN_KEY),
+          AsyncStorage.removeItem(REFRESH_TOKEN_KEY),
+          AsyncStorage.removeItem(EMPLOYEE_KEY),
+          AsyncStorage.removeItem(TOKEN_CREATED_AT_KEY),
+        ]);
+        setAccessToken(null);
+        setRefreshToken(null);
+        setEmployee(null);
+        setTokenCreatedAt(null);
+        return {
+          success: false,
+          passwordExpired: false,
+          error: 'No se recibió el token de Planillas en el login',
+        };
+      }
+
+      await persistStoredPlanillasToken(planillasPayload);
+      setPlanillasToken(planillasPayload.planillasToken);
+      setPlanillasTokenExpiresAt(String(planillasPayload.planillasTokenExpiresAt));
+
+      // Tras login: sincronizar cachés pendientes (mismo flujo que reconexión / foco en App.tsx)
+      const connectivity = await resolveAppConnectivity();
+      if (connectivity.ok) {
+        queueMicrotask(() => {
+          eventBus.emit('syncCachesRequested');
+        });
+      }
+
+      const currentMarca = await AsyncStorage.getItem('current_marca');
+      if (currentMarca) {
+        const currentMarcaData = JSON.parse(currentMarca);
+        if (currentMarcaData.empleadoFijo_id !== employeeData.id) {
+          const exceptions = [
+            'access_token',
+            'employee_data',
+            'refresh_token',
+            'token_created_at',
+            'remembered_cedula',
+            'server_time',
+            'main_structure_created_at',
+            'categories_cache',
+            'tipo_activos_cache',
+            'incidents_classifications_cache',
+            'document_types_cache',
+            'executives_cache',
+            'puestos_corpo_cache',
+            'categoria_mantenimiento_cache',
+            'tipo_quejas_cache',
+            'tipo_clientes_quejas_cache',
+            'last_location',
+            'monitoring_previous_minutes',
+            'monitoring_post_minutes',
+            'tiempo_gracia_marcar_salida',
+            'validate_gps_salida',
+            PLANILLAS_TOKEN_TOKEN_KEY,
+            PLANILLAS_TOKEN_EXPIRES_AT_TOKEN_KEY,
+          ];
+          const keys = await AsyncStorage.getAllKeys();
+    
+          const keysToDelete = keys.filter((key) => {
+            if (exceptions.includes(key)) return false;
+            if (key.startsWith(MAIN_STRUCTURE_FRAG_ASYNC_PREFIX)) return false;
+            if (MAIN_STRUCTURE_SWEEP_PRESERVE_ASYNC_KEYS.includes(key)) return false;
+            return true;
+          });
+    
+          await AsyncStorage.multiRemove(keysToDelete);
+        }
+      }
+
+      return { success: true, passwordExpired: false };
     } catch (error) {
       console.error('Login error:', error);
-      return { success: false, error: 'Error de conexión' };
+      return { success: false, passwordExpired: false, error: 'Error de conexión' };
     }
   };
 
@@ -142,7 +335,29 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       let serverResponse = { status: true, message: 'Sesión cerrada correctamente' };
-      
+
+      // Desregistrar token FCM mientras aún hay sesión válida
+      try {
+        const {
+          enqueueUnregisterPushDevice,
+          unregisterPushDeviceOnline,
+          PUSH_LOCAL_TOKEN_KEY,
+        } = await import('@/hooks/pushNotificationsService');
+        const fcmToken = await AsyncStorage.getItem(PUSH_LOCAL_TOKEN_KEY);
+        if (fcmToken && accessToken && apiUrl) {
+          const ok = await unregisterPushDeviceOnline({
+            apiUrl,
+            accessToken,
+            token: fcmToken,
+          });
+          if (!ok) await enqueueUnregisterPushDevice(fcmToken);
+        } else {
+          await enqueueUnregisterPushDevice(fcmToken);
+        }
+      } catch {
+        // no-op
+      }
+
       // Call logout API if we have a refresh token
       if (refreshToken && apiUrl) {
         try {
@@ -157,8 +372,15 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             }),
           });
 
-          const responseData = await response.json();
-          serverResponse = responseData;
+          const { data: responseData, raw } = await parseJsonResponseSafe(response);
+          if (responseData && typeof responseData === 'object') {
+            serverResponse = responseData;
+          } else {
+            serverResponse = {
+              status: response.ok,
+              message: raw?.trim() || (response.ok ? 'Sesión cerrada correctamente' : `Error HTTP ${response.status}`),
+            };
+          }
 
         } catch (apiError) {
           console.warn('Logout API call failed:', apiError);
@@ -167,17 +389,32 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         }
       }
 
+      const employeeIdForFoto = employee?.id;
+      if (employeeIdForFoto) {
+        try {
+          await deleteEmployeeProfilePhoto(employeeIdForFoto);
+        } catch {
+          /* noop */
+        }
+      }
+
       // Clear local storage and state
       await Promise.all([
         AsyncStorage.removeItem(ACCESS_TOKEN_KEY),
         AsyncStorage.removeItem(REFRESH_TOKEN_KEY),
-        AsyncStorage.removeItem(USER_KEY),
+        AsyncStorage.removeItem(EMPLOYEE_KEY),
+        AsyncStorage.removeItem(TOKEN_CREATED_AT_KEY),
+        AsyncStorage.removeItem(PLANILLAS_TOKEN_TOKEN_KEY),
+        AsyncStorage.removeItem(PLANILLAS_TOKEN_EXPIRES_AT_TOKEN_KEY),
+        AsyncStorage.removeItem('temp_state'),
       ]);
 
       setAccessToken(null);
       setRefreshToken(null);
-      setUser(null);
-
+      setEmployee(null);
+      setTokenCreatedAt(null);
+      setPlanillasToken(null);
+      setPlanillasTokenExpiresAt(null);
       return serverResponse;
     } catch (error) {
       console.error('Logout error:', error);
@@ -186,15 +423,37 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   };
 
   const refreshAccessToken = async (): Promise<boolean> => {
+    if (isRefreshingRef.current && refreshPromiseRef.current) {
+      return refreshPromiseRef.current;
+    }
+
+    isRefreshingRef.current = true;
+
+    const promise = (async () => {
+      const ok = await refreshAccessTokenSafe();
+      isRefreshingRef.current = false;
+      refreshPromiseRef.current = null;
+      return ok;
+    })();
+
+    refreshPromiseRef.current = promise;
+    return promise;
+  }
+
+  const refreshAccessTokenSafe = async (): Promise<boolean> => {
     try {
-      if (!refreshToken) {
-        return false;
-      }
+      // Preferir estado, pero hacer fallback a AsyncStorage para evitar false negativos
+      // (p.ej. si el estado aún no se cargó en arranque pero AsyncStorage sí tiene el token).
+      const tokenToUse = refreshToken || (await AsyncStorage.getItem(REFRESH_TOKEN_KEY));
+      if (!tokenToUse) return false;
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) {
         return false;
       }
+      
+      console.log(Device.brand);
+      console.log(Device.modelName);
 
       // Make API call to refresh the token
       const response = await fetch(`${apiUrl}/api/auth/refresh-token`, {
@@ -204,29 +463,43 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           'ngrok-skip-browser-warning': '69420'
         },
         body: JSON.stringify({
-          refreshToken: refreshToken
+          refreshToken: tokenToUse,
+          deviceName: `${Device.brand}-${Device.modelName}`
         }),
       });
 
-      const responseData = await response.json();
-
-      if (!responseData.status || !responseData.accessToken) {
+      if (!response.ok) {
         return false;
       }
 
-      const newAccessToken = responseData.accessToken;
-      const newRefreshToken = responseData.refreshToken || refreshToken; // Use new refresh token if provided, otherwise keep current
-      
-      await Promise.all([
-        AsyncStorage.setItem(ACCESS_TOKEN_KEY, newAccessToken),
-        newRefreshToken !== refreshToken && AsyncStorage.setItem(REFRESH_TOKEN_KEY, newRefreshToken),
-      ].filter(Boolean));
+      const { data: responseData, raw } = await parseJsonResponseSafe(response);
+      if (!responseData || typeof responseData !== 'object') {
+        console.error('Refresh token invalid JSON response:', raw?.slice(0, 300));
+        return false;
+      }
+
+      if (!responseData.status || !responseData.newAccessToken) {
+        // logout
+        return false;
+      }
+
+      const newAccessToken = responseData.newAccessToken;
+      const newRefreshToken = responseData.newRefreshToken;
+      const newTokenCreatedAt = responseData.createdAt;
+
+      await persistLegacySession({
+        accessToken: newAccessToken,
+        refreshToken: newRefreshToken,
+        createdAt: newTokenCreatedAt,
+      });
 
       setAccessToken(newAccessToken);
-      if (newRefreshToken !== refreshToken) {
+      if (newRefreshToken && newRefreshToken !== refreshToken) {
         setRefreshToken(newRefreshToken);
       }
-      
+
+      setTokenCreatedAt(newTokenCreatedAt);
+
       return true;
     } catch (error) {
       console.error('Token refresh error:', error);
@@ -235,9 +508,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   };
 
   const value: AuthContextType = {
-    user,
+    employee,
     accessToken,
     refreshToken,
+    tokenCreatedAt,
     isLoading,
     isAuthenticated,
     login,

@@ -1,22 +1,63 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { toZonedTime } from "date-fns-tz";
+import { prisma } from "../../../../../utils/prismaClient";
+import axios from "axios";
 const bcrypt = require('bcrypt');
-
-const prisma = new PrismaClient();
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ token: string }> }) {
     try {
         const resolvedParams = await context.params;
         const token = resolvedParams.token;
         const { password } = await req.json();
-        const token_recovery = await prisma.a_recovery_password_token.findFirst({ where: { token: token } });
+        const token_recovery = await callDynamicPrisma({
+            req,
+            shouldVerifyAccessToken: false,
+            data: {
+                action: "GET",
+                table: "a_recovery_password_token",
+                operation: "findFirst",
+                where: { token: token }
+            }
+        });
         if (!token_recovery) return NextResponse.json({ status: false, message: "Token de recuperación de contraseña no encontrado" });
-        const empleado = await prisma.c_empleado.findUnique({ where: { id: token_recovery.empleadoId } });
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: token_recovery.empleadoId ?? 0 } });
         if (!empleado) return NextResponse.json({ status: false, message: "Empleado no encontrado" });
-        const hashedPassword = await bcrypt.hash(password, 10);
-        await prisma.c_empleado.update({ where: { id: token_recovery.empleadoId }, data: { password: hashedPassword } });
-        await prisma.a_recovery_password_token.delete({ where: { id: token_recovery.id } });
+
+        const planillasUrl = String(process.env.PLANILLAS_URL || "").trim().replace(/\/+$/, "");
+        if (!planillasUrl) {
+            return NextResponse.json(
+                { status: false, message: "URL de Planillas no configurada" }
+            );
+        }
+        
+        const planillasResponse = await axios.post(`${planillasUrl}/recover-password`, {
+            correo_usuario: empleado.Email,
+            codigo: token,
+            password: password,
+            repeat_password: password,
+        });
+
+        // Respuesta esperada: {"success":true,"data":{"message":"Contrase\u00f1a actualizada correctamente."}}
+
+        if (planillasResponse.status !== 200 || !planillasResponse.data.success) {
+            return NextResponse.json(
+                { status: false, message: planillasResponse.data.message }
+            );
+        }
+
+        await callDynamicPrisma({
+            req,
+            shouldVerifyAccessToken: false,
+            data: {
+                action: "DELETE",
+                table: "a_recovery_password_token",
+                where: { id: token_recovery.id },
+                returning: false
+            }
+        });
+        
         // Retornar éxito con la contraseña actualizada
         return NextResponse.json({ status: true, message: "Contraseña actualizada" });
     } catch (error: unknown) {

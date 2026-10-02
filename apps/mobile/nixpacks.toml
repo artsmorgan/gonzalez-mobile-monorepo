@@ -1,0 +1,15 @@
+[phases.setup]
+nixPkgs = ["nodejs_20", "npm-9_x"]
+
+[phases.install]
+cmds = ["npm install"]
+
+[phases.build]
+cmds = [
+  "export EXPO_PROJECT_ROOT=$(pwd)",
+  "export METRO_PROJECT_ROOT=$(pwd)",
+  "npx expo export --platform web --clear"
+]
+
+[start]
+cmd = "npx serve dist -l $PORT"

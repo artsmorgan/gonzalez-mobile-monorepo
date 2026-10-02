@@ -1,0 +1,15 @@
+id: F-001
+module_id: non-conforming-product
+severity: medium
+status: fixed
+file: apps/mobile/screens/NonConformingProductScreen.tsx
+lines: "1436-1468"
+category: offline
+title: Offline create encola base64 en evaluations_actions
+description: |
+  buildArchivosPayload con file_base64 en cola AsyncStorage.
+reproduction: |
+  1. Foto grande offline.
+impact: Límite storage / write failure.
+suggested_fix: |
+  Filesystem + referencias en cola.

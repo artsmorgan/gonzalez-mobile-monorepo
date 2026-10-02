@@ -1,0 +1,15 @@
+id: F-002
+module_id: visitors
+severity: medium
+status: fixed
+file: apps/mobile/hooks/visitorsFunctions.ts
+lines: "57-58"
+category: error-handling
+title: HTTP errors throw sin mensaje servidor
+description: |
+  throw on !response.ok; catch log only.
+reproduction: |
+  1. POST 400/500.
+impact: Cola atascada sin diagnóstico.
+suggested_fix: |
+  Parse body message; surface alert.

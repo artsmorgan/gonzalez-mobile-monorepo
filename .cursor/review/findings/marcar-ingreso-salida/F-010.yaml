@@ -1,0 +1,19 @@
+id: F-010
+module_id: marcar-ingreso-salida
+severity: medium
+status: fixed
+file: apps/mobile/hooks/attendanceActionsStorage.ts
+lines: "76-81"
+category: async
+title: appendAttendanceAction read-modify-write no atómico
+description: |
+  appendAttendanceAction hace read → push → write sin lock. Si sync itera attendance_actions
+  y el usuario agrega acción offline concurrentemente, last-writer-wins puede perder una acción
+  o desincronizar dequeue.
+reproduction: |
+  1. Sync inicia checkAttendanceActionsCache.
+  2. Usuario marca salida/ausencia offline mid-sync.
+  3. Escrituras concurrentes sobre attendance_actions → acción perdida o duplicada.
+impact: Pérdida intermitente de marcas offline bajo reconexión activa.
+suggested_fix: |
+  Mutex durante sync de attendance, o re-leer lista antes de write en append/remove.

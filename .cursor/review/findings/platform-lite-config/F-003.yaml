@@ -1,0 +1,13 @@
+id: F-003
+module_id: platform-lite-config
+severity: low
+status: fixed
+file: apps/mobile/eas.json
+lines: "1-23"
+category: eas
+title: eas.json solo define perfiles preview — sin production lite
+description: |
+  Únicos perfiles preview-full y preview-lite (APK). No hay canal production/submit para soft-release formal.
+reproduction: Revisar eas.json — no build.production ni submit config.
+impact: Proceso post soft-release requerirá configuración adicional; no bloquea preview testing.
+suggested_fix: Añadir profile production-lite cuando se apruebe soft-release (fuera de scope actual si solo preview).

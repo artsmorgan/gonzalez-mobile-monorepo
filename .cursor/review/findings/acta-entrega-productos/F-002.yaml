@@ -1,0 +1,22 @@
+id: F-002
+module_id: acta-entrega-productos
+severity: high
+status: fixed
+file: apps/mobile/screens/MarcarIngresoSalidaScreen.tsx
+lines: "1285-1288"
+category: offline
+title: Marcar entrada borra archivos locales de imágenes de acta pendientes
+description: |
+  hydrateAfterEntrada invoca deleteAllFiles() (Paths.document) inmediatamente después de cleanAsyncStorage.
+  Las imágenes offline referenciadas en acta_entrega_images_meta usan localFileName vía getFile/saveFile
+  (actaEntregaProductosImagesSync.ts). Si la cola aún no sincronizó, los archivos desaparecen pero la cola
+  puede quedar referenciándolos (o ya fue borrada por F-001).
+reproduction: |
+  1. Crear acta offline con fotos adjuntas (localFileName en payload).
+  2. Marcar entrada online antes de sync.
+  3. deleteAllFiles elimina los JPEG locales del directorio de documentos.
+  4. Al reconectar, buildActaEntregaImagenesJsonForUpload no puede leer base64 → sync falla o envía acta sin fotos.
+impact: Actas sincronizadas sin adjuntos o sync fallido; evidencia fotográfica perdida.
+suggested_fix: |
+  Excluir archivos referenciados por colas pendientes del wipe, o ejecutar sync completo antes de deleteAllFiles;
+  preservar prefijos de módulos con adjuntos offline.

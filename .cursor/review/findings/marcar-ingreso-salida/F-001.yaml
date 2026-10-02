@@ -1,0 +1,21 @@
+id: F-001
+module_id: marcar-ingreso-salida
+severity: critical
+status: fixed
+file: apps/mobile/screens/MarcarIngresoSalidaScreen.tsx
+lines: "1279-1282, 1470-1504"
+category: offline
+title: cleanAsyncStorage borra attendance_actions al marcar entrada online
+description: |
+  Tras entrada exitosa, hydrateAfterEntrada llama cleanAsyncStorage() que elimina todas las keys
+  excepto una lista fija de excepciones. attendance_actions NO está en excepciones ni en
+  MAIN_STRUCTURE_SWEEP_PRESERVE_ASYNC_KEYS. Cualquier salida/ausencia/revert pendiente de sync se pierde.
+reproduction: |
+  1. Marcar salida offline (queda en attendance_actions).
+  2. Antes de que sync complete, marcar entrada online en el siguiente turno.
+  3. hydrateAfterEntrada → cleanAsyncStorage elimina attendance_actions.
+  4. La salida offline nunca llega a Planillas.
+impact: Pérdida irreversible de marcas offline; inconsistencia Planillas vs MonitoreApp.
+suggested_fix: |
+  Preservar attendance_actions (y evaluar current_marca) en cleanAsyncStorage exceptions,
+  o leer/restaurar la cola antes del sweep.

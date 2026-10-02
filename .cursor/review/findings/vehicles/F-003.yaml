@@ -1,0 +1,15 @@
+id: F-003
+module_id: vehicles
+severity: medium
+status: fixed
+file: apps/server/app/api/vehicles/route.ts
+lines: "93-96"
+category: api
+title: GET 500 sin status:false
+description: |
+  500 response solo { message } sin status field.
+reproduction: |
+  1. Forzar error GET.
+impact: Cliente cae a cache stale con mensaje genérico.
+suggested_fix: |
+  Retornar { status: false, message } consistente.

@@ -1,0 +1,19 @@
+id: F-003
+module_id: marcar-ingreso-salida
+severity: high
+status: fixed
+file: apps/mobile/App.tsx
+lines: "1018-1033"
+category: offline
+title: Sync no desencola respuestas idempotentes "Ya has marcado la salida"
+description: |
+  El servidor devuelve HTTP 200 + { status: false, message: "Ya has marcado la salida", marca_id }.
+  checkAttendanceActionsCache solo llama removeAttendanceActionById cuando data.status es true.
+reproduction: |
+  1. Salida ya aplicada en servidor (o vía F-002).
+  2. Item obsoleto permanece en attendance_actions.
+  3. hasPendingActionsInStorage() sigue true; sync reintenta indefinidamente.
+impact: Sync fantasma; modal de pendientes nunca se limpia; desgaste de batería/red.
+suggested_fix: |
+  En checkAttendanceActionsCache, remover acción cuando el mensaje indica ya aplicada,
+  o añadir flag already_synced desde el servidor.

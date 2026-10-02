@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "fd771ddd-f646-4776-a183-2ad63d9bb9a6"
+      }
+    },
+    "android": {
+      "package": "com.abrjpo98.gonzalezmobilemonorepo"
+    }
+  }
+}

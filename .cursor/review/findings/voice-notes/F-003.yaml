@@ -1,0 +1,15 @@
+id: F-003
+module_id: voice-notes
+severity: informational
+status: fixed
+file: apps/mobile/hooks/updateNomenclator.ts
+lines: "414-417"
+category: offline
+title: getVoiceNotes borra cola pendiente
+description: |
+  removeItem voice_notes_actions en helper legacy.
+reproduction: |
+  1. Invocar helper con cola pendiente.
+impact: Wipe silencioso.
+suggested_fix: |
+  No borrar cola en helper.

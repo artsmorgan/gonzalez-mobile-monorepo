@@ -1,0 +1,21 @@
+id: F-001
+module_id: physical-minute-agenda
+severity: critical
+status: fixed
+file: apps/mobile/screens/MarcarIngresoSalidaScreen.tsx
+lines: "1280-1288,1467-1502"
+category: offline
+title: Marcar entrada borra cola y cache de agenda minuta
+description: |
+  El módulo encola create/update/delete en evaluations_actions (type agenda_minuta | physical_minute_agenda)
+  y persiste borradores en evaluations_cache. hydrateAfterEntrada → cleanAsyncStorage() no preserva
+  ninguna de estas keys; las elimina junto con el resto de AsyncStorage al marcar entrada online.
+reproduction: |
+  1. Crear o editar agenda minuta offline (evaluations_actions + evaluations_cache).
+  2. Marcar entrada online antes de sync.
+  3. cleanAsyncStorage borra evaluations_actions y evaluations_cache.
+  4. Cambios offline nunca llegan al servidor.
+impact: Pérdida irreversible de minutas/agendas capturadas offline.
+suggested_fix: |
+  Preservar evaluations_actions y evaluations_cache (o subset por type) en excepciones de cleanAsyncStorage,
+  o completar checkEvaluationsActionsCache antes del sweep de entrada.

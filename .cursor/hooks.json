@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "command": "node .cursor/hooks/enforce-path-allowlist.mjs",
+        "matcher": "Write|StrReplace|ApplyPatch|Delete",
+        "failClosed": false
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "node .cursor/hooks/block-destructive-git.mjs",
+        "failClosed": false
+      },
+      {
+        "command": "node .cursor/hooks/block-commit-without-approval.mjs",
+        "matcher": "git\\s+commit",
+        "failClosed": true
+      }
+    ]
+  }
+}
