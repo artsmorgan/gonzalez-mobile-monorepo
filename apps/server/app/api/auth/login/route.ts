@@ -318,7 +318,7 @@ export async function POST(request: NextRequest) {
                     telefono: empleado.telefono,
                     tipoCedula: empleado.tipoCedula,
                     fechaContratacion: empleado.fecha_contratacion,
-                    firmaManual: dynamicLoginRes.data.firmaManual ?? empleado.firma_manual,
+                    firmaManual: dynamicLoginRes.data.firmaManual ?? null,
                     isSuperAdmin: dynamicLoginRes.data.isSuperAdmin,
                     roles,
                     supervisor_id: empleado.supervisor_id,
