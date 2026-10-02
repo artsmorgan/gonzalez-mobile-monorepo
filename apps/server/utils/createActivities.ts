@@ -13,20 +13,18 @@ export async function getActivities(req: NextRequest, id: number) {
         const fechaMarca = marcaDia.fecha instanceof Date ? marcaDia.fecha : new Date(marcaDia.fecha);
         const now = toZonedTime(new Date(), "America/Costa_Rica");
 
-        if (!marcaDia.hora_inicio) {
-            return { status: false, message: "Hora de inicio no establecida" };
+        if (!marcaDia.hora_entrada_digitada) {
+            return { status: false, message: "Hora de entrada digitada no establecida" };
         }
 
-        const horaInicioMarca = marcaDia.hora_inicio instanceof Date
-            ? marcaDia.hora_inicio
-            : new Date(marcaDia.hora_inicio);
-        const shiftStart = new Date(fechaMarca);
-        shiftStart.setHours(
-            horaInicioMarca.getHours(),
-            horaInicioMarca.getMinutes(),
-            horaInicioMarca.getSeconds(),
-            horaInicioMarca.getMilliseconds()
-        );
+        // `hora_entrada_digitada` ya trae fecha + hora reales del marcado de ingreso, a diferencia de
+        // `hora_inicio` (solo la hora programada, combinada con la fecha de la marca): si el ingreso se
+        // marca antes de la hora programada, usar `hora_inicio` producía una ventana `[shiftStart, now]`
+        // inválida (shiftStart > now) que nunca encontraba el registro recién creado y generaba uno
+        // duplicado en la siguiente consulta.
+        const shiftStart = marcaDia.hora_entrada_digitada instanceof Date
+            ? marcaDia.hora_entrada_digitada
+            : new Date(marcaDia.hora_entrada_digitada);
 
         const actividadesPuesto = await callDynamicPrisma({
             req,

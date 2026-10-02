@@ -23,6 +23,7 @@
     "express": "^5.1.0",
     "firebase-admin": "^13.10.0",
     "jsonwebtoken": "^9.0.2",
+    "mysql": "^2.18.1",
     "next": "^15.5.9",
     "nodemailer": "^7.0.6",
     "tsx": "^4.22.3",
