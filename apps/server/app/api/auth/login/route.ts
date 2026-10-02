@@ -249,7 +249,7 @@ export async function POST(request: NextRequest) {
                     cedula_empleado: empleado.cedula || "",
                     fecha_hora: now.toISOString(),
                 },
-                firmaManualFallback: empleado.firma_manual,
+                firmaManualFallback: null,
             },
             {
                 headers: {
