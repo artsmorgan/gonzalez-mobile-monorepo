@@ -762,6 +762,7 @@ export async function buildInduccionRecorridoExcelConsolidado(
         cell.border = borderThin as ExcelJS.Borders;
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     }
+    h.height = 32;
     wsMain.columns = [
         { width: 3 },
         ...headers.map((lab) => {
@@ -773,12 +774,14 @@ export async function buildInduccionRecorridoExcelConsolidado(
         }),
     ];
 
+    /** Altura fija y sin ajuste de texto: el contenido de las celdas no debe aumentar el tamaño de la fila. */
     const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((cell, col) => {
             if (col === 1) return;
             cell.border = borderThin as ExcelJS.Borders;
-            if (!linkCols.has(col)) cell.alignment = { vertical: "middle", wrapText: true };
+            if (!linkCols.has(col)) cell.alignment = { vertical: "middle", horizontal: "left", wrapText: false };
         });
+        row.height = 22;
     };
 
     for (const r of rows) {

@@ -759,12 +759,10 @@ export async function buildChecklistSupervisionExcelConsolidado(
     wsDet.columns = [36, 44, 14, 14, 16, 28].map((w) => ({ width: w }));
 
     /**
-     * Cuadrícula jerárquica: Checklist (nivel 0) → Sección (nivel 1, de `evaluacion`) → Subsección (nivel 2,
-     * con las preguntas/respuestas/imágenes de sus `inputs` agrupadas y unidas con ";" en la misma fila, sin
-     * fila propia por pregunta); Artículo es hermano de Sección (nivel 1, de `articulos_puesto`).
+     * Cuadrícula plana: una fila por subsección (de `evaluacion`) que repite los datos del checklist y la
+     * sección; los artículos del puesto se unen con punto y coma (;) en una sola celda por columna y se repiten en
+     * todas las filas del registro.
      */
-    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
     const headers = [
         "ID Checklist",
         "Empresa",
@@ -840,23 +838,18 @@ export async function buildChecklistSupervisionExcelConsolidado(
     ];
     wsMain.columns = [{ width: 3 }, ...colWidths.map((w) => ({ width: w }))];
 
-    const blank = (n: number) => Array.from({ length: n }, () => "");
-
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((cell, colNumber) => {
             if (colNumber === 1) return;
             cell.border = border;
-            cell.alignment = { vertical: "middle", wrapText: true };
+            cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
         });
-        row.getCell(2).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
-        row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(2).font = { bold: true };
     };
 
     const imagesJoinedFromInput = (inp: any): string => {
         const items = collectEvalPhotoItems(inp);
         const names = items.map((p) => String(p?.file_name ?? "").trim()).filter((s) => s && s.length > 0);
-        return names.join(", ");
+        return names.join(";");
     };
 
     let totalDataRows = 0;
@@ -887,82 +880,81 @@ export async function buildChecklistSupervisionExcelConsolidado(
         const evaluacion = parseEvalJson(r.evaluacion);
         const articulos = parseArticulosJson(r.articulos_puesto);
 
-        const rootRow = addMainRow(wsMain, [
-            ...general,
+        const joinArticulos = (key: string): string => {
+            const parts = articulos.map((a: any) => excelCellString(a?.[key] ?? ""));
+            return parts.every((x) => x.trim() === "") ? "" : parts.join(";");
+        };
+        const articulosCols = [
+            joinArticulos("nombre"),
+            joinArticulos("tipo"),
+            joinArticulos("cantidad_requerida"),
+            joinArticulos("cantidad_real"),
+            joinArticulos("estado"),
+            joinArticulos("observaciones"),
+        ];
+        const verCols = [
             evaluacion.length ? "Ver evaluación" : "",
             articulos.length ? "Ver artículos" : "",
             r.firma_supervisor ? "Ver firma" : "",
-            ...blank(12),
-        ]);
-        if (evaluacion.length) {
-            const c = rootRow.getCell(COL_VER_EVAL);
-            c.value = { text: "Ver evaluación", hyperlink: `#'Detalles'!A${anchor}` };
-            c.font = { color: { argb: "FF0563C1" }, underline: true };
-        }
-        if (articulos.length) {
-            const c = rootRow.getCell(COL_VER_ART);
-            c.value = { text: "Ver artículos", hyperlink: `#'Detalles'!A${anchor}` };
-            c.font = { color: { argb: "FF0563C1" }, underline: true };
-        }
-        if (r.firma_supervisor) {
-            const c = rootRow.getCell(COL_VER_FIR);
-            c.value = { text: "Ver firma", hyperlink: `#'Detalles'!A${anchor}` };
-            c.font = { color: { argb: "FF0563C1" }, underline: true };
-        }
-        styleDataRow(rootRow, 0);
-        totalDataRows += 1;
+        ];
 
+        /** Una fila por subsección (sección repetida); sin evaluación, una única fila con los datos del registro. */
+        const detalleRows: Array<{ seccion: string; subseccion: string; detalle: string; preguntas: string; respuestas: string; imagenes: string }> = [];
         evaluacion.forEach((sec: any, secIdx: number) => {
             const secTitle = excelCellString(sec?.title ?? "").trim() || `Sección ${secIdx + 1}`;
-            const secRow = addMainRow(wsMain, [
-                ...general,
-                ...blank(3),
-                secTitle,
-                ...blank(11),
-            ]);
-            styleDataRow(secRow, 1);
-            totalDataRows += 1;
-
             const subs = Array.isArray(sec?.subsections) ? sec.subsections : [];
+            if (subs.length === 0) {
+                detalleRows.push({ seccion: secTitle, subseccion: "", detalle: "", preguntas: "", respuestas: "", imagenes: "" });
+                return;
+            }
             subs.forEach((sub: any, subIdx: number) => {
                 const subTitle = excelCellString(sub?.title ?? "").trim() || `Subsección ${subIdx + 1}`;
-                const subDetalle = excelCellString(sub?.detalle ?? "").trim();
-
-                /** Preguntas de la subsección: todas sus preguntas/respuestas/imágenes se unen en la misma fila, separadas por ";". */
                 const inputs = Array.isArray(sub?.inputs) ? sub.inputs : [];
-                const preguntasJoined = inputs.map((inp: any) => resolveChecklistEvalInputLabel(inp, subTitle)).join(";");
-                const respuestasJoined = inputs.map((inp: any) => formatEvalInputDisplayValue(inp)).join(";");
-                const imagenesJoined = inputs.map((inp: any) => imagesJoinedFromInput(inp)).join(";");
-
-                const subRow = addMainRow(wsMain, [
-                    ...general,
-                    ...blank(4),
-                    subTitle,
-                    subDetalle,
-                    preguntasJoined,
-                    respuestasJoined,
-                    imagenesJoined,
-                    ...blank(6),
-                ]);
-                styleDataRow(subRow, 2);
-                totalDataRows += 1;
+                detalleRows.push({
+                    seccion: secTitle,
+                    subseccion: subTitle,
+                    detalle: excelCellString(sub?.detalle ?? "").trim(),
+                    /** Preguntas de la subsección: todas sus preguntas/respuestas/imágenes se unen en la misma fila, separadas por ";". */
+                    preguntas: inputs.map((inp: any) => resolveChecklistEvalInputLabel(inp, subTitle)).join(";"),
+                    respuestas: inputs.map((inp: any) => formatEvalInputDisplayValue(inp)).join(";"),
+                    imagenes: inputs.map((inp: any) => imagesJoinedFromInput(inp)).join(";"),
+                });
             });
         });
+        if (detalleRows.length === 0) {
+            detalleRows.push({ seccion: "", subseccion: "", detalle: "", preguntas: "", respuestas: "", imagenes: "" });
+        }
 
-        articulos.forEach((a: any) => {
+        for (const d of detalleRows) {
             const row = addMainRow(wsMain, [
                 ...general,
-                ...blank(9),
-                excelCellString(a?.nombre ?? ""),
-                excelCellString(a?.tipo ?? ""),
-                excelCellString(a?.cantidad_requerida ?? ""),
-                excelCellString(a?.cantidad_real ?? ""),
-                excelCellString(a?.estado ?? ""),
-                excelCellString(a?.observaciones ?? ""),
+                ...verCols,
+                d.seccion,
+                d.subseccion,
+                d.detalle,
+                d.preguntas,
+                d.respuestas,
+                d.imagenes,
+                ...articulosCols,
             ]);
-            styleDataRow(row, 1);
+            if (evaluacion.length) {
+                const c = row.getCell(COL_VER_EVAL);
+                c.value = { text: "Ver evaluación", hyperlink: `#'Detalles'!A${anchor}` };
+                c.font = { color: { argb: "FF0563C1" }, underline: true };
+            }
+            if (articulos.length) {
+                const c = row.getCell(COL_VER_ART);
+                c.value = { text: "Ver artículos", hyperlink: `#'Detalles'!A${anchor}` };
+                c.font = { color: { argb: "FF0563C1" }, underline: true };
+            }
+            if (r.firma_supervisor) {
+                const c = row.getCell(COL_VER_FIR);
+                c.value = { text: "Ver firma", hyperlink: `#'Detalles'!A${anchor}` };
+                c.font = { color: { argb: "FF0563C1" }, underline: true };
+            }
+            styleDataRow(row);
             totalDataRows += 1;
-        });
+        }
     }
 
     wsMain.autoFilter = {

@@ -439,10 +439,8 @@ export async function buildEvaluacionPersonalExcelConsolidado(
         anchorFirmaById.set(Number(r.id), firmaRow);
     }
 
-    /** Cuadrícula jerárquica: Evaluación (nivel 0) → Sección (nivel 1, de `evaluacion`). Las preguntas de cada
-     *  sección (`sec.questions`) se agrupan y separan por ";" en columnas de esa misma fila, sin fila propia. */
-    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
+    /** Cuadrícula plana: una fila por sección (de `evaluacion`) que repite los datos de la evaluación. Las
+     *  preguntas de cada sección (`sec.questions`) se agrupan y separan por ";" en columnas de esa misma fila. */
     const headers = [
         "ID Evaluación",
         "Creado en (fecha)",
@@ -466,7 +464,6 @@ export async function buildEvaluacionPersonalExcelConsolidado(
     ];
     const COL_VER_EVAL = headers.indexOf("Ver evaluación") + 2;
     const COL_VER_FIRMA = headers.indexOf("Ver firma") + 2;
-    const COL_SECCION = headers.indexOf("Sección") + 2;
 
     applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
 
@@ -479,6 +476,7 @@ export async function buildEvaluacionPersonalExcelConsolidado(
         cell.border = border;
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     }
+    h.height = 32;
     wsMain.columns = [
         { width: 3 },
         { width: 12 },
@@ -502,17 +500,15 @@ export async function buildEvaluacionPersonalExcelConsolidado(
         { width: 30 },
     ];
 
-    const blank = (n: number) => Array.from({ length: n }, () => "");
-
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    /** Altura fija y sin ajuste de texto: el contenido de las celdas no debe aumentar el tamaño de la fila. */
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((cell, colNumber) => {
             if (colNumber === 1) return;
             cell.border = border;
-            cell.alignment = { vertical: "middle", wrapText: true };
+            cell.alignment = { vertical: "middle", horizontal: "left", wrapText: false };
         });
-        row.getCell(COL_SECCION).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
-        row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(2).font = { bold: true };
+        row.getCell(2).font = { bold: true };
+        row.height = 22;
     };
 
     const imagesJoined = (q: any): string => {
@@ -525,7 +521,7 @@ export async function buildEvaluacionPersonalExcelConsolidado(
         } else if (q?.image && typeof q.image === "string" && !q.image.startsWith("data:image/")) {
             names.push(q.image.trim());
         }
-        return names.join(", ");
+        return names.join(";");
     };
 
     let totalDataRows = 0;
@@ -547,42 +543,38 @@ export async function buildEvaluacionPersonalExcelConsolidado(
             r.evaluador_txt,
         ];
 
-        const rootRow = addMainRow(wsMain, [
-            ...general,
-            "Ver evaluación",
-            "Ver firma",
-            String(r.comentarios ?? "").slice(0, 5000),
-            ...blank(4),
-        ]);
-        rootRow.getCell(COL_VER_EVAL).value = { text: "Ver evaluación", hyperlink: `#'Detalles'!A${evRow}` };
-        rootRow.getCell(COL_VER_EVAL).font = { color: { argb: "FF0563C1" }, underline: true };
-        rootRow.getCell(COL_VER_FIRMA).value = { text: "Ver firma", hyperlink: `#'Detalles'!A${fiRow}` };
-        rootRow.getCell(COL_VER_FIRMA).font = { color: { argb: "FF0563C1" }, underline: true };
-        styleDataRow(rootRow, 0);
-        totalDataRows += 1;
-
+        /** Una fila por sección; sin secciones, una única fila con los datos de la evaluación. */
         const sections = parseStaffEvaluacionSections(r.evaluacion);
-        sections.forEach((sec, secIdx) => {
-            const secTitle = String(sec.title ?? "").trim() || `Sección ${secIdx + 1}`;
+        const seccionRows = sections.map((sec, secIdx) => {
             const questions = Array.isArray(sec.questions) ? sec.questions : [];
-            /** Preguntas, respuestas e imágenes de la sección: agrupadas y separadas por ";" en la misma fila. */
-            const preguntasTxt = questions.map((q) => String(q?.title ?? "").trim()).join(";");
-            const respuestasTxt = questions.map((q) => String(q?.answear ?? "").trim()).join(";");
-            const imagenesTxt = questions.map((q) => imagesJoined(q)).join(";");
-
-            const secRow = addMainRow(wsMain, [
-                ...general,
-                "",
-                "",
-                "",
-                secTitle,
-                preguntasTxt,
-                respuestasTxt,
-                imagenesTxt,
-            ]);
-            styleDataRow(secRow, 1);
-            totalDataRows += 1;
+            return {
+                seccion: String(sec.title ?? "").trim() || `Sección ${secIdx + 1}`,
+                /** Preguntas, respuestas e imágenes de la sección: agrupadas y separadas por ";" en la misma fila. */
+                preguntas: questions.map((q) => String(q?.title ?? "").trim()).join(";"),
+                respuestas: questions.map((q) => String(q?.answear ?? "").trim()).join(";"),
+                imagenes: questions.map((q) => imagesJoined(q)).join(";"),
+            };
         });
+        if (seccionRows.length === 0) seccionRows.push({ seccion: "", preguntas: "", respuestas: "", imagenes: "" });
+
+        for (const sec of seccionRows) {
+            const row = addMainRow(wsMain, [
+                ...general,
+                "Ver evaluación",
+                "Ver firma",
+                String(r.comentarios ?? "").slice(0, 5000),
+                sec.seccion,
+                sec.preguntas,
+                sec.respuestas,
+                sec.imagenes,
+            ]);
+            row.getCell(COL_VER_EVAL).value = { text: "Ver evaluación", hyperlink: `#'Detalles'!A${evRow}` };
+            row.getCell(COL_VER_EVAL).font = { color: { argb: "FF0563C1" }, underline: true };
+            row.getCell(COL_VER_FIRMA).value = { text: "Ver firma", hyperlink: `#'Detalles'!A${fiRow}` };
+            row.getCell(COL_VER_FIRMA).font = { color: { argb: "FF0563C1" }, underline: true };
+            styleDataRow(row);
+            totalDataRows += 1;
+        }
     }
     wsMain.autoFilter = {
         from: { row: 12, column: 2 },
