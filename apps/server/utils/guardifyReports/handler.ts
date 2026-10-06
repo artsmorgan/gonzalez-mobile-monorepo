@@ -76,6 +76,6 @@ export async function handleGuardifyReport(req: Request, modulo: string, kind: "
             return json({ error: "scope_unsupported", message: e.message }, 403);
         }
         console.error(JSON.stringify({ level: "error", msg: "guardify_report_failed", modulo, kind, error: String(e) }));
-        return json({ error: "internal", message: "No se pudo generar el reporte." }, 500);
+        return json({ error: "internal", message: "No se pudo generar el reporte.", detail: String(e).slice(0, 400) }, 500);
     }
 }
