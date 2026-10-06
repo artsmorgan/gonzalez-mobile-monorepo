@@ -1,0 +1,17 @@
+id: F-002
+module_id: digital-signature
+severity: medium
+status: fixed
+file: apps/mobile/screens/DigitalSignatureScreen.tsx
+lines: "258-264"
+category: api
+title: Firma manual nunca se obtiene del servidor
+description: |
+  fetchManualSignature solo lee employee.firmaManual del login; no llama GET manual-signature/[id].
+reproduction: |
+  1. Firma registrada en otro dispositivo.
+  2. Login en Lite.
+  3. Pantalla muestra sin firma.
+impact: UI desactualizada vs backend.
+suggested_fix: |
+  Al abrir modal online, GET /api/digital-signature/manual-signature/{id}.

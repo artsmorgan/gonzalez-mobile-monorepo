@@ -1,105 +1,119 @@
-/* eslint-disable @typescript-eslint/no-require-imports */
+/* Refresh principal: tablas preexistentes (Prisma) + orquestación de rotación de sesión. */
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
-import { v4 as uuidv4 } from 'uuid';
-import { toZonedTime } from 'date-fns-tz';
+import axios from "axios";
+import { v4 as uuidv4 } from "uuid";
+import { toZonedTime } from "date-fns-tz";
+import { prisma } from "../../../../utils/prismaClient";
+import { resolveServerBaseUrl } from "../../../../utils/resolveServerBaseUrl";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const jwt = require("jsonwebtoken");
-const prisma = new PrismaClient();
 
 export async function POST(request: NextRequest) {
     try {
-        const { refreshToken } = await request.json();
+        const { refreshToken, deviceName } = await request.json();
 
         if (!refreshToken) {
-            return NextResponse.json(
-                { status: false, message: "Refresh token requerido" },
-                { status: 400 }
-            );
+            return NextResponse.json({ status: false, message: "Refresh token requerido" }, { status: 400 });
         }
 
-        // Verificar si existe en BD
-        const storedToken = await prisma.refresh_token.findFirst({
-            where: { token: refreshToken, revoked: false },
-        });
-
-        if (!storedToken) {
-            return NextResponse.json(
-                { status: false, message: "Refresh token inválido" },
-                { status: 401 }
-            );
+        if (!process.env.JWT_SECRET || !process.env.JWT_REFRESH_SECRET) {
+            throw new Error("JWT secrets not configured");
         }
 
-        // Verificar expiración
-        if (storedToken.expiresAt < toZonedTime(new Date(), "America/Costa_Rica")) {
-            return NextResponse.json(
-                { status: false, message: "Refresh token expirado" },
-                { status: 403 }
-            );
-        }
-
-        // Verificar JWT Refresh
-        let payload = null;
+        let payload: { id?: number; sessionId?: string };
         try {
             payload = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET!);
-        } catch (err) {
-            return NextResponse.json(
-                { status: false, message: "Refresh token inválido" },
-                { status: 401 }
-            );
+        } catch {
+            return NextResponse.json({ status: false, message: "Refresh token inválido" }, { status: 401 });
         }
 
-        // 🟢 Verificar que el sessionId del token coincida con el de BD
-        if (payload.sessionId !== storedToken.sessionId) {
-            return NextResponse.json(
-                { status: false, message: "Sesión no válida" },
-                { status: 401 }
-            );
+        if (!payload?.id || !payload?.sessionId) {
+            return NextResponse.json({ status: false, message: "Refresh token inválido" }, { status: 401 });
         }
 
-        // Generar nuevo Access Token
-        const accessToken = jwt.sign(
-            { id: payload.id, cedula: payload.cedula, sessionId: payload.sessionId }, // payload mínimo
-            process.env.JWT_SECRET,
-            { expiresIn: "15m" }
-        );
-
-        // (Opcional) generar un nuevo refresh token y revocar el anterior
-        const newRefreshToken = jwt.sign(
-            { id: payload.id, sessionId: payload.sessionId },
-            process.env.JWT_REFRESH_SECRET,
-            { expiresIn: "7d" }
-        );
-
-        await prisma.refresh_token.update({
-            where: { id: storedToken.id },
-            data: { revoked: true },
+        const empleado = await prisma.c_empleado.findUnique({
+            where: { id: payload.id },
         });
 
-        await prisma.refresh_token.create({
-            data: {
-                token: newRefreshToken,
-                empleadoId: payload.id,
-                sessionId: payload.sessionId,
-                expiresAt: toZonedTime(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), "America/Costa_Rica"),
+        if (!empleado) {
+            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
+        }
+
+        const nowCR = toZonedTime(new Date(), "America/Costa_Rica");
+        const newSessionId = uuidv4();
+
+        const newAccessToken = jwt.sign(
+            {
+                id: payload.id,
+                cedula: empleado.cedula,
+                sessionId: newSessionId,
             },
-        });
+            process.env.JWT_SECRET!,
+            { expiresIn: "1d" },
+        );
+
+        const newRefreshToken = jwt.sign(
+            {
+                id: payload.id,
+                sessionId: newSessionId,
+            },
+            process.env.JWT_REFRESH_SECRET!,
+            { expiresIn: "7d" },
+        );
+
+        const baseUrl = resolveServerBaseUrl(request);
+        const dynamicRes = await axios.post(
+            `${baseUrl}/api/dynamic-prisma/auth/refresh-token`,
+            {
+                empleadoId: payload.id,
+                oldRefreshToken: refreshToken,
+                newRefreshToken,
+                oldSessionId: payload.sessionId,
+                newSessionId,
+                deviceName,
+                loginMarca: {
+                    nombre_empleado: `${empleado.nombre || ""} ${empleado.primer_apellido || ""} ${empleado.segundo_apellido || ""}`.trim(),
+                    cedula_empleado: empleado.cedula || "",
+                    fecha_hora: nowCR.toISOString(),
+                },
+            },
+            {
+                headers: {
+                    Authorization: `Bearer ${newAccessToken}`,
+                    "Content-Type": "application/json",
+                },
+                validateStatus: () => true,
+            },
+        );
+
+        if (dynamicRes.status !== 200 || !dynamicRes.data?.status) {
+            console.error(
+                "Error en dynamic-prisma/auth/refresh-token:",
+                dynamicRes.status,
+                dynamicRes.data,
+            );
+            return NextResponse.json(
+                {
+                    status: false,
+                    message: dynamicRes.data?.message || "Error al renovar la sesión",
+                },
+                { status: dynamicRes.status >= 400 ? dynamicRes.status : 500 },
+            );
+        }
 
         return NextResponse.json(
             {
                 status: true,
                 message: "Token renovado con éxito",
-                accessToken: accessToken,
-                refreshToken: newRefreshToken,
+                newAccessToken,
+                newRefreshToken,
+                newSessionId,
+                createdAt: nowCR.getTime(),
             },
-            { status: 200 }
+            { status: 200 },
         );
     } catch (error) {
-        console.error("Error en refresh:", error);
-        return NextResponse.json(
-            { status: false, message: "Error interno del servidor" },
-            { status: 500 }
-        );
-    } finally {
-        await prisma.$disconnect();
+        console.error("Error en refresh-token (auth/refresh-token):", error);
+        return NextResponse.json({ status: false, message: "Error interno del servidor" }, { status: 500 });
     }
 }

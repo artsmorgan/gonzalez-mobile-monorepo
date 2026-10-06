@@ -1,0 +1,21 @@
+id: F-002
+module_id: notes
+severity: high
+status: fixed
+file: apps/mobile/App.tsx
+lines: "3576-3588"
+category: offline
+title: Sync delete sin puestoId — bucle infinito y cola bloqueada
+description: |
+  checkNotesActionsCache descarta acciones delete sin puestoId escribiendo AsyncStorage filtrado, pero no
+  actualiza la variable in-memory `actions` ni reinicia el índice. El while continúa con el mismo actions[i]
+  (delete inválido) → continue sin i+=1 → bucle infinito. NotesScreen puede encolar delete con puestoId 0
+  cuando note.puesto_id y currentMarca?.puesto?.id faltan (líneas 1833-1851).
+reproduction: |
+  1. Tener nota de servidor en cache sin puesto_id y sin current_marca con puesto.
+  2. Eliminar offline → notes_actions { type:delete, puestoId:0 }.
+  3. Al sync, checkNotesActionsCache entra en rama !puestoId, escribe cola filtrada pero actions en RAM no cambia.
+  4. Loop repite la misma acción indefinidamente; sync de notas bloqueado.
+impact: Sync colgado; resto de notes_actions no se procesa; UI de pendientes puede quedar activa.
+suggested_fix: |
+  Tras descartar, asignar actions = filtered y hacer i=0/continue, o await saveActions(filtered) como en otros branches.

@@ -1,0 +1,16 @@
+id: F-003
+module_id: checklist-supervision
+severity: medium
+status: fixed
+file: apps/mobile/App.tsx
+lines: "3209-3337"
+category: async
+title: Cola checklist se detiene en primer fallo
+description: |
+  while(true) return en error o !success; acciones posteriores no procesadas.
+reproduction: |
+  1. Encolar create+update.
+  2. Fallar primera acción.
+impact: Cola parcialmente bloqueada.
+suggested_fix: |
+  Continuar con siguiente acción o re-leer cola.

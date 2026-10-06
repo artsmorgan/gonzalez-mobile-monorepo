@@ -1,0 +1,17 @@
+id: F-001
+module_id: lunch-time
+severity: high
+status: fixed
+file: apps/mobile/App.tsx
+lines: "571-572,810-811"
+category: offline
+title: Cola offline usa clave distinta a comprobación de sync
+description: |
+  ACTION_STORAGE_KEYS incluye lunch_time_actions pero la cola real es lunchtime_actions. hasPendingActionsInStorage no detecta almuerzos pendientes.
+reproduction: |
+  1. Almuerzo offline en lunchtime_actions.
+  2. Sin otras colas.
+  3. Sync retorna antes de checkLunchTimeActionsCache.
+impact: Almuerzos offline no sincronizan hasta otra cola dispare sync.
+suggested_fix: |
+  Reemplazar lunch_time_actions por lunchtime_actions en ACTION_STORAGE_KEYS.

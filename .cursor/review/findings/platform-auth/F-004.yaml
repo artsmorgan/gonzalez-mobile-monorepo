@@ -1,0 +1,14 @@
+id: F-004
+module_id: platform-auth
+severity: low
+status: fixed
+file: apps/mobile/contexts/AuthContext.tsx
+lines: "3"
+category: typescript
+title: Import no usado de expo-router
+description: |
+  `import { router } from 'expo-router'` no se utiliza en el archivo.
+  La app navega vía React Navigation en App.tsx, no expo-router como entry.
+reproduction: Ejecutar lint/tsc; import muerto.
+impact: Confusión arquitectónica menor; posible warning ESLint.
+suggested_fix: Eliminar import no usado.

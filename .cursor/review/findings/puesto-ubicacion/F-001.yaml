@@ -1,0 +1,16 @@
+id: F-001
+module_id: puesto-ubicacion
+severity: low
+status: fixed
+file: apps/mobile/screens/PuestoUbicacionScreen.tsx
+lines: "547-553,933-935"
+category: validation
+title: Intervalo GPS inconsistente con UI
+description: |
+  Texto dice 15s pero setInterval usa 30000ms.
+reproduction: |
+  1. Seleccionar puesto.
+  2. Comparar mensaje vs refresco real.
+impact: Expectativa incorrecta al confirmar ubicación.
+suggested_fix: |
+  Alinear texto e intervalo o mostrar hora última lectura.

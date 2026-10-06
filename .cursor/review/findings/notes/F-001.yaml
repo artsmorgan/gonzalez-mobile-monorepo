@@ -1,0 +1,18 @@
+id: F-001
+module_id: notes
+severity: critical
+status: fixed
+file: apps/mobile/screens/MarcarIngresoSalidaScreen.tsx
+lines: "1280-1288,1467-1502"
+category: offline
+title: Marcar entrada borra notes_actions y notes_cache
+description: |
+  El módulo Notas usa storageKeys notes_actions y notes_cache. cleanAsyncStorage en hydrateAfterEntrada
+  no preserva estas keys; las elimina al marcar entrada online con acciones create/update/delete/delete_file pendientes.
+reproduction: |
+  1. Crear nota offline (notes_actions + notes_cache).
+  2. Marcar entrada online antes de checkNotesActionsCache.
+  3. Cola y cache eliminados.
+impact: Pérdida irreversible de notas offline y adjuntos en cola.
+suggested_fix: |
+  Preservar notes_actions y notes_cache en excepciones de cleanAsyncStorage.

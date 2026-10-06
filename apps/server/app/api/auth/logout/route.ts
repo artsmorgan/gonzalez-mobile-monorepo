@@ -1,48 +1,38 @@
-import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { NextRequest, NextResponse } from 'next/server';
+import axios from 'axios';
 
-const prisma = new PrismaClient();
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
 
-export async function POST(req: NextRequest) {
-    try {
-        const { refreshToken } = await req.json();
+    const serverUrl = process.env.SERVER_URL?.trim();
+    const baseUrl =
+      serverUrl && serverUrl.length > 0
+        ? serverUrl.replace(/\/+$/, '')
+        : request.nextUrl.origin;
 
-        if (!refreshToken) {
-            return NextResponse.json(
-                { status: false, message: "Refresh token requerido" },
-                { status: 400 }
-            );
-        }
+    const authHeader = request.headers.get('authorization') || '';
 
-        // Buscar el token en la BD
-        const tokenRecord = await prisma.refresh_token.findUnique({
-            where: { token: refreshToken },
-        });
+    const response = await axios.post(
+      `${baseUrl}/api/dynamic-prisma/auth/logout`,
+      body,
+      {
+        headers: {
+          Authorization: authHeader,
+          'Content-Type': 'application/json',
+        },
+        validateStatus: () => true,
+      }
+    );
 
-        if (!tokenRecord) {
-            return NextResponse.json(
-                { status: false, message: "Refresh token no encontrado" },
-                { status: 404 }
-            );
-        }
-
-        // Revocar el token
-        await prisma.refresh_token.update({
-            where: { id: tokenRecord.id },
-            data: { revoked: true },
-        });
-
-        return NextResponse.json(
-            { status: true, message: "Logout exitoso. Refresh token revocado." },
-            { status: 200 }
-        );
-    } catch (error) {
-        console.error("Error en logout:", error);
-        return NextResponse.json(
-            { status: false, message: "Error interno del servidor" },
-            { status: 500 }
-        );
-    } finally {
-        await prisma.$disconnect();
-    }
+    const data = response.data;
+    return NextResponse.json(data, { status: response.status });
+  } catch (error: any) {
+    console.error('Error proxying auth/logout to dynamic-prisma:', error?.message || error);
+    return NextResponse.json(
+      { status: false, message: 'Error interno del servidor' },
+      { status: 500 }
+    );
+  }
 }
+

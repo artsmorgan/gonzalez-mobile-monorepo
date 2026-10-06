@@ -1,0 +1,73 @@
+import { NextRequest, NextResponse } from "next/server";
+import { verifyAccessTokenByApi } from "../../../../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../../../../../utils/reportError";
+import fs from "fs";
+import path from "path";
+
+export const runtime = "nodejs";
+
+export async function DELETE(
+  req: NextRequest,
+  context: { params: Promise<{ id: string; contributionId: string; fileId: string }> }
+) {
+  try {
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+    if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
+
+    const { id, contributionId, fileId } = await context.params;
+    const incidentId = parseInt(id, 10);
+    const aporteId = parseInt(contributionId, 10);
+    const archivoId = parseInt(fileId, 10);
+    if (!incidentId || !aporteId || !archivoId) {
+      await reportError(req, "api/incidents/[id]/contributions/[contributionId]/files/[fileId]", "DELETE", 400, "IDs no especificados");
+      return NextResponse.json({ status: false, message: "IDs no especificados" }, { status: 400 });
+    }
+
+    const file = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_archivos_aporte_incidente",
+        operation: "findFirst",
+        where: { id: archivoId, contribucion_id: aporteId }
+      }
+    });
+    if (!file) {
+      await reportError(req, "api/incidents/[id]/contributions/[contributionId]/files/[fileId]", "DELETE", 404, "Archivo no encontrado");
+      return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
+    }
+
+    await callDynamicPrisma({
+      req,
+      data: { action: "DELETE", table: "c_archivos_aporte_incidente", where: { id: archivoId } }
+    });
+
+    const filePath = path.join(
+      process.cwd(),
+      "public",
+      "uploads",
+      "incidents",
+      `${incidentId}`,
+      "aportes",
+      `${aporteId}`,
+      file.name
+    );
+    if (fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch {
+        // ignore
+      }
+    }
+
+    return NextResponse.json({ status: true, message: "Archivo eliminado correctamente" }, { status: 200 });
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    console.error("Error in DELETE /api/incidents/[id]/contributions/[contributionId]/files/[fileId]:", errorMessage);
+    await reportError(req, "api/incidents/[id]/contributions/[contributionId]/files/[fileId]", "DELETE", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
+  }
+}
+
+

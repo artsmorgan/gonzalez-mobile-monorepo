@@ -1,0 +1,19 @@
+id: F-003
+module_id: activities
+severity: high
+status: fixed
+file: apps/mobile/screens/ActivitiesScreen.tsx
+lines: "2777-2811,2823-2860"
+category: offline
+title: "Offline: imágenes por artículo de inventario no se encolan"
+description: |
+  Online marca inventario y luego llama updateRevisionEquipo por artículo con inventoryImages. Offline solo
+  encola type:update con articles_state; comentario confirma que update-equipo offline fue removido.
+  inventoryImages no se incluyen en la cola.
+reproduction: |
+  1. Actividad is_revision_equipo con fotos por artículo (inventoryImages).
+  2. Sin conexión, marcar actividad.
+  3. Solo se encola activities_actions update; no hay acciones update-equipo.
+  4. Al reconectar, sync envía PUT /api/activities/{id} sin fotos por artículo.
+impact: Revisiones de inventario offline pierden evidencia fotográfica por artículo en servidor.
+suggested_fix: Reintroducir cola update-equipo offline o incluir file_local_file_name por artículo en la acción update y procesarla en sync.
