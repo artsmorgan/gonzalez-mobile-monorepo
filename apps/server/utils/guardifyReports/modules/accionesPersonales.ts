@@ -1,5 +1,4 @@
 import { batchFindManyByIds } from "../../reportDynamicPrisma";
-import { queryAccionesPersonalesRows } from "../../reports-functions/accionesPersonalesReport";
 import type { OutRow } from "../listing";
 import { fmtDt } from "../mappers";
 import { buildNombre } from "../names";
@@ -107,10 +106,17 @@ export function mapAccionPersonalRow(r: any, cedulas: Map<number, string | null>
     };
 }
 
+const COLS = {
+    id: true, empleado_id: true, reemplazo_id: true, tipoAccion_id: true, empresa_id: true, cliente_id: true, contrato_id: true, corpo_id: true, puesto_id: true, plaza_id: true, horario_id: true,
+    consecutivo: true, fecha_inicio: true, fecha_fin: true, fecha_insercion: true, comentarios: true, document: true, reversible: true, estado_aprobacion: true, cantidad_horas: true,
+} as const;
+const NOMBRE = { id: true, nombre: true, primer_apellido: true, segundo_apellido: true, cedula: true } as const;
+
 /**
- * Acciones de personal (`c_accion_personal`, tabla preexistente). La consulta de la app no filtra por fechas (trae las últimas
- * 50 000): el periodo se aplica aquí por `fecha_inicio`. Cada fila trae empresa/cliente/contrato/sucursal/puesto y la división
- * sale del contrato, así que admite alcance.
+ * Acciones de personal (`c_accion_personal`, tabla preexistente). Se consulta la tabla sola (el periodo se aplica por `fecha_inicio`)
+ * y los nombres de empleado, tipo y estructura se cargan en lote: así no depende de las relaciones del cliente Prisma, que la app
+ * regenera a partir de la base en cada arranque. Cada fila trae empresa/cliente/contrato/sucursal/puesto y la división sale del
+ * contrato, así que admite alcance. El detalle por tipo de acción (ausencia, traslado…) no se incluye: queda solo lo de la propia fila.
  */
 export const accionesPersonales: GuardifyReportModule = {
     id: "acciones_personales",
@@ -120,15 +126,46 @@ export const accionesPersonales: GuardifyReportModule = {
     sortKeys: ["fecha_inicio", "fecha_fin", "consecutivo", "tipo_accion", "estado", "empleado", "cedula", "empresa", "cliente", "contrato", "sucursal", "puesto", "registrada"],
     defaultSort: "fecha_inicio",
     async load(db, p) {
-        const all = await queryAccionesPersonalesRows(db, {}, "empleado_id");
-        const scope = p.scope;
-        const kept = all.filter((r: any) => {
-            const day = fmtDt(r.fecha_inicio)?.slice(0, 10);
-            if (!day || day < p.from || day >= p.to) return false;
-            return !scope || matchesScope({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.e_estructura_contrato?.division_id, contrato: r.contrato_id, corpo: r.corpo_id, puesto: r.puesto_id }, scope);
+        const rows: any[] = await db.c_accion_personal!.findMany({
+            where: { fecha_inicio: { gte: new Date(`${p.from}T00:00:00.000Z`), lt: new Date(`${p.to}T00:00:00.000Z`) } },
+            select: COLS,
+            orderBy: { id: "desc" },
+            take: 50_000,
         });
-        const emps = await batchFindManyByIds<{ id: number; cedula: string | null }>(db, "c_empleado", kept.map((r: any) => Number(r.empleado_id)), { id: true, cedula: true });
-        const cedulas = new Map<number, string | null>([...emps].map(([id, e]) => [id, e.cedula ?? null]));
-        return kept.map((r: any) => mapAccionPersonalRow(r, cedulas));
+        const ids = (k: string) => rows.map((r) => Number(r[k]));
+        const load = (table: string, key: string[], select: Record<string, boolean>, extra: number[] = []) => batchFindManyByIds<any>(db, table, [...key.flatMap(ids), ...extra], select);
+        const empleados = await load("c_empleado", ["empleado_id", "reemplazo_id"], NOMBRE);
+        const [tipos, empresas, clientes, contratos, corpos, puestos, plazas, horarios] = await Promise.all([
+            load("c_tipo_accion", ["tipoAccion_id"], { id: true, codigo: true, nombre: true }),
+            load("e_estructura_empresa", ["empresa_id"], { id: true, codigo: true, nombre: true }),
+            load("e_estructura_cliente", ["cliente_id"], { id: true, nombre: true }),
+            load("e_estructura_contrato", ["contrato_id"], { id: true, nro_contrato: true, nombre: true, division_id: true }),
+            load("e_estructura_sucursal", ["corpo_id"], { id: true, nro_sucursal: true, nombre: true }),
+            load("e_estructura_puesto", ["puesto_id"], { id: true, codigo: true, nombre: true }),
+            load("e_estructura_plazas", ["plaza_id"], { id: true, codigo_plaza: true, nombre: true }),
+            load("c_horario", ["horario_id"], { id: true, titulo: true }),
+        ]);
+        const divisiones = await batchFindManyByIds<any>(db, "n_division", [...contratos.values()].map((c) => Number(c.division_id)), { id: true, codigo: true, nombre: true });
+        const scope = p.scope;
+        const cedulas = new Map<number, string | null>([...empleados].map(([id, e]) => [id, e.cedula ?? null]));
+        const out: OutRow[] = [];
+        for (const r of rows) {
+            const contrato = contratos.get(Number(r.contrato_id)) ?? null;
+            if (scope && !matchesScope({ empresa: r.empresa_id, cliente: r.cliente_id, division: contrato?.division_id, contrato: r.contrato_id, corpo: r.corpo_id, puesto: r.puesto_id }, scope)) continue;
+            out.push(mapAccionPersonalRow({
+                ...r,
+                c_empleado_c_accion_personal_empleado_idToc_empleado: empleados.get(Number(r.empleado_id)) ?? null,
+                c_empleado_c_accion_personal_reemplazo_idToc_empleado: empleados.get(Number(r.reemplazo_id)) ?? null,
+                c_tipo_accion: tipos.get(Number(r.tipoAccion_id)) ?? null,
+                e_estructura_empresa: empresas.get(Number(r.empresa_id)) ?? null,
+                e_estructura_cliente: clientes.get(Number(r.cliente_id)) ?? null,
+                e_estructura_contrato: contrato ? { ...contrato, n_division: divisiones.get(Number(contrato.division_id)) ?? null } : null,
+                e_estructura_sucursal: corpos.get(Number(r.corpo_id)) ?? null,
+                e_estructura_puesto: puestos.get(Number(r.puesto_id)) ?? null,
+                e_estructura_plazas: plazas.get(Number(r.plaza_id)) ?? null,
+                c_horario: horarios.get(Number(r.horario_id)) ?? null,
+            }, cedulas));
+        }
+        return out;
     },
 };
