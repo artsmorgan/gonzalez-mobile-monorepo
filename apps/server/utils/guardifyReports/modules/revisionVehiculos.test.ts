@@ -35,7 +35,7 @@ function fakeDb(tables: Record<string, any[]>) {
     }) as any;
 }
 
-const P = { from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: null, dir: "desc" as const, q: null, filters: {}, scope: null };
+const P = { from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: null, dir: "desc" as const, q: null, filters: [], scope: null };
 
 const GENERAL = JSON.stringify([
     { key: "numero_placa", label: "Número placa", kind: "text", value: "XYZ-123" },

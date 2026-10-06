@@ -34,7 +34,7 @@ function fakeDb(tables: Record<string, any[]>) {
     }) as any;
 }
 
-const P = { from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: null, dir: "desc" as const, q: null, filters: {}, scope: null };
+const P = { from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: null, dir: "desc" as const, q: null, filters: [], scope: null };
 
 const TEMAS = JSON.stringify({ sections: [{ id: "1", text: "Presentación", items: [{ id: "1", text: "Presentación", checked: true }] }, { id: "2", text: "Políticas", items: [{ id: "2.1", text: "Vacaciones", checked: false }, { id: "2.2", text: "Feriados", checked: true }] }] });
 

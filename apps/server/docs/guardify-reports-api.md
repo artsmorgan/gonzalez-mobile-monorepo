@@ -24,21 +24,50 @@ GET /api/guardify/reports/{modulo}
     &page=1&pageSize=50     pageSize máximo 1000
     &sort=<columna>&dir=asc|desc
     &q=<texto>              busca en las columnas de búsqueda del reporte
-    &f.<columna>=<valor>    filtro por igualdad (solo columnas de filtro del reporte)
+    &f.<columna>[.<op>]=<valor>   filtros sobre cualquier columna de las filas (ver «Filtros (protocolo v2)»)
     &scope=nivel:id,nivel:id   alcance por estructura (ver abajo); sin el parámetro = toda la empresa
 → 200 { "rows": [ { "<columna>": texto | número | null, … } ], "total": 123 }
 
-GET /api/guardify/reports/{modulo}/options?dimension=<columna>&from&to&scope
+GET /api/guardify/reports/{modulo}/options?dimension=<columna>&from&to&scope&q&limit&<filtros>
 → 200 { "values": ["…", "…"] }     valores existentes para una lista de filtro
 ```
 
 Errores (siempre JSON `{ error, message }`): `401 unauthorized`, `503 not_configured`, `404 report_not_found`,
-`400 bad_request`, `403 scope_unsupported`, `500 internal`.
+`400 bad_request`, `400 unsupported_filter`, `403 scope_unsupported`, `500 internal`.
 
 - Las fechas con hora son la hora «de pared» de la base, sin zona: `YYYY-MM-DDTHH:mm:ss`.
 - El periodo máximo es de 400 días.
 - Cada módulo trae como máximo 50 000 filas del periodo (el mismo tope que sus Excel); búsqueda, orden y paginación se
   aplican en memoria sobre ese conjunto.
+
+### Filtros (protocolo v2)
+
+La especificación es el contrato de Guardify (`docs/protocolo-reportes.md` en el repositorio de Guardify); esta app lo
+implementa sobre las columnas que devuelve cada reporte, sin declarar nada por módulo. Cada filtro es sobre **una columna
+de las filas** (`^[a-z][a-z0-9_]*$`): `f.<columna>` o `f.<columna>.<operador>`. Varios filtros se combinan con **Y**
+(así se arma un rango: `ge` + `lt`).
+
+| Parámetro | Significa | Ejemplo |
+|---|---|---|
+| `f.<col>=v` | igual a (igualdad exacta del texto o número) | `f.estado=Aprobado` |
+| `f.<col>.in=v` (repetible) | uno de estos valores (máx. 100) | `f.estado.in=Aprobado&f.estado.in=Pendiente` |
+| `f.<col>.ge=v` | mayor o igual | `f.creado.ge=2026-09-01T00:00:00` |
+| `f.<col>.lt=v` | menor que (cota superior exclusiva) | `f.creado.lt=2026-10-01T00:00:00` |
+| `f.<col>.le=v` | menor o igual (cota superior inclusiva) | `f.minutos.le=45` |
+| `f.<col>.tge=HH:MM` | la **hora del día** es mayor o igual | `f.entrada_real.tge=06:00` |
+| `f.<col>.tle=HH:MM` | la **hora del día** es menor o igual | `f.entrada_real.tle=14:00` |
+| `f.<col>.contains=texto` | contiene (sin distinguir mayúsculas ni tildes) | `f.empleado.contains=ronald` |
+
+- `ge`, `lt` y `le` comparan como número si el valor del filtro y el de la fila son numéricos, y como texto si no.
+- Una fila con la columna vacía (`null`) no cumple ninguna comparación, rango, hora ni `contains`.
+- `tge`/`tle` usan las posiciones 11 a 15 de `YYYY-MM-DDTHH:mm:ss` (inclusivos); sin ese formato la fila no cumple.
+- Una columna que no existe en las filas (se comprueba con la primera fila; sin filas no se valida), una columna mal
+  formada o un operador desconocido responden `400 { "error": "unsupported_filter" }`. Valores vacíos se ignoran y los de
+  más de 200 caracteres se recortan.
+- `sort` acepta cualquier columna de las filas (si no existe, `400 bad_request`); `q` busca en las columnas de búsqueda del módulo.
+- `options?dimension=<col>` acepta cualquier columna de las filas (si no, `400 unsupported_filter`), aplica los filtros
+  recibidos **excepto los de la propia columna**, y admite `q` (contiene, sin tildes) y `limit` (por defecto y tope 200).
+- Los filtros se aplican en memoria después de la caché por (módulo, periodo, alcance).
 
 ### Alcance por estructura
 
@@ -63,7 +92,7 @@ Lo que **no** se expone a propósito: el token de refresco (`ingresos_usuario`),
 ## Agregar un reporte
 
 1. `utils/guardifyReports/modules/<modulo>.ts`: reutiliza la función `queryXxxRows` del reporte (la misma de su Excel)
-   y devuelve filas planas (`mappers.ts`). Declara columnas de búsqueda, de filtro y de orden, y si soporta alcance.
+   y devuelve filas planas (`mappers.ts`). Declara las columnas de búsqueda y si soporta alcance (filtrar y ordenar funciona sobre cualquier columna de las filas).
 2. Una línea en `utils/guardifyReports/registry.ts`.
 3. La definición del reporte (columnas, filtros) en el manifiesto de MonitoreApp en Guardify, con `source: "api"`.
 4. Pruebas en `guardifyReports.test.ts` (`npx tsx --test utils/guardifyReports/guardifyReports.test.ts`).

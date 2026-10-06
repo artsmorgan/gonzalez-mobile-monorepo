@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
 import { verifyGuardifyApiKey } from "./auth";
 import { clearGuardifyReportCache, handleGuardifyReport } from "./handler";
-import { applyListing, distinctValues, type OutRow } from "./listing";
+import { applyListing, distinctValues, ListingError, type ListingOptions, type OutRow } from "./listing";
 import { mapIngresoUsuarioRow, mapLoginMarcaRow, mapTiempoAlmuerzoRow } from "./mappers";
-import { ParamError, parseReportParams } from "./params";
+import { UnsupportedFilterError } from "./errors";
+import { type ColumnFilter, ParamError, parseReportParams } from "./params";
 import { loadPuestoHierarchy, matchesScope, parseScope } from "./scope";
 import { handleGuardifyStructure } from "./structure";
 import type { GuardifyReportModule } from "./types";
@@ -38,7 +39,7 @@ describe("auth", () => {
 describe("parámetros", () => {
     it("lee periodo, página, orden, filtros y alcance", () => {
         const p = parseReportParams(qs({ ...BASE, page: "2", pageSize: "20", sort: "fecha", dir: "asc", q: " Ana ", "f.puesto": "P1", scope: "contrato:12,puesto:340" }));
-        assert.deepEqual(p, { ...BASE, page: 2, pageSize: 20, sort: "fecha", dir: "asc", q: "Ana", filters: { puesto: "P1" }, scope: [{ nivel: "contrato", id: 12 }, { nivel: "puesto", id: 340 }] });
+        assert.deepEqual(p, { ...BASE, page: 2, pageSize: 20, sort: "fecha", dir: "asc", q: "Ana", filters: [{ col: "puesto", op: "eq", values: ["P1"] }], scope: [{ nivel: "contrato", id: 12 }, { nivel: "puesto", id: 340 }] });
     });
     it("sin scope = toda la empresa; scope vacío = nada", () => {
         assert.equal(parseReportParams(qs(BASE)).scope, null);
@@ -52,6 +53,36 @@ describe("parámetros", () => {
     it("limita el tamaño de página", () => {
         assert.equal(parseReportParams(qs({ ...BASE, pageSize: "999999" })).pageSize, 1000);
         assert.equal(parseReportParams(qs({ ...BASE, page: "-4" })).page, 1);
+    });
+});
+
+describe("filtros (protocolo v2)", () => {
+    const f = (o: [string, string][]) => parseReportParams(new URLSearchParams([...Object.entries(BASE), ...o])).filters;
+    it("f.<col> es igualdad y f.<col>.<op> toma el operador", () => {
+        assert.deepEqual(f([["f.estado", "Aprobado"], ["f.creado.ge", "2026-09-01T00:00:00"], ["f.creado.lt", "2026-10-01T00:00:00"], ["f.nombre.contains", "ron"], ["f.entrada.tge", "06:00"], ["f.entrada.tle", "14:00"], ["f.minutos.le", "45"]]), [
+            { col: "estado", op: "eq", values: ["Aprobado"] },
+            { col: "creado", op: "ge", values: ["2026-09-01T00:00:00"] },
+            { col: "creado", op: "lt", values: ["2026-10-01T00:00:00"] },
+            { col: "nombre", op: "contains", values: ["ron"] },
+            { col: "entrada", op: "tge", values: ["06:00"] },
+            { col: "entrada", op: "tle", values: ["14:00"] },
+            { col: "minutos", op: "le", values: ["45"] },
+        ]);
+    });
+    it("solo `in` es repetible (máx. 100); los demás toman un valor", () => {
+        assert.deepEqual(f([["f.estado.in", "A"], ["f.estado.in", "B"], ["f.estado.in", "C"]]), [{ col: "estado", op: "in", values: ["A", "B", "C"] }]);
+        assert.deepEqual(f([["f.estado.ge", "1"], ["f.estado.ge", "2"]]), [{ col: "estado", op: "ge", values: ["2"] }]);
+        assert.doesNotThrow(() => f(Array.from({ length: 100 }, (_, i) => ["f.x.in", `v${i}`] as [string, string])));
+        assert.throws(() => f(Array.from({ length: 101 }, (_, i) => ["f.x.in", `v${i}`] as [string, string])), ParamError);
+    });
+    it("ignora valores vacíos y recorta a 200 caracteres", () => {
+        assert.deepEqual(f([["f.estado", ""], ["f.estado.in", ""]]), []);
+        assert.equal(f([["f.estado", "x".repeat(500)]])[0]!.values[0]!.length, 200);
+    });
+    it("operador desconocido o columna mal formada: unsupported_filter", () => {
+        for (const k of ["f.estado.zzz", "f.Estado", "f.1x", "f.a-b", "f.", "f.a.b.c", "f.a b", "f._x"]) {
+            assert.throws(() => f([[k, "x"]]), UnsupportedFilterError, k);
+        }
     });
 });
 
@@ -80,28 +111,97 @@ describe("alcance", () => {
 
 describe("listado", () => {
     const rows: OutRow[] = [
-        { id: 1, nombre: "Ángela", monto: 30, tipo: "a" },
-        { id: 2, nombre: "Beto", monto: null, tipo: "b" },
-        { id: 3, nombre: "Zoe", monto: 10, tipo: "a" },
-        { id: 4, nombre: "Ana", monto: 20, tipo: "b" },
+        { id: 1, nombre: "Ángela", monto: 30, tipo: "a", creado: "2026-09-01T08:30:00", texto: "9" },
+        { id: 2, nombre: "Beto", monto: null, tipo: "b", creado: null, texto: "10" },
+        { id: 3, nombre: "Zoe", monto: 10, tipo: "a", creado: "2026-09-15T14:00:00", texto: "abc" },
+        { id: 4, nombre: "Ana", monto: 20, tipo: "b", creado: "2026-10-01T06:00:00", texto: null },
     ];
-    const base = { q: null, searchKeys: ["nombre"], filters: {}, filterKeys: ["tipo"], sortKeys: ["monto", "nombre"], sort: null, dir: "desc" as const, defaultSort: "monto", page: 1, pageSize: 50 };
+    const base = { q: null, searchKeys: ["nombre"], filters: [], sort: null, dir: "desc" as const, defaultSort: "monto", page: 1, pageSize: 50 };
+    const ids = (filters: ColumnFilter[], extra: Partial<ListingOptions> = {}) => applyListing(rows, { ...base, sort: "id", dir: "asc", ...extra, filters }).rows.map((r) => r.id);
+    const F = (col: string, op: ColumnFilter["op"], ...values: string[]): ColumnFilter => ({ col, op, values });
+
     it("ordena números y deja los vacíos al final en ambos sentidos", () => {
         assert.deepEqual(applyListing(rows, base).rows.map((r) => r.id), [1, 4, 3, 2]);
         assert.deepEqual(applyListing(rows, { ...base, dir: "asc" }).rows.map((r) => r.id), [3, 4, 1, 2]);
     });
     it("busca sin importar tildes ni mayúsculas, filtra y pagina", () => {
         assert.deepEqual(applyListing(rows, { ...base, q: "angela" }).rows.map((r) => r.id), [1]);
-        assert.equal(applyListing(rows, { ...base, filters: { tipo: "a" } }).total, 2);
+        assert.equal(applyListing(rows, { ...base, filters: [F("tipo", "eq", "a")] }).total, 2);
         const p = applyListing(rows, { ...base, sort: "nombre", dir: "asc", pageSize: 3, page: 2 });
         assert.deepEqual([p.rows.map((r) => r.id), p.total], [[3], 4]);
     });
-    it("rechaza filtros y órdenes que el reporte no declara", () => {
-        assert.throws(() => applyListing(rows, { ...base, filters: { secreto: "x" } }));
-        assert.throws(() => applyListing(rows, { ...base, sort: "id); drop table x;--" }));
+    it("eq: igualdad exacta del texto o número", () => {
+        assert.deepEqual(ids([F("tipo", "eq", "a")]), [1, 3]);
+        assert.deepEqual(ids([F("monto", "eq", "20")]), [4]);
+        assert.deepEqual(ids([F("tipo", "eq", "A")]), []);
     });
-    it("lista los valores distintos de una dimensión", () => {
+    it("in: uno de varios valores", () => {
+        assert.deepEqual(ids([F("nombre", "in", "Zoe", "Beto", "Nadie")]), [2, 3]);
+        assert.deepEqual(ids([F("monto", "in", "10", "30")]), [1, 3]);
+    });
+    it("ge, lt y le comparan como número si ambos lo son", () => {
+        assert.deepEqual(ids([F("monto", "ge", "20")]), [1, 4]);
+        assert.deepEqual(ids([F("monto", "lt", "20")]), [3]);
+        assert.deepEqual(ids([F("monto", "le", "20")]), [3, 4]);
+        assert.deepEqual(ids([F("monto", "ge", "9")]), [1, 3, 4]); // 10 >= 9 como número (como texto no)
+    });
+    it("si no son ambos numéricos compara como texto (fechas ISO)", () => {
+        assert.deepEqual(ids([F("creado", "ge", "2026-09-15T00:00:00")]), [3, 4]);
+        assert.deepEqual(ids([F("texto", "ge", "abc")]), [3]); // "abc" no es número: todo como texto ("9" y "10" < "abc"); null nunca
+        assert.deepEqual(ids([F("texto", "ge", "9")]), [1, 2, 3]); // "9" y "10" numéricos (10 >= 9); "abc" como texto
+        assert.deepEqual(ids([F("creado", "le", "2026-09-15T14:00:00")]), [1, 3]);
+    });
+    it("ge + lt arman un rango (Y sobre la misma columna)", () => {
+        assert.deepEqual(ids([F("creado", "ge", "2026-09-01T00:00:00"), F("creado", "lt", "2026-10-01T00:00:00")]), [1, 3]);
+        assert.deepEqual(ids([F("monto", "ge", "10"), F("monto", "lt", "30")]), [3, 4]);
+    });
+    it("filtros de columnas distintas se combinan con Y", () => {
+        assert.deepEqual(ids([F("tipo", "eq", "a"), F("monto", "ge", "20")]), [1]);
+    });
+    it("tge/tle comparan la hora del día (inclusivos); sin formato de fecha y hora, no cumple", () => {
+        assert.deepEqual(ids([F("creado", "tge", "08:30")]), [1, 3]);
+        assert.deepEqual(ids([F("creado", "tle", "08:30")]), [1, 4]);
+        assert.deepEqual(ids([F("creado", "tge", "06:00"), F("creado", "tle", "14:00")]), [1, 3, 4]);
+        assert.deepEqual(ids([F("creado", "tge", "9:00")]), [3]); // se acepta H:MM
+        assert.deepEqual(ids([F("nombre", "tge", "00:00")]), []);
+        assert.deepEqual(ids([F("creado", "tge", "mañana")]), []);
+    });
+    it("contains no distingue mayúsculas ni tildes", () => {
+        assert.deepEqual(ids([F("nombre", "contains", "ANGEL")]), [1]);
+        assert.deepEqual(ids([F("nombre", "contains", "án")]), [1, 4]);
+        assert.deepEqual(ids([F("nombre", "contains", "z")]), [3]);
+    });
+    it("un null nunca cumple comparaciones, rangos, horas ni contains", () => {
+        assert.deepEqual(ids([F("monto", "lt", "1000")]), [1, 3, 4]); // el id 2 (monto null) no entra
+        assert.deepEqual(ids([F("monto", "le", "1000")]), [1, 3, 4]);
+        assert.deepEqual(ids([F("monto", "ge", "-1000")]), [1, 3, 4]);
+        assert.deepEqual(ids([F("monto", "contains", "")]), [1, 3, 4]);
+        assert.deepEqual(ids([F("creado", "lt", "9999")]), [1, 3, 4]);
+        assert.deepEqual(ids([F("creado", "tge", "00:00")]), [1, 3, 4]);
+        assert.deepEqual(ids([F("creado", "tle", "23:59")]), [1, 3, 4]);
+        assert.deepEqual(ids([F("creado", "contains", "2026")]), [1, 3, 4]);
+        assert.deepEqual(ids([F("texto", "contains", "")]), [1, 2, 3]); // el id 4 (texto null) nunca
+        assert.deepEqual(ids([F("monto", "eq", "")]), []);
+    });
+    it("columna inexistente: unsupported_filter; sin filas no se valida", () => {
+        assert.throws(() => ids([F("secreto", "eq", "x")]), UnsupportedFilterError);
+        assert.throws(() => ids([F("constructor", "eq", "x")]), UnsupportedFilterError);
+        assert.deepEqual(applyListing([], { ...base, filters: [F("secreto", "eq", "x")] }), { rows: [], total: 0 });
+    });
+    it("ordena por cualquier columna presente en las filas y rechaza las que no existen", () => {
+        assert.deepEqual(applyListing(rows, { ...base, sort: "creado", dir: "asc" }).rows.map((r) => r.id), [1, 3, 4, 2]);
+        assert.deepEqual(applyListing(rows, { ...base, sort: "tipo", dir: "asc" }).rows.map((r) => r.id), [1, 3, 2, 4]);
+        assert.throws(() => applyListing(rows, { ...base, sort: "id); drop table x;--" }), ListingError);
+        assert.throws(() => applyListing(rows, { ...base, sort: "secreto" }), ListingError);
+    });
+    it("lista los valores distintos de una dimensión, con q y limit", () => {
         assert.deepEqual(distinctValues(rows, "tipo"), ["a", "b"]);
+        assert.deepEqual(distinctValues(rows, "nombre", { q: "AN" }), ["Ana", "Ángela"]);
+        assert.deepEqual(distinctValues(rows, "nombre", { limit: 2 }), ["Ana", "Ángela"]);
+        const many = Array.from({ length: 300 }, (_, i) => ({ v: `v${i}` }));
+        assert.equal(distinctValues(many, "v").length, 200);
+        assert.equal(distinctValues(many, "v", { limit: 999 }).length, 200);
+        assert.equal(distinctValues(many, "v", { limit: 5 }).length, 5);
     });
 });
 
@@ -182,7 +282,56 @@ describe("manejador", () => {
     it("opciones de una dimensión", async () => {
         const r = await call(`con/options?${q}&dimension=puesto`, undefined, "options");
         assert.deepEqual(await r.json(), { values: ["P1", "P2"] });
-        assert.equal((await call(`con/options?${q}&dimension=monto`, undefined, "options")).status, 400);
+    });
+    it("opciones: cualquier columna de las filas; una que no existe o mal formada es 400 unsupported_filter", async () => {
+        assert.deepEqual(await (await call(`con/options?${q}&dimension=monto`, undefined, "options")).json(), { values: ["5", "7", "9"] });
+        for (const d of ["zzz", "", "Puesto", "constructor"]) {
+            const r = await call(`con/options?${q}&dimension=${d}`, undefined, "options");
+            assert.equal(r.status, 400, d);
+            assert.equal((await r.json()).error, "unsupported_filter");
+        }
+    });
+    it("opciones con filtros dinámicos: aplica los demás filtros y excluye los de la propia columna", async () => {
+        const opts = async (extra: string) => (await (await call(`con/options?${q}&dimension=puesto${extra}`, undefined, "options")).json()).values;
+        assert.deepEqual(await opts("&f.monto.ge=8"), ["P2"]);
+        assert.deepEqual(await opts("&f.puesto=P1"), ["P1", "P2"]); // el filtro de la propia dimensión no se aplica
+        assert.deepEqual(await opts("&f.puesto.in=P1&f.monto.ge=8"), ["P2"]);
+        assert.deepEqual(await opts("&f.monto.lt=6&f.puesto=P2"), ["P1"]);
+        assert.equal((await call(`con/options?${q}&dimension=puesto&f.nada=1`, undefined, "options")).status, 400);
+    });
+    it("opciones con q (contiene, sin tildes) y limit (por defecto y tope 200)", async () => {
+        const opts = async (extra: string) => (await (await call(`con/options?${q}&dimension=puesto${extra}`, undefined, "options")).json()).values;
+        assert.deepEqual(await opts("&q=p2"), ["P2"]);
+        assert.deepEqual(await opts("&q=zzz"), []);
+        assert.deepEqual(await opts("&limit=1"), ["P1"]);
+        const big: OutRow[] = Array.from({ length: 300 }, (_, i) => ({ id: i, puesto: `P${i}` }));
+        const d = { registry: { big: { ...mk("big", true), load: async () => big } }, getDb: () => ({}), env };
+        const get = async (extra: string) => (await (await handleGuardifyReport(new Request(`http://x/api/guardify/reports/big/options?${q}&dimension=puesto${extra}`, { headers: { authorization: `Bearer ${KEY}` } }), "big", "options", d)).json()).values;
+        assert.equal((await get("")).length, 200);
+        assert.equal((await get("&limit=5000")).length, 200);
+        assert.equal((await get("&limit=7")).length, 7);
+    });
+    it("filtros en las filas: todos los operadores, columna inexistente y operador desconocido", async () => {
+        const total = async (extra: string) => (await (await call(`con?${q}${extra}`)).json()).total;
+        assert.equal(await total("&f.puesto=P1"), 2);
+        assert.equal(await total("&f.puesto.in=P1&f.puesto.in=P2"), 3);
+        assert.equal(await total("&f.monto.ge=6&f.monto.lt=9"), 1);
+        assert.equal(await total("&f.monto.le=7"), 2);
+        assert.equal(await total("&f.puesto.contains=p2"), 1);
+        assert.equal(await total("&f.puesto="), 3); // vacío se ignora
+        for (const bad of ["&f.nada=1", "&f.monto.zzz=1", "&f.Monto=1", "&f.monto.a.b=1"]) {
+            const r = await call(`con?${q}${bad}`);
+            assert.equal(r.status, 400, bad);
+            assert.equal((await r.json()).error, "unsupported_filter", bad);
+        }
+    });
+    it("ordena por cualquier columna de las filas", async () => {
+        const ok = await call(`con?${q}&sort=puesto&dir=asc`);
+        assert.equal(ok.status, 200);
+        assert.deepEqual((await ok.json()).rows.map((r: OutRow) => r.id), [1, 3, 2]);
+        const bad = await call(`con?${q}&sort=zzz`);
+        assert.equal(bad.status, 400);
+        assert.equal((await bad.json()).error, "bad_request");
     });
 });
 

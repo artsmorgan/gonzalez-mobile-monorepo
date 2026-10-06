@@ -1,6 +1,6 @@
 import { verifyGuardifyApiKey } from "./auth";
-import { ParamError, ScopeUnsupportedError } from "./errors";
-import { applyListing, distinctValues, ListingError, type OutRow } from "./listing";
+import { ParamError, ScopeUnsupportedError, UnsupportedFilterError } from "./errors";
+import { applyFilters, applyListing, distinctValues, hasColumn, ListingError, MAX_OPTIONS_LIMIT, type OutRow } from "./listing";
 import { parseReportParams } from "./params";
 import type { GuardifyReportModule } from "./types";
 
@@ -25,7 +25,8 @@ const json = (body: unknown, status = 200) =>
 /**
  * API de reportes para Guardify (solo lectura, de servidor a servidor).
  *   GET /api/guardify/reports/{modulo}?from&to&page&pageSize&sort&dir&q&f.<col>=…&scope=nivel:id,…  → { rows, total }
- *   GET /api/guardify/reports/{modulo}/options?dimension=<col>&from&to&scope=…                      → { values }
+ *   GET /api/guardify/reports/{modulo}/options?dimension=<col>&from&to&scope&q&limit&f.<col>…       → { values }
+ * Filtros (protocolo v2): `f.<col>` o `f.<col>.<op>` (eq, in, ge, lt, le, tge, tle, contains); ver docs/guardify-reports-api.md.
  */
 export async function handleGuardifyReport(req: Request, modulo: string, kind: "rows" | "options", deps: HandlerDeps): Promise<Response> {
     const started = Date.now();
@@ -46,7 +47,6 @@ export async function handleGuardifyReport(req: Request, modulo: string, kind: "
         const sp = new URL(req.url).searchParams;
         const p = parseReportParams(sp);
         const dimension = sp.get("dimension") ?? "";
-        if (kind === "options" && !mod.filterKeys.includes(dimension)) throw new ParamError(`«${dimension}» no es una dimensión de filtro de este reporte.`);
         if (p.scope !== null && !mod.supportsScope) throw new ScopeUnsupportedError();
 
         const now = (deps.now ?? Date.now)();
@@ -60,13 +60,22 @@ export async function handleGuardifyReport(req: Request, modulo: string, kind: "
         }
         const all = hit.rows;
         if (kind === "options") {
+            // La dimensión debe ser una columna de las filas (sin filas no hay nada que validar).
+            if (!/^[a-z][a-z0-9_]*$/.test(dimension) || !hasColumn(all, dimension)) throw new UnsupportedFilterError(`«${dimension}» no es una columna de este reporte.`);
+            // Filtros dinámicos pero independientes: se aplican todos menos los de la propia dimensión.
+            const others = applyFilters(all, p.filters.filter((f) => f.col !== dimension));
+            const limit = Math.min(MAX_OPTIONS_LIMIT, Math.max(1, Math.floor(Number(sp.get("limit"))) || MAX_OPTIONS_LIMIT));
             log(200, { rows: all.length }, auth.user);
-            return json({ values: distinctValues(all, dimension) });
+            return json({ values: distinctValues(others, dimension, { q: p.q, limit }) });
         }
-        const out = applyListing(all, { q: p.q, searchKeys: mod.searchKeys, filters: p.filters, filterKeys: mod.filterKeys, sortKeys: mod.sortKeys, sort: p.sort, dir: p.dir, defaultSort: mod.defaultSort, page: p.page, pageSize: p.pageSize });
+        const out = applyListing(all, { q: p.q, searchKeys: mod.searchKeys, filters: p.filters, sort: p.sort, dir: p.dir, defaultSort: mod.defaultSort, page: p.page, pageSize: p.pageSize });
         log(200, { rows: out.rows.length, total: out.total, scoped: p.scope !== null }, auth.user);
         return json(out);
     } catch (e) {
+        if (e instanceof UnsupportedFilterError) {
+            log(400, {}, auth.user);
+            return json({ error: "unsupported_filter", message: e.message }, 400);
+        }
         if (e instanceof ParamError || e instanceof ListingError) {
             log(400, {}, auth.user);
             return json({ error: "bad_request", message: e.message }, 400);

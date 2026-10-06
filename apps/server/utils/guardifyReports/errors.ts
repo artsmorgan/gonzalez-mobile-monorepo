@@ -6,6 +6,9 @@ export class ParamError extends Error {
     }
 }
 
+/** Filtro (o dimensión) que el reporte no entiende: columna inexistente o mal formada, u operador desconocido. Se responde 400 `unsupported_filter`. */
+export class UnsupportedFilterError extends ParamError {}
+
 /** El reporte no puede restringirse por la estructura pedida: se responde 403 `scope_unsupported`. */
 export class ScopeUnsupportedError extends Error {
     status = 403 as const;

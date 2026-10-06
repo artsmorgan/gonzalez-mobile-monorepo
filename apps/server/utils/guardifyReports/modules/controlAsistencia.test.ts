@@ -49,7 +49,7 @@ const db = new Proxy({}, {
         },
     }),
 }) as any;
-const P = { from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: null, dir: "desc" as const, q: null, filters: {}, scope: null };
+const P = { from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: null, dir: "desc" as const, q: null, filters: [], scope: null };
 
 describe("control de asistencia", () => {
     it("mapea conteos de colaboradores, sin nombres de colaboradores ni firmas", () => {

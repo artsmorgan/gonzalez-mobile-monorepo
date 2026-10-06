@@ -68,7 +68,7 @@ describe("acta_entrega_productos: alcance", () => {
     const rows = [raw({ id: 1 }), raw({ id: 2, contrato_id: 21, corpo_id: 31, puesto_id: 41, division_id: 10 })];
     const tables: Record<string, any[]> = { c_acta_entre_producto: rows };
     const db = new Proxy({}, { get: (_t, name: string) => ({ findMany: async () => tables[name] ?? [] }) }) as any;
-    const p = (scope: any) => ({ from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: null, dir: "desc" as const, q: null, filters: {}, scope });
+    const p = (scope: any) => ({ from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: null, dir: "desc" as const, q: null, filters: [], scope });
     it("sin alcance trae todo; con alcance filtra por nivel; vacío no ve nada", async () => {
         assert.equal((await actaEntregaProductos.load(db, p(null))).length, 2);
         assert.deepEqual((await actaEntregaProductos.load(db, p([{ nivel: "contrato", id: 21 }]))).map((r) => r.id), [2]);

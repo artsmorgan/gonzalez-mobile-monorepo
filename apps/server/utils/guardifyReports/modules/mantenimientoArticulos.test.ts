@@ -22,7 +22,7 @@ before(async () => {
     ({ mapMantenimientoArticuloRow, loadMantenimientoArticulos, mantenimientoArticulos } = await import("./mantenimientoArticulos"));
 });
 
-const P: ReportParams = { from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: null, dir: "desc", q: null, filters: {}, scope: null };
+const P: ReportParams = { from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: null, dir: "desc", q: null, filters: [], scope: null };
 
 
 const crudo = (o: Record<string, unknown> = {}): any => ({

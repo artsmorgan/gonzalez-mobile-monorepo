@@ -101,7 +101,7 @@ describe("acciones_personales: periodo y alcance", () => {
         c_horario: byIds([]),
         n_division: byIds([{ id: 9, codigo: "S", nombre: "Sur" }, { id: 10, codigo: "N", nombre: "Norte" }]),
     } as any;
-    const p = (scope: any) => ({ from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: null, dir: "desc" as const, q: null, filters: {}, scope });
+    const p = (scope: any) => ({ from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: null, dir: "desc" as const, q: null, filters: [], scope });
 
     it("sin alcance: solo el periodo [from, to), con nombres y cédula cargados en lote", async () => {
         const out = await accionesPersonales.load(db, p(null));

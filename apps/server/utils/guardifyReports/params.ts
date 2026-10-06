@@ -1,7 +1,15 @@
-import { ParamError } from "./errors";
+import { ParamError, UnsupportedFilterError } from "./errors";
 import { parseScope, type ScopeItem } from "./scope";
 
-export { ParamError };
+export { ParamError, UnsupportedFilterError };
+
+export const FILTER_OPS = ["eq", "in", "ge", "lt", "le", "tge", "tle", "contains"] as const;
+export type FilterOp = (typeof FILTER_OPS)[number];
+/** Un filtro del protocolo v2 sobre una columna de las filas. Varios filtros se combinan con Y. */
+export type ColumnFilter = { col: string; op: FilterOp; values: string[] };
+export const MAX_IN_VALUES = 100;
+const MAX_VALUE_LENGTH = 200;
+const COLUMN = /^[a-z][a-z0-9_]*$/;
 
 export type ReportParams = {
     /** Fecha local inclusiva, `YYYY-MM-DD`. */
@@ -13,7 +21,7 @@ export type ReportParams = {
     sort: string | null;
     dir: "asc" | "desc";
     q: string | null;
-    filters: Record<string, string>;
+    filters: ColumnFilter[];
     /** null = toda la empresa; si no, unión de estos nodos de la estructura. */
     scope: ScopeItem[] | null;
 };
@@ -27,6 +35,28 @@ export function addDays(d: string, n: number): string {
     return new Date(dayMs(d) + n * 86_400_000).toISOString().slice(0, 10);
 }
 
+/** Lee `f.<col>` (igual) y `f.<col>.<op>`; solo `in` es repetible. Valores vacíos se ignoran. */
+export function parseFilters(sp: URLSearchParams): ColumnFilter[] {
+    const out: ColumnFilter[] = [];
+    for (const [k, raw] of sp) {
+        if (!k.startsWith("f.")) continue;
+        const parts = k.slice(2).split(".");
+        const col = parts[0] ?? "";
+        if (parts.length > 2 || !COLUMN.test(col)) throw new UnsupportedFilterError(`Filtro «${k}» no válido: la columna debe tener formato ${COLUMN.source}.`);
+        const op = (parts.length === 1 ? "eq" : parts[1]) as FilterOp;
+        if (!FILTER_OPS.includes(op)) throw new UnsupportedFilterError(`Operador «${parts[1]}» no soportado en el filtro «${k}».`);
+        if (raw === "") continue;
+        const v = raw.slice(0, MAX_VALUE_LENGTH);
+        const prev = out.find((f) => f.col === col && f.op === op);
+        if (!prev) out.push({ col, op, values: [v] });
+        else if (op === "in") {
+            if (prev.values.length >= MAX_IN_VALUES) throw new ParamError(`El filtro «${k}» admite como máximo ${MAX_IN_VALUES} valores.`);
+            prev.values.push(v);
+        } else prev.values = [v]; // los demás operadores toman un valor: gana el último
+    }
+    return out;
+}
+
 export function parseReportParams(sp: URLSearchParams): ReportParams {
     const from = sp.get("from") ?? "";
     const to = sp.get("to") ?? "";
@@ -35,8 +65,7 @@ export function parseReportParams(sp: URLSearchParams): ReportParams {
     if ((dayMs(to) - dayMs(from)) / 86_400_000 > MAX_RANGE_DAYS) throw new ParamError(`El periodo no puede pasar de ${MAX_RANGE_DAYS} días.`);
     const page = Math.max(1, Math.floor(Number(sp.get("page") ?? 1)) || 1);
     const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(Number(sp.get("pageSize") ?? 50)) || 50));
-    const filters: Record<string, string> = {};
-    for (const [k, v] of sp) if (k.startsWith("f.") && v !== "") filters[k.slice(2)] = v.slice(0, 200);
+    const filters = parseFilters(sp);
     const scopeRaw = sp.get("scope");
     return {
         from,

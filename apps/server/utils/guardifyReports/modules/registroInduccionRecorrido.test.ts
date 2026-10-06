@@ -35,7 +35,7 @@ function fakeDb(tables: Record<string, any[]>) {
     }) as any;
 }
 
-const P = { from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: null, dir: "desc" as const, q: null, filters: {}, scope: null };
+const P = { from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: null, dir: "desc" as const, q: null, filters: [], scope: null };
 
 const registro = (id: number, contrato: number) => ({
     id, empresa_id: 1, cliente_id: 5, division_id: 3, contrato_id: contrato, corpo_id: 10, puesto_id: 100 + id, plaza_id: null,
