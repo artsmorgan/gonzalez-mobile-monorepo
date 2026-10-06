@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { beforeEach, describe, it } from "node:test";
 import { verifyGuardifyApiKey } from "./auth";
-import { handleGuardifyReport } from "./handler";
+import { clearGuardifyReportCache, handleGuardifyReport } from "./handler";
 import { applyListing, distinctValues, type OutRow } from "./listing";
 import { mapIngresoUsuarioRow, mapLoginMarcaRow, mapTiempoAlmuerzoRow } from "./mappers";
 import { ParamError, parseReportParams } from "./params";
@@ -133,6 +133,7 @@ describe("manejador", () => {
         load: async (_db, p) => { lastScope = p.scope; return p.scope ? data.filter((r) => p.scope!.some((s) => s.id === Number(String(r.puesto).slice(1)))) : data; },
     });
     const deps = { registry: { con: mk("con", true), sin: mk("sin", false) }, getDb: () => ({}), env };
+    beforeEach(() => clearGuardifyReportCache());
     const call = (path: string, headers: Record<string, string> = { authorization: `Bearer ${KEY}` }, kind: "rows" | "options" = "rows") =>
         handleGuardifyReport(new Request(`http://x/api/guardify/reports/${path}`, { headers }), path.split("?")[0]!.split("/")[0]!, kind, deps);
     const q = `from=${BASE.from}&to=${BASE.to}`;
@@ -163,6 +164,19 @@ describe("manejador", () => {
     });
     it("alcance vacío: no se ve nada", async () => {
         assert.equal((await (await call(`con?${q}&scope=`)).json()).total, 0);
+    });
+    it("reutiliza unos segundos las filas del mismo periodo y alcance (páginas, orden y exportación), y vuelve a pedirlas después", async () => {
+        clearGuardifyReportCache();
+        let loads = 0, t = 1_000_000;
+        const counting: GuardifyReportModule = { ...mk("cnt", true), load: async () => { loads++; return data; } };
+        const d = { registry: { cnt: counting }, getDb: () => ({}), env, now: () => t };
+        const get = (extra: string) => handleGuardifyReport(new Request(`http://x/api/guardify/reports/cnt?${q}${extra}`, { headers: { authorization: `Bearer ${KEY}` } }), "cnt", "rows", d);
+        await get(""); await get("&page=2&pageSize=1"); await get("&sort=monto&dir=asc");
+        assert.equal(loads, 1);
+        await get("&scope=puesto:1"); // otro alcance = otra consulta
+        assert.equal(loads, 2);
+        t += 31_000; await get("");
+        assert.equal(loads, 3);
     });
     it("opciones de una dimensión", async () => {
         const r = await call(`con/options?${q}&dimension=puesto`, undefined, "options");
