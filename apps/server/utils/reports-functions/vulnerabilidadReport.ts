@@ -238,9 +238,8 @@ export async function buildVulnerabilidadExcelConsolidado(
         rows.map((r) => Number(r.id)),
     );
 
-    /** Cada registro (boleta de apreciación de vulnerabilidad) es una sola fila; los ítems de cada
-     * sección de la boleta y las métricas se aplanan en columnas propias, uniendo todos los valores
-     * de cada registro con ";". */
+    /** Cada registro (boleta de apreciación de vulnerabilidad) ocupa una fila por sección de la boleta; los
+     * datos del registro se repiten en cada fila y solo "etiqueta" y "respuesta" se unen con punto y coma (;). */
     const headers = [
         "ID Registro",
         "Empresa",
@@ -364,9 +363,8 @@ export async function buildVulnerabilidadExcelConsolidado(
         row.height = 22;
     };
 
-    /** Todos los ítems/métricas de 1 registro se unen en 1 sola fila, separados por punto y coma. */
-    const joinDetalle = (detalleRows: Array<Record<string, unknown>>, key: string): string =>
-        detalleRows.map((item) => String(item?.[key] ?? "")).join(";");
+    /** Etiquetas/respuestas de los ítems de una sección se unen en una sola celda, separadas por punto y coma (;). */
+    const joinPuntoYComa = (values: string[]): string => values.join(";");
 
     let totalDataRows = 0;
     for (const r of rows) {
@@ -375,44 +373,47 @@ export async function buildVulnerabilidadExcelConsolidado(
 
         const sections = parseBoletaSections(r.boleta);
         const pctSection = sections.find((s) => s.key === "porcentaje_vulnerabilidad");
-        const itemEntries: Array<{ seccion: string; etiqueta: string; respuesta: string }> = [];
-        for (const sec of sections) {
-            if (sec.key === "porcentaje_vulnerabilidad") continue;
-            const secTitle = String(sec.title ?? "");
-            for (const item of sec.items ?? []) {
-                itemEntries.push({ seccion: secTitle, etiqueta: String(item?.label ?? ""), respuesta: String(item?.answer ?? "") });
-            }
-        }
+        const seccionesRows = sections
+            .filter((s) => s.key !== "porcentaje_vulnerabilidad")
+            .map((sec) => ({
+                seccion: String(sec.title ?? ""),
+                etiquetas: (sec.items ?? []).map((item) => String(item?.label ?? "")),
+                respuestas: (sec.items ?? []).map((item) => String(item?.answer ?? "")),
+            }));
+        if (seccionesRows.length === 0) seccionesRows.push({ seccion: "", etiquetas: [], respuestas: [] });
         const metricas = parseArrayJSON(r.metricas_vulnerablidad).map((m) => String(m ?? ""));
 
-        const rootRow = addMainRow(main, [
-            String(r.id),
-            r.empresa_nombre,
-            r.cliente_nombre,
-            r.division_nombre,
-            r.contrato_nombre,
-            r.corpo_nombre,
-            r.puesto_nombre,
-            formatDateOnlyDMY(r.fecha),
-            formatTimeOnlyHMS(r.fecha),
-            r.nombre_solicitante ?? "",
-            "Ver boleta",
-            "Ver métricas",
-            r.observaciones ?? "",
-            joinDetalle(itemEntries, "seccion"),
-            joinDetalle(itemEntries, "etiqueta"),
-            joinDetalle(itemEntries, "respuesta"),
-            String(pctSection?.vulnerabilityLevel ?? ""),
-            metricas.join(";"),
-            cambio?.nombreCompleto ?? "",
-            cambio?.fechaHoraTexto ?? "",
-        ]);
-        rootRow.getCell(COL_VER_BOLETA).value = { text: "Ver boleta", hyperlink: `#'Detalles'!A${dr}` };
-        rootRow.getCell(COL_VER_METRICAS).value = { text: "Ver métricas", hyperlink: `#'Detalles'!A${dr}` };
-        rootRow.getCell(COL_VER_BOLETA).font = { color: { argb: "FF0563C1" }, underline: true };
-        rootRow.getCell(COL_VER_METRICAS).font = { color: { argb: "FF0563C1" }, underline: true };
-        styleDataRow(rootRow);
-        totalDataRows += 1;
+        // Una fila por sección; los datos del registro se repiten en todas sus filas.
+        for (const sec of seccionesRows) {
+            const rootRow = addMainRow(main, [
+                String(r.id),
+                r.empresa_nombre,
+                r.cliente_nombre,
+                r.division_nombre,
+                r.contrato_nombre,
+                r.corpo_nombre,
+                r.puesto_nombre,
+                formatDateOnlyDMY(r.fecha),
+                formatTimeOnlyHMS(r.fecha),
+                r.nombre_solicitante ?? "",
+                "Ver boleta",
+                "Ver métricas",
+                r.observaciones ?? "",
+                sec.seccion,
+                joinPuntoYComa(sec.etiquetas),
+                joinPuntoYComa(sec.respuestas),
+                String(pctSection?.vulnerabilityLevel ?? ""),
+                metricas.join(";"),
+                cambio?.nombreCompleto ?? "",
+                cambio?.fechaHoraTexto ?? "",
+            ]);
+            rootRow.getCell(COL_VER_BOLETA).value = { text: "Ver boleta", hyperlink: `#'Detalles'!A${dr}` };
+            rootRow.getCell(COL_VER_METRICAS).value = { text: "Ver métricas", hyperlink: `#'Detalles'!A${dr}` };
+            rootRow.getCell(COL_VER_BOLETA).font = { color: { argb: "FF0563C1" }, underline: true };
+            rootRow.getCell(COL_VER_METRICAS).font = { color: { argb: "FF0563C1" }, underline: true };
+            styleDataRow(rootRow);
+            totalDataRows += 1;
+        }
     }
     main.autoFilter = {
         from: { row: 12, column: 2 },

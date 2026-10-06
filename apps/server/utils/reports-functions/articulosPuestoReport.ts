@@ -618,12 +618,10 @@ export async function buildArticulosPuestoExcelConsolidado(
     }
 
     /**
-     * Cuadrícula jerárquica: Puesto (nivel 0) → Artículo (nivel 1, de tablas de plan/asignación). Los
-     * `c_movimientos_articulo_mantenimiento` de cada artículo se unen en la misma fila del artículo,
+     * Cuadrícula plana: una fila por artículo (de tablas de plan/asignación) que repite los datos del puesto.
+     * Los `c_movimientos_articulo_mantenimiento` de cada artículo se unen en la misma fila del artículo,
      * separados por ";" (una columna por campo de movimiento), sin fila propia por movimiento.
      */
-    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
     const mainHeaders = [
         "ID Puesto",
         "Empresa",
@@ -672,6 +670,7 @@ export async function buildArticulosPuestoExcelConsolidado(
         cell.border = borderThin as ExcelJS.Borders;
         cell.alignment = { vertical: "middle", wrapText: true };
     }
+    mh.height = 32;
     // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
     // se ven los bordes que dibujamos manualmente.
     for (const sheet of [wsMain, wsArt, wsMov]) {
@@ -737,13 +736,14 @@ export async function buildArticulosPuestoExcelConsolidado(
 
     const blank = (n: number) => Array.from({ length: n }, () => "");
 
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    /** Altura fija y sin ajuste de texto: el contenido de las celdas no debe aumentar el tamaño de la fila. */
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((c, colNumber) => {
             if (colNumber === 1) return;
             c.border = borderThin;
-            c.alignment = { wrapText: true, vertical: "top" };
+            c.alignment = { wrapText: false, vertical: "middle", horizontal: "left" };
         });
-        row.outlineLevel = nivel;
+        row.height = 22;
     };
 
     let totalDataRows = 0;
@@ -752,14 +752,22 @@ export async function buildArticulosPuestoExcelConsolidado(
         const linkText = r.articulos_count > 0 ? `Ver artículos (${r.articulos_count})` : "Sin artículos";
         const general = [String(r.puesto_id), r.empresa_txt, r.cliente_txt, r.division_txt, r.contrato_txt, r.corpo_txt, r.puesto_txt];
 
-        const rootRow = addMainRow(wsMain, [...general, linkText, ...blank(22)]);
-        if (anchor && r.articulos_count > 0) {
-            const cell = rootRow.getCell(SHEET_COL_VER_ARTICULOS);
-            cell.value = { text: linkText, hyperlink: `#'Artículos'!A${anchor}` };
-            cell.font = { color: { argb: "FF0563C1" }, underline: true };
+        const linkVerArticulos = (row: ExcelJS.Row) => {
+            if (anchor && r.articulos_count > 0) {
+                const cell = row.getCell(SHEET_COL_VER_ARTICULOS);
+                cell.value = { text: linkText, hyperlink: `#'Artículos'!A${anchor}` };
+                cell.font = { color: { argb: "FF0563C1" }, underline: true };
+            }
+        };
+
+        // Puesto sin artículos: una única fila con los datos del puesto.
+        if (r.articulos.length === 0) {
+            const rootRow = addMainRow(wsMain, [...general, linkText, ...blank(22)]);
+            linkVerArticulos(rootRow);
+            styleDataRow(rootRow);
+            totalDataRows += 1;
+            continue;
         }
-        styleDataRow(rootRow, 0);
-        totalDataRows += 1;
 
         for (const a of r.articulos) {
             const movKey = articuloMovKey(a.origen, a.registro_id);
@@ -772,7 +780,7 @@ export async function buildArticulosPuestoExcelConsolidado(
 
             const artRowMain = addMainRow(wsMain, [
                 ...general,
-                "",
+                linkText,
                 a.origen,
                 String(a.registro_id),
                 a.articulo_nombre,
@@ -801,7 +809,8 @@ export async function buildArticulosPuestoExcelConsolidado(
                 cell.value = { text: movLinkText, hyperlink: `#'Movimientos'!A${movAnchor}` };
                 cell.font = { color: { argb: "FF0563C1" }, underline: true };
             }
-            styleDataRow(artRowMain, 1);
+            linkVerArticulos(artRowMain);
+            styleDataRow(artRowMain);
             totalDataRows += 1;
         }
     }

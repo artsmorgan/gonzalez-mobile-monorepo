@@ -746,9 +746,7 @@ export async function buildRevisionVehiculosExcelConsolidado(
         wsDet.addRow([]);
     }
 
-    /** Cuadrícula jerárquica: Registro (nivel 0) → Ítem info. general / Ítem info. revisión, hermanos (nivel 1). Los "Movimientos" se agrupan y separan por punto y coma en la fila del registro. */
-    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-
+    /** Cuadrícula plana: una única fila por registro; los ítems de información general / de revisión y los movimientos se unen con punto y coma (;), con una columna por dato (campo, valor, observación). */
     const mainHeaders = [
         "ID Registro",
         "Empresa",
@@ -768,9 +766,12 @@ export async function buildRevisionVehiculosExcelConsolidado(
         "Ver información general",
         "Ver información de revisión",
         "Ver movimientos",
-        "Campo (ítem)",
-        "Valor (ítem)",
-        "Observación (ítem)",
+        "Campo (info. general)",
+        "Valor (info. general)",
+        "Observación (info. general)",
+        "Campo (info. revisión)",
+        "Valor (info. revisión)",
+        "Observación (info. revisión)",
         "Movimiento",
         "Fecha (movimiento)",
         "Hora (movimiento)",
@@ -787,9 +788,22 @@ export async function buildRevisionVehiculosExcelConsolidado(
     const SHEET_COL_MOV = colMov + 1;
     const linkCols = new Set([SHEET_COL_GEN, SHEET_COL_REV, SHEET_COL_MOV]);
 
-    /** Todos los movimientos de una revisión se unen en 1 sola fila, separados por punto y coma. */
+    /** Todos los movimientos de una revisión se unen en 1 sola fila, separados por punto y coma (;). */
+    const joinPuntoYComa = (parts: string[]): string => (parts.every((x) => x.trim() === "") ? "" : parts.join(";"));
     const joinMovimientos = (movs: Array<Record<string, unknown>>, key: string): string =>
-        movs.map((item) => String(item?.[key] ?? "")).join(";");
+        joinPuntoYComa(movs.map((item) => String(item?.[key] ?? "")));
+
+    /** Ítems "legibles" (sin encabezados) de la información general / de revisión: campo, valor y observación. */
+    const itemColumns = (items: any[]): { campos: string; valores: string; observaciones: string } => {
+        const legibles = items.filter((item) => item?.kind !== "heading");
+        return {
+            campos: joinPuntoYComa(legibles.map((item) => excelCellString(item?.label ?? item?.key ?? ""))),
+            valores: joinPuntoYComa(
+                legibles.map((item) => (item?.kind === "signature" ? (item?.value ? "Tiene firma" : "Sin firma") : excelCellString(item?.value ?? ""))),
+            ),
+            observaciones: joinPuntoYComa(legibles.map((item) => excelCellString(item?.observation ?? ""))),
+        };
+    };
 
     const creadorIds = [...new Set(rows.map((r) => Number(r.created_by)).filter((n) => Number.isFinite(n) && n > 0))];
     const creadores = creadorIds.length
@@ -820,16 +834,18 @@ export async function buildRevisionVehiculosExcelConsolidado(
         cell.border = borderThin as ExcelJS.Borders;
         cell.alignment = { vertical: "middle", wrapText: true };
     }
+    mh.height = 32;
 
-    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+    /** Altura fija y sin ajuste de texto: el contenido de las celdas no debe aumentar el tamaño de la fila. */
+    const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((cell, col) => {
             if (col === 1 || linkCols.has(col)) return;
             cell.border = borderThin;
-            cell.alignment = { wrapText: true, vertical: "top" };
+            cell.alignment = { wrapText: false, vertical: "middle", horizontal: "left" };
         });
         for (const c of linkCols) row.getCell(c).border = borderThin;
-        row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(2).font = { bold: true };
+        row.getCell(2).font = { bold: true };
+        row.height = 22;
     };
 
     for (const r of rows) {
@@ -862,6 +878,15 @@ export async function buildRevisionVehiculosExcelConsolidado(
         general[mainHeaders.indexOf("Realizado por (movimiento)") + 1] = joinMovimientos(movimientosArr, "realizado_por");
         general[mainHeaders.indexOf("Autorizado por (movimiento)") + 1] = joinMovimientos(movimientosArr, "autorizado_por");
 
+        const infoGen = itemColumns(safeParseArray(r.informacion_general));
+        const infoRev = itemColumns(parseInformacionRevision(r.informacion_revision));
+        general[mainHeaders.indexOf("Campo (info. general)") + 1] = infoGen.campos;
+        general[mainHeaders.indexOf("Valor (info. general)") + 1] = infoGen.valores;
+        general[mainHeaders.indexOf("Observación (info. general)") + 1] = infoGen.observaciones;
+        general[mainHeaders.indexOf("Campo (info. revisión)") + 1] = infoRev.campos;
+        general[mainHeaders.indexOf("Valor (info. revisión)") + 1] = infoRev.valores;
+        general[mainHeaders.indexOf("Observación (info. revisión)") + 1] = infoRev.observaciones;
+
         const rootValues = new Array(mainHeaders.length).fill("");
         for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
         rootValues[colGen - 1] = linkGen || "—";
@@ -887,28 +912,7 @@ export async function buildRevisionVehiculosExcelConsolidado(
             cell.value = { text: linkMov, hyperlink: `#'Detalles'!A${aMov}` };
             cell.font = { color: { argb: "FF0563C1" }, underline: true };
         }
-        styleDataRow(rootRow, 0);
-
-        const itemRow = (tipo: string, idPrefix: string, item: any, idx: number) => {
-            const values = new Array(mainHeaders.length).fill("");
-            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            if (item?.kind === "heading") {
-                values[mainHeaders.indexOf("Campo (ítem)")] = excelCellString(item.label ?? item.title ?? "");
-            } else {
-                values[mainHeaders.indexOf("Campo (ítem)")] = excelCellString(item?.label ?? item?.key ?? "");
-                if (item?.kind === "signature") {
-                    values[mainHeaders.indexOf("Valor (ítem)")] = item?.value ? "Tiene firma" : "Sin firma";
-                } else {
-                    values[mainHeaders.indexOf("Valor (ítem)")] = excelCellString(item?.value ?? "");
-                }
-                values[mainHeaders.indexOf("Observación (ítem)")] = excelCellString(item?.observation ?? "");
-            }
-            const row = addMainRow(wsMain, values);
-            styleDataRow(row, 1);
-        };
-
-        safeParseArray(r.informacion_general).forEach((item: any, idx: number) => itemRow("Ítem info. general", "ig", item, idx));
-        parseInformacionRevision(r.informacion_revision).forEach((item: any, idx: number) => itemRow("Ítem info. revisión", "ir", item, idx));
+        styleDataRow(rootRow);
     }
 
     wsMain.autoFilter = {
@@ -923,7 +927,7 @@ export async function buildRevisionVehiculosExcelConsolidado(
             28, 24, 22, 28, 24, 28,
             14, 32, 36, 14, 12, 16, 16, 20,
             20, 24, 18,
-            26, 30, 30,
+            26, 30, 30, 26, 30, 30,
             22, 18, 14, 22, 22,
         ].map((w) => ({ width: w })),
     ];
