@@ -6,6 +6,7 @@ import { applyListing, distinctValues, type OutRow } from "./listing";
 import { mapIngresoUsuarioRow, mapLoginMarcaRow, mapTiempoAlmuerzoRow } from "./mappers";
 import { ParamError, parseReportParams } from "./params";
 import { loadPuestoHierarchy, matchesScope, parseScope } from "./scope";
+import { handleGuardifyStructure } from "./structure";
 import type { GuardifyReportModule } from "./types";
 
 const KEY = "k".repeat(32);
@@ -182,5 +183,26 @@ describe("manejador", () => {
         const r = await call(`con/options?${q}&dimension=puesto`, undefined, "options");
         assert.deepEqual(await r.json(), { values: ["P1", "P2"] });
         assert.equal((await call(`con/options?${q}&dimension=monto`, undefined, "options")).status, 400);
+    });
+});
+
+describe("estructura para Guardify", () => {
+    const db = {
+        e_estructura_puesto: { findMany: async () => [{ id: 7, codigo: "1000-P1", nombre: "SUPERVISORES", sucursal_id: 3 }, { id: 8, codigo: null, nombre: "SIN CORPO", sucursal_id: null }] },
+        e_estructura_sucursal: { findMany: async () => [{ id: 3, contrato_id: 2 }] },
+        e_estructura_contrato: { findMany: async () => [{ id: 2, cliente_id: 5, empresa_id: 1, division_id: null }] },
+    };
+    const call = (headers: Record<string, string>, e: Record<string, string | undefined> = env) => handleGuardifyStructure(new Request("http://x/api/guardify/structure", { headers }), { getDb: () => db, env: e });
+    it("pide la llave y no responde sin ella configurada", async () => {
+        assert.equal((await call({})).status, 401);
+        assert.equal((await call({ authorization: `Bearer ${KEY}` }, {})).status, 503);
+    });
+    it("devuelve cada puesto con su ubicación (y nulos si no la tiene)", async () => {
+        const r = await call({ authorization: `Bearer ${KEY}` });
+        assert.equal(r.status, 200);
+        assert.deepEqual((await r.json()).puestos, [
+            { id: 7, codigo: "1000-P1", nombre: "SUPERVISORES", corpo: 3, contrato: 2, cliente: 5, empresa: 1, division: null },
+            { id: 8, codigo: null, nombre: "SIN CORPO", corpo: null, contrato: null, cliente: null, empresa: null, division: null },
+        ]);
     });
 });
