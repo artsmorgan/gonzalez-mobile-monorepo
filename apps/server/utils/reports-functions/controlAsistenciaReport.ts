@@ -376,6 +376,7 @@ export async function buildControlAsistenciaExcelConsolidado(
         cell.border = border;
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     }
+    h.height = 32;
     // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
     // se ven los bordes que dibujamos manualmente.
     for (const sheet of [wsMain, wsDetails]) {
@@ -392,13 +393,15 @@ export async function buildControlAsistenciaExcelConsolidado(
         { width: 24 }, { width: 14 }, { width: 24 }, { width: 16 }, { width: 12 }, { width: 24 }, { width: 12 }, { width: 12 }, { width: 16 },
     ];
 
+    /** Altura fija y sin ajuste de texto: el contenido de las celdas no debe aumentar el tamaño de la fila. */
     const styleDataRow = (row: ExcelJS.Row) => {
         row.eachCell((cell, colNumber) => {
             if (colNumber === 1) return;
             cell.border = border;
-            cell.alignment = { vertical: "middle", wrapText: true };
+            cell.alignment = { vertical: "middle", horizontal: "left", wrapText: false };
         });
         row.getCell(2).font = { bold: true };
+        row.height = 22;
     };
 
     let totalDataRows = 0;

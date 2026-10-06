@@ -199,7 +199,7 @@ export function addMainRow(ws: ExcelJS.Worksheet, arr: unknown[]): ExcelJS.Row {
     return ws.addRow(["", ...arr]);
 }
 
-export type CambioRegistroInfo = { cedula: string; nombreCompleto: string; fechaHoraTexto: string };
+export type CambioRegistroInfo = { cedula: string; nombreCompleto: string; fechaHoraTexto: string; fechaTexto: string; horaTexto: string };
 
 /**
  * Trae, para cada `registro_id`, el último cambio registrado en `c_cambios_apps_modules` para
@@ -246,6 +246,8 @@ export async function fetchLatestCambiosPorRegistro(
             cedula: emp?.cedula ?? "",
             nombreCompleto,
             fechaHoraTexto: formatDateTimeDMY(info.created_at),
+            fechaTexto: formatDateOnlyDMY(info.created_at),
+            horaTexto: formatTimeOnlyHMS(info.created_at),
         });
     }
     return out;
