@@ -29,6 +29,8 @@ export const PREEXISTENT_REPORT_TABLES = new Set([
     "n_ejecutivo_cuenta",
     "pg_categoria_empleado",
     "pg_categoria_salarial",
+    // Solicitudes de vacaciones: el servicio `dynamic-api` (SERVER_URL) no conoce este modelo; este servidor sí, así que se lee directo.
+    "v_vacacion_solicitud",
 ]);
 
 type ReadArgs = {
