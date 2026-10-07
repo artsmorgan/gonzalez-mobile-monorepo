@@ -4,6 +4,7 @@ import type { OutRow } from "../listing";
 import { fmtDt } from "../mappers";
 import { buildNombre } from "../names";
 import type { ReportParams } from "../params";
+import { ReportUnavailableError } from "../errors";
 import { loadPuestoHierarchy, matchesScope, type Hierarchy } from "../scope";
 import type { GuardifyReportModule } from "../types";
 
@@ -106,12 +107,21 @@ const uniq = (xs: number[]) => [...new Set(xs.filter((n) => Number.isFinite(n) &
  * restringe al alcance.
  */
 export async function loadSolicitudVacaciones(db: ReportDataAccess, p: ReportParams): Promise<OutRow[]> {
-    const rows: any[] = await db.v_vacacion_solicitud!.findMany({
-        where: { fecha_inicio: { gte: new Date(`${p.from}T00:00:00.000Z`), lt: new Date(`${p.to}T00:00:00.000Z`) } },
-        select: COLS,
-        orderBy: { id: "desc" },
-        take: 50_000,
-    });
+    let rows: any[];
+    try {
+        rows = await db.v_vacacion_solicitud!.findMany({
+            where: { fecha_inicio: { gte: new Date(`${p.from}T00:00:00.000Z`), lt: new Date(`${p.to}T00:00:00.000Z`) } },
+            select: COLS,
+            orderBy: { id: "desc" },
+            take: 50_000,
+        });
+    } catch (e) {
+        // La base de planillas de algunos entornos todavía no tiene la vista de solicitudes de vacaciones.
+        if (/Tabla no soportada|does not exist|no existe|Unknown (model|field)|not found in Prisma/i.test(String((e as Error)?.message ?? e)) || (db.v_vacacion_solicitud as unknown) === undefined) {
+            throw new ReportUnavailableError("Este reporte todavía no está disponible: la base de datos no tiene la tabla de solicitudes de vacaciones.");
+        }
+        throw e;
+    }
     const d = db as any;
     const [empleados, plazas] = await Promise.all([
         findByIds<any>(d, "c_empleado", ids(rows, "empleado_id"), { codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true, cedula: true }),

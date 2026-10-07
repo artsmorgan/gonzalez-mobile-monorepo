@@ -1,5 +1,5 @@
 import { verifyGuardifyApiKey } from "./auth";
-import { ParamError, ScopeUnsupportedError, UnsupportedFilterError } from "./errors";
+import { ParamError, ReportUnavailableError, ScopeUnsupportedError, UnsupportedFilterError } from "./errors";
 import { applyFilters, applyListing, distinctValues, hasColumn, ListingError, MAX_OPTIONS_LIMIT, type OutRow } from "./listing";
 import { parseReportParams } from "./params";
 import type { GuardifyReportModule } from "./types";
@@ -79,6 +79,10 @@ export async function handleGuardifyReport(req: Request, modulo: string, kind: "
         if (e instanceof ParamError || e instanceof ListingError) {
             log(400, {}, auth.user);
             return json({ error: "bad_request", message: e.message }, 400);
+        }
+        if (e instanceof ReportUnavailableError) {
+            log(501, {}, auth.user);
+            return json({ error: "report_unavailable", message: e.message }, 501);
         }
         if (e instanceof ScopeUnsupportedError) {
             log(403, {}, auth.user);

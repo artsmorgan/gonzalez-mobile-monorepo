@@ -16,3 +16,11 @@ export class ScopeUnsupportedError extends Error {
         super(message);
     }
 }
+
+/** El reporte existe pero esta base de datos no tiene lo que necesita (una tabla): se responde 501 `report_unavailable`. */
+export class ReportUnavailableError extends Error {
+    status = 501 as const;
+    constructor(message: string) {
+        super(message);
+    }
+}

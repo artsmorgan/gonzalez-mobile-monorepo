@@ -108,3 +108,11 @@ describe("solicitud_vacaciones: alcance", () => {
         assert.deepEqual([o.id, o.fecha_inicio, o.dias, o.semanas, o.empleado, o.puesto, o.usuario_inserta], [9, "2026-09-14T00:00:00", null, 0, null, null, null]);
     });
 });
+
+describe("solicitud_vacaciones: base sin la tabla", () => {
+    it("responde «reporte no disponible» con un mensaje claro (no un error interno)", async () => {
+        const { ReportUnavailableError } = await import("../errors");
+        const db: any = { v_vacacion_solicitud: { findMany: async () => { throw new Error("Tabla no soportada o no encontrada en Prisma"); } } };
+        await assert.rejects(() => loadSolicitudVacaciones(db, params()), (e: unknown) => e instanceof ReportUnavailableError && /solicitudes de vacaciones/.test(e.message));
+    });
+});

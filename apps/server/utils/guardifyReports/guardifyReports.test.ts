@@ -243,6 +243,13 @@ describe("manejador", () => {
         assert.equal((await call(`con?${q}`, {})).status, 401);
         assert.equal((await handleGuardifyReport(new Request("http://x"), "con", "rows", { ...deps, env: {} })).status, 503);
     });
+    it("501 report_unavailable si a la base le falta lo que el reporte necesita", async () => {
+        const { ReportUnavailableError } = await import("./errors");
+        const falta: GuardifyReportModule = { ...mk("falta", true), load: async () => { throw new ReportUnavailableError("Falta la tabla."); } };
+        const r = await handleGuardifyReport(new Request(`http://x/api/guardify/reports/falta?${q}`, { headers: { authorization: `Bearer ${KEY}` } }), "falta", "rows", { ...deps, registry: { falta } });
+        assert.equal(r.status, 501);
+        assert.deepEqual(await r.json(), { error: "report_unavailable", message: "Falta la tabla." });
+    });
     it("404 si el reporte no existe, 400 si la petición es inválida", async () => {
         assert.equal((await call(`nada?${q}`)).status, 404);
         assert.equal((await call("con?from=hoy&to=mañana")).status, 400);
