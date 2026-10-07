@@ -99,6 +99,27 @@ const COLS = {
     estado_aprobacion: true, tipo_vacaciones: true, periodo: true, fecha_insercion: true, usuario_insercion: true,
 } as const;
 
+/**
+ * Cuando falta la tabla, deja en el log qué ve de verdad este servidor (solo lectura): los modelos de vacaciones del cliente Prisma y las
+ * tablas de vacaciones de la base. Sirve para saber si la tabla no existe o si el cliente no la conoce.
+ */
+async function logDiagnostico() {
+    try {
+        const { prisma } = await import("../../prismaClient");
+        const modelos = Object.keys(prisma as object).filter((k) => /vacac/i.test(k) && !k.startsWith("$") && !k.startsWith("_"));
+        let tablas: string[] = [];
+        try {
+            const r = (await (prisma as any).$queryRawUnsafe("SHOW TABLES LIKE 'v\\_vacacion%'")) as Record<string, string>[];
+            tablas = r.map((x) => String(Object.values(x)[0]));
+        } catch (e) {
+            tablas = [`(no se pudo consultar: ${String((e as Error).message).slice(0, 120)})`];
+        }
+        console.warn(JSON.stringify({ level: "warn", msg: "guardify_vacaciones_diagnostico", modelosPrisma: modelos, tablasBase: tablas }));
+    } catch (e) {
+        console.warn(JSON.stringify({ level: "warn", msg: "guardify_vacaciones_diagnostico_fallo", error: String(e).slice(0, 200) }));
+    }
+}
+
 const ids = (rows: any[], k: string) => rows.map((r) => Number(r[k]));
 const uniq = (xs: number[]) => [...new Set(xs.filter((n) => Number.isFinite(n) && n > 0))];
 
@@ -118,6 +139,7 @@ export async function loadSolicitudVacaciones(db: ReportDataAccess, p: ReportPar
     } catch (e) {
         // La base de planillas de algunos entornos todavía no tiene la vista de solicitudes de vacaciones.
         if (/Tabla no soportada|does not exist|no existe|Unknown (model|field)|not found in Prisma/i.test(String((e as Error)?.message ?? e)) || (db.v_vacacion_solicitud as unknown) === undefined) {
+            await logDiagnostico();
             throw new ReportUnavailableError("Este reporte todavía no está disponible: la base de datos no tiene la tabla de solicitudes de vacaciones.");
         }
         throw e;
