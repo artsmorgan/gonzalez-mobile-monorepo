@@ -53,7 +53,7 @@ describe("solicitud_vacaciones: carga", () => {
         const o = rows.find((r) => r.id === 1)!;
         assert.deepEqual(Object.keys(o), ["id", "creado", "consecutivo", "fecha_inicio", "fecha_fin", "dias", "semanas", "tipo_vacaciones", "periodo", "estado", "empleado", "cedula", "plaza", "puesto", "sucursal", "contrato", "cliente", "empresa", "division", "ejecutivo_cuenta", "observaciones", "usuario_inserta"]);
         assert.deepEqual([o.creado, o.consecutivo, o.fecha_inicio, o.fecha_fin, o.dias, o.semanas], ["2026-09-01T15:30:00", "VAC-1", "2026-09-14T00:00:00", "2026-09-25T00:00:00", 10, 2]);
-        assert.deepEqual([o.tipo_vacaciones, o.periodo, o.estado], ["DIS", "2025-2026", "Aprobada"]);
+        assert.deepEqual([o.tipo_vacaciones, o.periodo, o.estado], ["Dis", "2025-2026", "Aprobada"]);
         assert.deepEqual([o.empleado, o.cedula], ["1934 - Ana Rojas Mora", "1-111"]);
         assert.deepEqual([o.plaza, o.puesto, o.sucursal, o.contrato, o.cliente, o.empresa], ["254-P1 - Oficial", "P1 - Puesto", "S1 - Sucursal", "C1 - Contrato", "Cliente", "9 - Empresa"]);
         assert.deepEqual([o.division, o.ejecutivo_cuenta], ["Seguridad", "Luis Mora"]);
@@ -114,5 +114,16 @@ describe("solicitud_vacaciones: base sin la tabla", () => {
         const { ReportUnavailableError } = await import("../errors");
         const db: any = { v_vacacion_solicitud: { findMany: async () => { throw new Error("Tabla no soportada o no encontrada en Prisma"); } } };
         await assert.rejects(() => loadSolicitudVacaciones(db, params()), (e: unknown) => e instanceof ReportUnavailableError && /solicitudes de vacaciones/.test(e.message));
+    });
+});
+
+describe("solicitud_vacaciones: valores legibles", () => {
+    it("convierte los códigos de la base en texto", async () => {
+        const { legible } = await import("./solicitudVacaciones");
+        assert.equal(legible("ESTADO_SOLICITADO"), "Solicitado");
+        assert.equal(legible("DISFRUTE"), "Disfrute");
+        assert.equal(legible("estado_en_proceso"), "En proceso");
+        assert.equal(legible(null), null);
+        assert.equal(legible("  "), null);
     });
 });

@@ -75,9 +75,9 @@ export function mapSolicitudVacacionesRow(r: any, l: VacacionLookups = EMPTY): O
         fecha_fin: fmtDay(r.fecha_fin),
         dias: num(r.dias),
         semanas: num(r.semanas),
-        tipo_vacaciones: txt(r.tipo_vacaciones),
+        tipo_vacaciones: legible(r.tipo_vacaciones),
         periodo: txt(r.periodo),
-        estado: txt(r.estado_aprobacion),
+        estado: legible(r.estado_aprobacion),
         empleado: nombre ? (codigo ? `${codigo} - ${nombre}` : nombre) : codigo,
         cedula: txt(emp?.cedula),
         plaza: withCode(plaza?.codigo_plaza, plaza?.nombre),
@@ -98,6 +98,12 @@ const COLS = {
     id: true, empleado_id: true, plaza_id: true, fecha_inicio: true, fecha_fin: true, dias: true, semanas: true, observaciones: true, consecutivo: true,
     estado_aprobacion: true, tipo_vacaciones: true, periodo: true, fecha_insercion: true, usuario_insercion: true,
 } as const;
+
+/** `ESTADO_SOLICITADO` → «Solicitado», `DISFRUTE` → «Disfrute»: la base guarda códigos. */
+export function legible(v: unknown): string | null {
+    const s = String(v ?? "").trim().replace(/^ESTADO_/i, "").replace(/_/g, " ").toLowerCase();
+    return s ? s.charAt(0).toUpperCase() + s.slice(1) : null;
+}
 
 /**
  * Cuando falta la tabla, deja en el log qué ve de verdad este servidor (solo lectura): los modelos de vacaciones del cliente Prisma y las

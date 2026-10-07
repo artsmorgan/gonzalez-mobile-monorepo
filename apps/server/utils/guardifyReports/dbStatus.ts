@@ -41,7 +41,9 @@ export async function handleDbStatus(req: Request, deps: { prisma: any; models: 
             migrations = rows.map((r) => ({ name: r.n, finished: !!r.f, rolledBack: !!r.r, at: r.s ? new Date(r.s).toISOString() : null }));
         } catch { /* la base no tiene tabla de migraciones */ }
         const drift = schemaDrift(deps.models, cols);
-        return json({ database: db, tables: new Set(cols.map((c) => c.table)).size, migrationsTable: migrations !== null, migrations, ...drift });
+        // Con `?inventario=1` también se devuelve tabla → columnas (para compararlo con el esquema del repo fuera del servidor).
+        const inventory = new URL(req.url).searchParams.get("inventario") === "1" ? cols.reduce<Record<string, string[]>>((o, c) => { (o[c.table] ??= []).push(c.column); return o; }, {}) : undefined;
+        return json({ database: db, tables: new Set(cols.map((c) => c.table)).size, migrationsTable: migrations !== null, migrations, ...drift, ...(inventory ? { inventory } : {}) });
     } catch (e) {
         console.error(JSON.stringify({ level: "error", msg: "guardify_db_status_failed", error: String(e).slice(0, 300) }));
         return json({ error: "internal", message: "No se pudo leer el estado de la base.", detail: String(e).slice(0, 300) }, 500);

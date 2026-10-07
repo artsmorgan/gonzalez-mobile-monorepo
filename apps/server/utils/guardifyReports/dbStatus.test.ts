@@ -28,5 +28,8 @@ describe("estado de la base frente al esquema", () => {
         assert.equal(b.database, "planillas");
         assert.deepEqual(b.migrations, [{ name: "0_init", finished: true, rolledBack: false, at: "2026-01-01T00:00:00.000Z" }]);
         assert.ok(b.missingTables.includes("tabla_nueva"));
+        assert.equal(b.inventory, undefined);
+        const inv = await handleDbStatus(new Request("http://x?inventario=1", { headers: { authorization: `Bearer ${KEY}` } }), { prisma, models, env: { GUARDIFY_REPORTS_API_KEY: KEY } });
+        assert.deepEqual((await inv.json()).inventory, { c_empleado: ["id"] });
     });
 });
