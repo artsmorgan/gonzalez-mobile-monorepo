@@ -24,6 +24,12 @@ describe("maestro de quejas: mapeo", () => {
         assert.equal((o.descripcion as string).length, 500);
         assert.deepEqual([o.tipo_queja, o.resolucion, o.estimacion_dannio, o.creado_por], [null, null, null, "11 - Carla Soto"]);
     });
+    it("agrega el ejecutivo de cuenta y completa la división cuando la fila no la trae", () => {
+        const o = mapMaestroQuejaRow(raw, { ejecutivo: "Luis Mora", division: "Otra" });
+        assert.deepEqual([o.ejecutivo_cuenta, o.division, o.creado_por, o.recibida_por], ["Luis Mora", "División", "11 - Carla Soto", "Ana"]);
+        const sin = mapMaestroQuejaRow({ ...raw, division_nombre: "0" }, { division: "Seguridad" });
+        assert.deepEqual([sin.division, mapMaestroQuejaRow(raw).ejecutivo_cuenta], ["Seguridad", null]);
+    });
     it("nunca expone la firma", () => {
         const s = JSON.stringify(mapMaestroQuejaRow(raw));
         assert.equal(s.includes("base64"), false);
@@ -39,16 +45,30 @@ describe("maestro de quejas: carga y alcance", () => {
     const data = [{ ...raw, id: 1, contrato_id: 4 }, { ...raw, id: 2, contrato_id: 9, puesto_id: 99 }];
     let seen: any;
     const query = async (_db: any, filters: any, orderKey: string) => { seen = { filters, orderKey }; return data; };
+    const tables: Record<string, any[]> = {
+        e_estructura_sucursal: [{ id: 5, ejecutivoCuenta_id: 70 }],
+        n_ejecutivo_cuenta: [{ id: 70, nombre: "Luis Mora" }],
+        e_estructura_contrato: [{ id: 4, division_id: 30 }, { id: 9, division_id: 30 }],
+        n_division: [{ id: 30, nombre: "Seguridad" }],
+    };
+    const calls: string[] = [];
+    const fakeDb = new Proxy({}, { get: (_t, name: string) => ({ findMany: async (a: any) => { calls.push(name); const ids = a?.where?.id?.in ?? []; return (tables[name] ?? []).filter((x) => ids.includes(x.id)); } }) }) as any;
     const params = (extra: Record<string, string> = {}) => parseReportParams(new URLSearchParams({ from: "2026-09-01", to: "2026-10-01", ...extra }));
     it("pide el periodo [from, to) con límite inclusivo al último día", async () => {
-        await loadMaestroQuejas({} as any, params(), query);
+        await loadMaestroQuejas(fakeDb, params(), query);
         assert.deepEqual(seen.filters, { creadoDesde: "2026-09-01T00:00:00", creadoHasta: "2026-09-30T23:59:59" });
     });
     it("filtra por alcance y un alcance vacío no ve nada", async () => {
-        assert.equal((await loadMaestroQuejas({} as any, params(), query)).length, 2);
-        assert.deepEqual((await loadMaestroQuejas({} as any, params({ scope: "contrato:9" }), query)).map((r) => r.id), [2]);
-        assert.deepEqual((await loadMaestroQuejas({} as any, params({ scope: "puesto:6,puesto:99" }), query)).map((r) => r.id), [1, 2]);
-        assert.equal((await loadMaestroQuejas({} as any, params({ scope: "" }), query)).length, 0);
+        assert.equal((await loadMaestroQuejas(fakeDb, params(), query)).length, 2);
+        assert.deepEqual((await loadMaestroQuejas(fakeDb, params({ scope: "contrato:9" }), query)).map((r) => r.id), [2]);
+        assert.deepEqual((await loadMaestroQuejas(fakeDb, params({ scope: "puesto:6,puesto:99" }), query)).map((r) => r.id), [1, 2]);
+        assert.equal((await loadMaestroQuejas(fakeDb, params({ scope: "" }), query)).length, 0);
+    });
+    it("completa ejecutivo y división por lote (sin consultas por fila)", async () => {
+        calls.length = 0;
+        const rows = await loadMaestroQuejas(fakeDb, params(), async () => [{ ...raw, id: 1 }, { ...raw, id: 2, corpo_id: 99, division_nombre: "0" }, { ...raw, id: 3, division_nombre: "0" }]);
+        assert.deepEqual(rows.map((r) => [r.ejecutivo_cuenta, r.division]), [["Luis Mora", "División"], [null, "Seguridad"], ["Luis Mora", "Seguridad"]]);
+        assert.deepEqual(calls.sort(), ["e_estructura_contrato", "e_estructura_sucursal", "n_division", "n_ejecutivo_cuenta"]);
     });
     it("declara alcance y sus claves existen en la fila", () => {
         assert.equal(maestroQuejas.supportsScope, true);

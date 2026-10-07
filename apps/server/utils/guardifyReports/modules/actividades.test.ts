@@ -23,7 +23,8 @@ const { actividades, buildActividadesRows, mapActividadPuestoRow } = require("./
 
 const tables: Record<string, any[]> = {
     e_estructura_puesto: [{ id: 40, sucursal_id: 30 }, { id: 41, sucursal_id: 31 }],
-    e_estructura_sucursal: [{ id: 30, contrato_id: 20, nombre: "Sede", nro_sucursal: "S1" }, { id: 31, contrato_id: 21, nombre: "Otra", nro_sucursal: null }],
+    n_ejecutivo_cuenta: [{ id: 7, nombre: "Rosa Vega" }],
+    e_estructura_sucursal: [{ id: 30, contrato_id: 20, nombre: "Sede", nro_sucursal: "S1", ejecutivoCuenta_id: 7 }, { id: 31, contrato_id: 21, nombre: "Otra", nro_sucursal: null }],
     e_estructura_contrato: [{ id: 20, cliente_id: 5, empresa_id: 1, division_id: 9, nombre: "Contrato", nro_contrato: "C-20" }, { id: 21, cliente_id: 6, empresa_id: 1, division_id: null, nombre: "Otro", nro_contrato: null }],
     e_estructura_empresa: [{ id: 1, nombre: "Gonzalez", codigo: "G" }],
     e_estructura_cliente: [{ id: 5, nombre: "Cliente 5" }, { id: 6, nombre: "Cliente 6" }],
@@ -66,7 +67,8 @@ describe("actividades: mapeo", () => {
     it("mapea una fila por actividad y puesto, con conteos y sin artículos", () => {
         const n = { empresa: new Map([[1, "G - Gonzalez"]]), cliente: new Map([[5, "Cliente 5"]]), division: new Map([[9, "Norte"]]), contrato: new Map([[20, "C-20 - Contrato"]]), corpo: new Map([[30, "S1 - Sede"]]) };
         const a = act();
-        const o = mapActividadPuestoRow(a, a.e_actividades_puesto[0], { puesto: 40, corpo: 30, contrato: 20, cliente: 5, empresa: 1, division: 9 }, n);
+        const o = mapActividadPuestoRow(a, a.e_actividades_puesto[0], { puesto: 40, corpo: 30, contrato: 20, cliente: 5, empresa: 1, division: 9 }, n, new Map([[30, "Rosa Vega"]]));
+        assert.equal(o.ejecutivo_cuenta, "Rosa Vega");
         assert.equal(o.id, 100);
         assert.equal(o.fecha_inicio, "2026-09-05T00:00:00");
         assert.equal(o.fecha_fin, null);
@@ -80,7 +82,7 @@ describe("actividades: mapeo", () => {
     it("una actividad sin puestos sale sin ubicación y con nulos", () => {
         const o = mapActividadPuestoRow(act({ tipo_turno: null, descripcion_actividad: null, e_actividades_puesto: [] }), null, undefined, { empresa: new Map(), cliente: new Map(), division: new Map(), contrato: new Map(), corpo: new Map() });
         assert.equal(o.id, 1);
-        assert.deepEqual([o.puesto, o.empresa, o.tipo_turno, o.descripcion, o.plazas], [null, null, null, null, 0]);
+        assert.deepEqual([o.puesto, o.empresa, o.tipo_turno, o.descripcion, o.plazas, o.ejecutivo_cuenta], [null, null, null, null, 0, null]);
     });
 });
 
@@ -93,6 +95,8 @@ describe("actividades: periodo y alcance", () => {
         assert.deepEqual([r40.empresa, r40.cliente, r40.division, r40.contrato, r40.sucursal], ["G - Gonzalez", "Cliente 5", "Norte", "C-20 - Contrato", "S1 - Sede"]);
         const r41 = out.find((r) => r.id === 101)!;
         assert.deepEqual([r41.cliente, r41.division, r41.contrato, r41.sucursal], ["Cliente 6", null, "Otro", "Otra"]);
+        assert.equal(r40.ejecutivo_cuenta, "Rosa Vega"); // ejecutivo de la sucursal, en lote
+        assert.equal(r41.ejecutivo_cuenta, null);
     });
     it("con alcance: solo los puestos dentro; las actividades sin puestos quedan fuera; vacío no ve nada", async () => {
         const one = (nivel: any, id: number) => buildActividadesRows(db, acts, "2026-09-01", "2026-10-01", [{ nivel, id }]);

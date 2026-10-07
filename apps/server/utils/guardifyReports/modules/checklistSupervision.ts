@@ -82,12 +82,15 @@ export function mapChecklistSupervisionRow(r: any, creador?: any): OutRow {
     };
 }
 
-/** Checklist de supervisión. El periodo se aplica a `fecha` (la fecha del reporte). Cada fila trae los ids de su ubicación. */
+/**
+ * Checklist de supervisión. El periodo se aplica a `fecha` (la «Fecha» del Excel; `creado` es la fecha de registro). Cada fila trae los
+ * ids de su ubicación. Para filtrar: `ejecutivo_cuenta` es el ejecutivo propio del checklist y `creado_por` el usuario que lo registró.
+ */
 export const checklistSupervision: GuardifyReportModule = {
     id: "checklist_supervision",
     supportsScope: true,
     searchKeys: ["empleado", "ejecutivo_cuenta", "puesto", "sucursal", "contrato", "cliente", "creado_por"],
-    filterKeys: ["empresa", "cliente", "contrato", "sucursal", "puesto", "ejecutivo_cuenta"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "creado_por"],
     sortKeys: ["fecha", "creado", "empresa", "cliente", "contrato", "sucursal", "puesto", "empleado", "ejecutivo_cuenta", "creado_por", "secciones", "preguntas", "fotos", "articulos", "articulos_con_diferencia"],
     defaultSort: "fecha",
     async load(db, p) {

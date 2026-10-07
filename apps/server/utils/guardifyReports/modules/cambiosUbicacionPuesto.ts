@@ -47,7 +47,8 @@ export function mapCambioUbicacionPuestoRow(r: any): OutRow {
 }
 
 /**
- * Cambios en ubicación del puesto. La consulta ya trae la ubicación completa del puesto en la estructura
+ * Cambios en ubicación del puesto. El periodo se aplica a `fecha` (`created_at`, la «Fecha» del Excel). `responsable` (código - nombre)
+ * es quien registró el cambio (`created_by`): es el «Usuario inserta». Latitud y longitud no se exponen (decisión de seguridad). La consulta ya trae la ubicación completa del puesto en la estructura
  * (empresa, cliente, división, contrato, sucursal), así que admite alcance por unidad.
  */
 // El rango se amplía un día por lado en la consulta (la zona horaria del servidor puede correr los límites) y se recorta exacto aquí.
@@ -55,7 +56,7 @@ export const cambiosUbicacionPuesto: GuardifyReportModule = {
     id: "cambios_ubicacion_puesto",
     supportsScope: true,
     searchKeys: ["puesto", "sucursal", "contrato", "cliente", "responsable"],
-    filterKeys: ["empresa", "cliente", "contrato", "sucursal", "puesto", "tenia_ubicacion"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "responsable", "tenia_ubicacion"],
     sortKeys: ["fecha", "empresa", "cliente", "contrato", "sucursal", "puesto", "responsable", "metros"],
     defaultSort: "fecha",
     async load(db, p) {

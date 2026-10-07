@@ -63,6 +63,9 @@ describe("producto no conforme: mapeo", () => {
         assert.equal(String(o.descripcion).length, 500);
         assert.ok(String(o.descripcion).endsWith("…"));
         assert.equal(o.creado_por, "9 - Ana Pérez");
+        assert.equal(o.ejecutivo_cuenta, null);
+        assert.equal(mapProductoNoConformeRow(crudo(), "Marta Vega").ejecutivo_cuenta, "Marta Vega");
+        assert.equal(Object.keys(o).at(-1), "ejecutivo_cuenta");
     });
     it("no expone firmas aunque vengan en la fila ni si se guardan en un campo de texto", () => {
         const o = mapProductoNoConformeRow(crudo({ responsable_aprobar: "data:image/png;base64,AAAA" }));
@@ -93,11 +96,15 @@ describe("producto no conforme: carga y alcance", () => {
         ],
         e_estructura_puesto: [{ id: 6, nombre: "Puesto", codigo: "P6" }],
         c_empleado: [{ id: 9, codigo: "9", nombre: "Ana", primer_apellido: "Pérez", segundo_apellido: null }],
+        e_estructura_sucursal: [{ id: 5, ejecutivoCuenta_id: 8 }, { id: 50, ejecutivoCuenta_id: null }],
+        n_ejecutivo_cuenta: [{ id: 8, nombre: "Marta Vega" }],
     };
     it("sin alcance trae el periodo y deja fuera el día `to`", async () => {
         const rows = await productoNoConforme.load(fakeDb(tables), P);
         assert.deepEqual(rows.map((r) => r.id).sort(), [1, 2]);
         assert.equal(rows.find((r) => r.id === 1)!.puesto, "P6 - Puesto");
+        assert.equal(rows.find((r) => r.id === 1)!.ejecutivo_cuenta, "Marta Vega");
+        assert.equal(rows.find((r) => r.id === 2)!.ejecutivo_cuenta, null);
     });
     it("con alcance deja solo los nodos pedidos (unión) y vacío no ve nada", async () => {
         const ids = async (scope: string) => (await productoNoConforme.load(fakeDb(tables), { ...P, scope: parseScope(scope) })).map((r) => r.id).sort();

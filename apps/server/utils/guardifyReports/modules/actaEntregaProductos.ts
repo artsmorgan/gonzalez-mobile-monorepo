@@ -1,4 +1,5 @@
 import { queryActaEntregaProductos } from "../../reports-functions/actaEntregaProductos";
+import { ejecutivoPorCorpo } from "../enrich";
 import type { OutRow } from "../listing";
 import { fmtDt } from "../mappers";
 import { addDays } from "../params";
@@ -25,8 +26,18 @@ function parseDetalle(raw: unknown): Array<Record<string, unknown>> {
     }
 }
 
-/** Acta de entrega de productos (`c_acta_entre_producto`). Nunca se exponen `firma_entrega` ni `firma_recibe` (imágenes). */
-export function mapActaEntregaRow(r: any): OutRow {
+const persona = (cedula: unknown, nombre: unknown): string | null => {
+    const n = txt(nombre);
+    if (!n) return null;
+    const c = txt(cedula);
+    return c ? `${c} - ${n}` : n;
+};
+
+/**
+ * Acta de entrega de productos (`c_acta_entre_producto`). Nunca se exponen `firma_entrega` ni `firma_recibe` (imágenes).
+ * `ejecutivo` = ejecutivo de cuenta de la sucursal (se carga en lote en `load`).
+ */
+export function mapActaEntregaRow(r: any, ejecutivo: string | null = null): OutRow {
     const items = parseDetalle(r.detalle);
     const descripcion = items.map((i) => txt(i?.descripcion)).filter(Boolean).join("; ");
     return {
@@ -46,10 +57,15 @@ export function mapActaEntregaRow(r: any): OutRow {
         puesto: nameOrNull(r.puesto_nombre, r.puesto_id),
         articulos: items.length,
         descripcion: descripcion ? descripcion.slice(0, 500) : null,
+        ejecutivo_cuenta: txt(ejecutivo),
+        // Quienes intervienen, «cédula - nombre» de quien entrega y de quien recibe: el filtro «Empleado» busca por cédula o nombre en cualquiera de los dos.
+        empleado: [persona(r.cedula_entrega, r.nombre_entrega), persona(r.cedula_recibe, r.nombre_recibe)].filter(Boolean).join(" · ").slice(0, 500) || null,
     };
 }
 
-/** Acta de entrega de productos. Cada fila trae empresa, cliente, división, contrato, sucursal y puesto: admite alcance. */
+/**
+ * Acta de entrega de productos. Periodo: `fecha` (la fecha del acta). La tabla no guarda consecutivo ni quién registró el acta.
+ * Cada fila trae empresa, cliente, división, contrato, sucursal y puesto: admite alcance. */
 export const actaEntregaProductos: GuardifyReportModule = {
     id: "acta_entrega_productos",
     supportsScope: true,
@@ -63,6 +79,7 @@ export const actaEntregaProductos: GuardifyReportModule = {
         const kept = !scope
             ? rows
             : rows.filter((r: any) => matchesScope({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.corpo_id, puesto: r.puesto_id }, scope));
-        return kept.map(mapActaEntregaRow);
+        const ejecutivos = await ejecutivoPorCorpo(db, kept.map((r: any) => r.corpo_id));
+        return kept.map((r: any) => mapActaEntregaRow(r, ejecutivos.get(Number(r.corpo_id)) ?? null));
     },
 };

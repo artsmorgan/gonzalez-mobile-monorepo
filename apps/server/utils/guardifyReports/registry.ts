@@ -30,6 +30,7 @@ import { registroInduccionRecorrido } from "./modules/registroInduccionRecorrido
 import { registroVehiculosCorporativos } from "./modules/registroVehiculosCorporativos";
 import { registroVisitas } from "./modules/registroVisitas";
 import { revisionVehiculos } from "./modules/revisionVehiculos";
+import { solicitudVacaciones } from "./modules/solicitudVacaciones";
 import { solicitudesPermiso } from "./modules/solicitudesPermiso";
 import { tiempoAlmuerzo } from "./modules/tiempoAlmuerzo";
 import { visitasVehiculos } from "./modules/visitasVehiculos";
@@ -38,6 +39,6 @@ import type { GuardifyReportModule } from "./types";
 /** Reportes disponibles para Guardify. Agregar uno nuevo = un módulo en `modules/` y una línea aquí (y su definición en el manifiesto de Guardify). */
 export const GUARDIFY_REPORT_MODULES: Record<string, GuardifyReportModule> = Object.fromEntries(
     [
-        accionesPersonales, actaEntregaProductos, actividades, agendaMinuta, aperturaCierrePuesto, apreciacionVulnerabilidad, articulosPuesto, bitacoraNovedades, cambiosUbicacionPuesto, checklistSupervision, controlAsistencia, documentosEntregados, encuestaSatisfaccion, entregaPuesto, evaluacionPersonal, incidentes, ingresosUsuario, llaveros, llaves, loginMarca, maestroQuejas, mantenimientoArticulos, manualesPuesto, mutuosAcuerdos, notasVoz, productoNoConforme, registroCapacitaciones, registroInduccionGeneral, registroInduccionRecorrido, registroVehiculosCorporativos, registroVisitas, revisionVehiculos, solicitudesPermiso, tiempoAlmuerzo, visitasVehiculos,
+        accionesPersonales, actaEntregaProductos, actividades, agendaMinuta, aperturaCierrePuesto, apreciacionVulnerabilidad, articulosPuesto, bitacoraNovedades, cambiosUbicacionPuesto, checklistSupervision, controlAsistencia, documentosEntregados, encuestaSatisfaccion, entregaPuesto, evaluacionPersonal, incidentes, ingresosUsuario, llaveros, llaves, loginMarca, maestroQuejas, mantenimientoArticulos, manualesPuesto, mutuosAcuerdos, notasVoz, productoNoConforme, registroCapacitaciones, registroInduccionGeneral, registroInduccionRecorrido, registroVehiculosCorporativos, registroVisitas, revisionVehiculos, solicitudVacaciones, solicitudesPermiso, tiempoAlmuerzo, visitasVehiculos,
     ].map((m) => [m.id, m]),
 );

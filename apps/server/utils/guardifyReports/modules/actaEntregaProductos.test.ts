@@ -46,6 +46,8 @@ describe("acta_entrega_productos: mapeo", () => {
         assert.equal(o.articulos, 2);
         assert.equal(o.descripcion, "Camisa; Pantalón");
         assert.deepEqual([o.nombre_recibe, o.cedula_recibe, o.puesto, o.sucursal], ["Beto Mora", "2-222", "P40 - Recepción", "S1 - Sede"]);
+        assert.equal(o.ejecutivo_cuenta, null);
+        assert.equal(o.empleado, "1-111 - Ana Soto · 2-222 - Beto Mora");
         const s = JSON.stringify(o);
         assert.equal(s.includes("base64"), false);
         assert.equal(s.includes("BBBB"), false);
@@ -57,6 +59,10 @@ describe("acta_entrega_productos: mapeo", () => {
         assert.equal(o.nombre_recibe, null);
         assert.equal(o.empresa, null);
         assert.equal(o.fecha, null);
+        assert.equal(o.empleado, "1-111 - Ana Soto"); // solo quien entrega
+        assert.equal(mapActaEntregaRow(raw({ nombre_entrega: "", nombre_recibe: "" })).empleado, null);
+        assert.equal(mapActaEntregaRow(raw({ cedula_recibe: "" }), "  Rosa Vega ").empleado, "1-111 - Ana Soto · Beto Mora");
+        assert.equal(mapActaEntregaRow(raw(), "  Rosa Vega ").ejecutivo_cuenta, "Rosa Vega");
     });
     it("recorta la descripción a 500 caracteres", () => {
         const o = mapActaEntregaRow(raw({ detalle: JSON.stringify([{ descripcion: "x".repeat(900) }]) }));
@@ -66,14 +72,23 @@ describe("acta_entrega_productos: mapeo", () => {
 
 describe("acta_entrega_productos: alcance", () => {
     const rows = [raw({ id: 1 }), raw({ id: 2, contrato_id: 21, corpo_id: 31, puesto_id: 41, division_id: 10 })];
-    const tables: Record<string, any[]> = { c_acta_entre_producto: rows };
-    const db = new Proxy({}, { get: (_t, name: string) => ({ findMany: async () => tables[name] ?? [] }) }) as any;
+    const tables: Record<string, any[]> = {
+        c_acta_entre_producto: rows,
+        e_estructura_sucursal: [{ id: 30, ejecutivoCuenta_id: 7 }, { id: 31, ejecutivoCuenta_id: null }],
+        n_ejecutivo_cuenta: [{ id: 7, nombre: "Rosa Vega" }],
+    };
+    const db = new Proxy({}, { get: (_t, name: string) => ({ findMany: async (a: any = {}) => (tables[name] ?? []).filter((r) => !a.where?.id?.in || a.where.id.in.includes(r.id)) }) }) as any;
     const p = (scope: any) => ({ from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: null, dir: "desc" as const, q: null, filters: [], scope });
     it("sin alcance trae todo; con alcance filtra por nivel; vacío no ve nada", async () => {
         assert.equal((await actaEntregaProductos.load(db, p(null))).length, 2);
         assert.deepEqual((await actaEntregaProductos.load(db, p([{ nivel: "contrato", id: 21 }]))).map((r) => r.id), [2]);
         assert.deepEqual((await actaEntregaProductos.load(db, p([{ nivel: "division", id: 9 }, { nivel: "puesto", id: 41 }]))).map((r) => r.id).sort(), [1, 2]);
         assert.deepEqual(await actaEntregaProductos.load(db, p([])), []);
+    });
+    it("agrega el ejecutivo de cuenta de la sucursal en lote", async () => {
+        const out = await actaEntregaProductos.load(db, p(null));
+        assert.equal(out.find((r) => r.id === 1)!.ejecutivo_cuenta, "Rosa Vega");
+        assert.equal(out.find((r) => r.id === 2)!.ejecutivo_cuenta, null);
     });
     it("declara claves que existen en la fila", () => {
         const keys = Object.keys(mapActaEntregaRow(raw()));

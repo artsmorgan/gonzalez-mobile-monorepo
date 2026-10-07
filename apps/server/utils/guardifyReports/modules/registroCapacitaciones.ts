@@ -1,3 +1,4 @@
+import { divisionPorContrato, ejecutivoPorCorpo, findByIds, nombresEmpleado, usuarioInserta } from "../enrich";
 import { fmtDt } from "../mappers";
 import type { OutRow } from "../listing";
 import { addDays } from "../params";
@@ -19,6 +20,11 @@ const nombre = (v: unknown, id: unknown): string | null => {
 /**
  * Registro de capacitaciones (`e_registro_capacitaciones`). Se omiten `firma_responsable` (firma en base64), `file` y los
  * archivos adjuntos. Los participantes salen como texto («código - nombre; …», recortado) y los puestos como conteo.
+ *
+ * Columnas para los filtros (las agrega `load`): `division` es el nombre de la división del contrato (sin código; con la de la
+ * cabecera como respaldo), `ejecutivo_cuenta` el de la sucursal, `usuario_inserta` quien registró la capacitación
+ * (`responsable_id` guarda al usuario de la sesión que la creó) y `puestos_destino` los puestos a los que se dirige
+ * («código - nombre; …», recortado).
  */
 export function mapRegistroCapacitacionRow(r: any): OutRow {
     const empleados: any[] = Array.isArray(r.empleados_cap) ? r.empleados_cap : Array.isArray(r.e_capacitacion_empleado) ? r.e_capacitacion_empleado : [];
@@ -33,7 +39,7 @@ export function mapRegistroCapacitacionRow(r: any): OutRow {
         cedula_responsable: txt(r.cedula_responsable),
         empresa: nombre(r.empresa_nombre, r.empresa_id),
         cliente: nombre(r.cliente_nombre, r.cliente_id),
-        division: nombre(r.division_nombre, r.division_id),
+        division: txt(r.division_contrato) ?? nombre(r.division_nombre, r.division_id),
         contrato: nombre(r.contrato_nombre, r.contrato_id),
         sucursal: nombre(r.corpo_nombre, r.corpo_id),
         puesto: nombre(r.puesto_nombre, r.puesto_id),
@@ -42,7 +48,29 @@ export function mapRegistroCapacitacionRow(r: any): OutRow {
         participantes: txt(empleados.map((e) => String(e?.label ?? "").trim()).filter(Boolean).join("; ")),
         descripcion: txt(r.descripcion),
         observaciones: txt(r.observaciones),
+        ejecutivo_cuenta: txt(r.ejecutivo_cuenta_nombre),
+        usuario_inserta: txt(r.usuario_inserta_nombre),
+        puestos_destino: txt(puestos.map((x) => String(x?.label ?? "").trim()).filter(Boolean).join("; ")),
     };
+}
+
+/**
+ * Agrega, por lote (una consulta por dato, no por fila), el ejecutivo de la sucursal, la división (la del contrato; si no hay contrato,
+ * el nombre simple de la de la cabecera) y el usuario que registró.
+ */
+export async function enrichCapacitaciones(db: any, rows: any[]): Promise<any[]> {
+    const [ejecutivos, divisionesContrato, nombres, divisionesPropias] = await Promise.all([
+        ejecutivoPorCorpo(db, rows.map((r) => r.corpo_id)),
+        divisionPorContrato(db, rows.map((r) => r.contrato_id)),
+        nombresEmpleado(db, rows.map((r) => r.responsable_id)),
+        findByIds<{ nombre: string | null }>(db, "n_division", rows.map((r) => r.division_id), { nombre: true }),
+    ]);
+    return rows.map((r) => ({
+        ...r,
+        ejecutivo_cuenta_nombre: ejecutivos.get(Number(r.corpo_id)) ?? null,
+        division_contrato: divisionesContrato.get(Number(r.contrato_id)) ?? (String(divisionesPropias.get(Number(r.division_id))?.nombre ?? "").trim() || null),
+        usuario_inserta_nombre: usuarioInserta(r.responsable_id, nombres),
+    }));
 }
 
 /**
@@ -63,18 +91,18 @@ export async function filterCapacitacionesByScope(db: any, rows: any[], scope: S
     );
 }
 
-/** Registro de capacitaciones (`e_registro_capacitaciones`). */
+/** Registro de capacitaciones (`e_registro_capacitaciones`). El periodo `from/to` se aplica a `fecha` (la fecha de la capacitación, la «Fecha» del Excel). */
 export const registroCapacitaciones: GuardifyReportModule = {
     id: "registro_capacitaciones",
     supportsScope: true,
-    searchKeys: ["titulo", "responsable", "cedula_responsable", "participantes", "puesto"],
-    filterKeys: ["tipo", "resultado", "empresa", "cliente", "contrato", "sucursal", "puesto"],
-    sortKeys: ["fecha", "titulo", "tipo", "resultado", "responsable", "empresa", "cliente", "contrato", "sucursal", "puesto", "empleados", "puestos"],
+    searchKeys: ["titulo", "responsable", "cedula_responsable", "participantes", "puestos_destino", "puesto"],
+    filterKeys: ["tipo", "resultado", "division", "responsable", "participantes", "puestos_destino", "ejecutivo_cuenta", "usuario_inserta", "empresa", "cliente", "contrato", "sucursal", "puesto"],
+    sortKeys: ["fecha", "titulo", "tipo", "resultado", "responsable", "division", "ejecutivo_cuenta", "usuario_inserta", "empresa", "cliente", "contrato", "sucursal", "puesto", "empleados", "puestos"],
     defaultSort: "fecha",
     async load(db, p) {
         // Import diferido: las consultas arrastran exceljs/archiver; así el mapeo y el filtro por alcance se pueden probar sin ellos.
         const { queryRegistroCapacitacionesRows } = await import("../../reports-functions/registroCapacitacionesReport");
         const rows = await queryRegistroCapacitacionesRows(db, { creadoDesde: `${p.from}T00:00:00`, creadoHasta: `${addDays(p.to, -1)}T23:59:59` }, "created_at");
-        return (await filterCapacitacionesByScope(db, rows, p.scope)).map(mapRegistroCapacitacionRow);
+        return (await enrichCapacitaciones(db, await filterCapacitacionesByScope(db, rows, p.scope))).map(mapRegistroCapacitacionRow);
     },
 };

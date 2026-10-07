@@ -3,6 +3,7 @@ import { normalizeControlAsistenciaFilters, queryControlAsistenciaRows } from ".
 import type { OutRow } from "../listing";
 import { fmtDt } from "../mappers";
 import { addDays } from "../params";
+import { ejecutivoPorCorpo } from "../enrich";
 import { buildNombre } from "../names";
 import { matchesScope } from "../scope";
 import type { GuardifyReportModule } from "../types";
@@ -33,9 +34,11 @@ function parseColaboradores(raw: unknown): any[] {
 
 /**
  * Control de asistencia (`c_control_asistencia`). Se exponen solo conteos de colaboradores (no sus nombres, firmas ni
- * horas) y nunca las firmas ni las imágenes. `creador` es el empleado que lo registró (`c_empleado`), si se pudo cargar.
+ * horas) y nunca las firmas ni las imágenes. `creador` es el empleado que lo registró (`c_empleado`), si se pudo cargar;
+ * `ejecutivo` es el ejecutivo de cuenta de la sucursal. Para filtrar: `turno` = tipo de turno (Diurno/Mixto/Nocturno) y `creado_por` =
+ * usuario que lo registró.
  */
-export function mapControlAsistenciaRow(r: any, creador?: any): OutRow {
+export function mapControlAsistenciaRow(r: any, creador?: any, ejecutivo?: string | null): OutRow {
     const cols = parseColaboradores(r.colaboradores);
     const firmas = Array.isArray(r.c_control_asistencia_empleado_firmas) ? r.c_control_asistencia_empleado_firmas.length : 0;
     return {
@@ -57,31 +60,35 @@ export function mapControlAsistenciaRow(r: any, creador?: any): OutRow {
         supervisor: txt(r.nombre_supervisor),
         creado_por: creador ? txt(buildNombre(creador)) : null,
         comentarios: short(r.comentarios),
+        ejecutivo_cuenta: txt(ejecutivo),
     };
 }
 
 /**
- * Control de asistencia por turno. El periodo se aplica a `created_at` (como el filtro de la app); el rango se amplía un
- * día por lado en la consulta (la zona horaria del servidor puede correr los límites) y se recorta exacto aquí.
+ * Control de asistencia por turno. El periodo se aplica a `fecha` (la «Fecha» del Excel: fecha y hora del turno), no a la fecha de
+ * registro (`creado`). La consulta original solo filtra por `created_at`, que nunca es anterior al turno (salvo la zona horaria,
+ * de ahí un día antes) pero puede ser posterior si el control se registró tarde: se pide `created_at` desde un día antes del periodo
+ * hasta 45 días después, y el recorte exacto por `fecha` ([from, to)) es aquí.
  */
 export const controlAsistencia: GuardifyReportModule = {
     id: "control_asistencia",
     supportsScope: true,
     searchKeys: ["puesto", "sucursal", "contrato", "cliente", "supervisor", "creado_por", "comentarios"],
-    filterKeys: ["empresa", "cliente", "contrato", "sucursal", "puesto", "turno"],
-    sortKeys: ["fecha", "creado", "empresa", "cliente", "contrato", "sucursal", "puesto", "turno", "presentes", "total_turno", "ausentes", "reemplazos", "supervisor", "creado_por"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "turno", "ejecutivo_cuenta", "creado_por"],
+    sortKeys: ["fecha", "creado", "empresa", "cliente", "contrato", "sucursal", "puesto", "turno", "presentes", "total_turno", "ausentes", "reemplazos", "supervisor", "creado_por", "ejecutivo_cuenta"],
     defaultSort: "creado",
     async load(db, p) {
-        const filters = normalizeControlAsistenciaFilters({ creadoDesde: `${addDays(p.from, -1)}T00:00:00`, creadoHasta: `${p.to}T23:59:59` });
+        const filters = normalizeControlAsistenciaFilters({ creadoDesde: `${addDays(p.from, -1)}T00:00:00`, creadoHasta: `${addDays(p.to, 45)}T23:59:59` });
         const rows = await queryControlAsistenciaRows(db, filters, "fecha");
         const scope = p.scope;
         const kept = rows
             .filter((r: any) => {
-                const d = fmtDt(r.created_at)?.slice(0, 10);
+                const d = fmtDt(r.fecha)?.slice(0, 10);
                 return !!d && d >= p.from && d < p.to;
             })
             .filter((r: any) => !scope || matchesScope({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.corpo_id, puesto: r.puesto_id }, scope));
         const creadores = await batchFindManyByIds<any>(db, "c_empleado", kept.map((r: any) => Number(r.created_by)), { id: true, nombre: true, primer_apellido: true, segundo_apellido: true });
-        return kept.map((r: any) => mapControlAsistenciaRow(r, creadores.get(Number(r.created_by))));
+        const ejecutivos = await ejecutivoPorCorpo(db, kept.map((r: any) => r.corpo_id));
+        return kept.map((r: any) => mapControlAsistenciaRow(r, creadores.get(Number(r.created_by)), ejecutivos.get(Number(r.corpo_id))));
     },
 };

@@ -65,6 +65,13 @@ describe("registro de vehículos corporativos", () => {
         assert.equal(o.sucursal, "S");
         assert.equal(String(o.descripcion).length, 500);
         assert.deepEqual([o.usos, o.mantenimientos], [3, 0]);
+        assert.equal(o.ejecutivo_cuenta, null);
+        assert.equal(o.usuario_inserta, null);
+    });
+    it("columnas para los filtros van al final: ejecutivo de cuenta y usuario que registró", () => {
+        const o = mapVehiculoCorporativoRow({ id: 1, ejecutivo_cuenta: " Marta Ruiz ", usuario_inserta: "Ana Soto" });
+        assert.deepEqual(Object.keys(o).slice(-3), ["mantenimientos", "ejecutivo_cuenta", "usuario_inserta"]);
+        assert.deepEqual([o.ejecutivo_cuenta, o.usuario_inserta], ["Marta Ruiz", "Ana Soto"]);
     });
     it("las claves de búsqueda, filtro y orden existen en la fila", () => {
         const o = mapVehiculoCorporativoRow({ id: 1 });
@@ -77,12 +84,16 @@ describe("registro de vehículos corporativos", () => {
             e_estructura_cliente: [{ id: 5, nombre: "Cli" }],
             n_division: [{ id: 3, nombre: "Div", codigo: "D" }],
             e_estructura_contrato: [{ id: 20, nombre: "A", nro_contrato: "20" }, { id: 21, nombre: "B", nro_contrato: "21" }],
-            e_estructura_sucursal: [{ id: 10, nombre: "Suc", nro_sucursal: "1" }],
+            e_estructura_sucursal: [{ id: 10, nombre: "Suc", nro_sucursal: "1", ejecutivoCuenta_id: 50 }],
+            n_ejecutivo_cuenta: [{ id: 50, nombre: "Marta Ejecutiva" }],
+            c_empleado: [{ id: 7, codigo: "E7", nombre: "Ana", primer_apellido: "Soto", segundo_apellido: null }],
             e_estructura_puesto: [{ id: 101, nombre: "Pu1", codigo: "A" }, { id: 102, nombre: "Pu2", codigo: "B" }],
         });
         const all = await registroVehiculosCorporativos.load(db, P);
         assert.deepEqual(all.map((r) => r.id).sort(), [1, 2]);
         assert.deepEqual(all.find((r) => r.id === 1)?.usos, 1);
+        // enriquecimiento por lote: ejecutivo de la sucursal y quien registró el vehículo (created_by 7)
+        assert.deepEqual(all.map((r) => [r.id, r.ejecutivo_cuenta, r.usuario_inserta]).sort(), [[1, "Marta Ejecutiva", "Ana Soto"], [2, "Marta Ejecutiva", "Ana Soto"]]);
         const sucursal = await registroVehiculosCorporativos.load(db, { ...P, scope: [{ nivel: "corpo", id: 10 }] });
         assert.equal(sucursal.length, 2);
         const uno = await registroVehiculosCorporativos.load(db, { ...P, scope: [{ nivel: "puesto", id: 102 }] });

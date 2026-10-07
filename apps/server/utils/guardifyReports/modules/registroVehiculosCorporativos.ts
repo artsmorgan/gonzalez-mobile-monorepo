@@ -1,4 +1,5 @@
 import { queryRegistroVehiculosCorporativosRows } from "../../reports-functions/registroVehiculosCorporativosReport";
+import { ejecutivoPorCorpo, nombresEmpleado, usuarioInserta } from "../enrich";
 import { fmtDt } from "../mappers";
 import type { OutRow } from "../listing";
 import { addDays } from "../params";
@@ -23,7 +24,10 @@ const num = (v: unknown): number | null => {
     return Number.isFinite(n) ? n : null;
 };
 
-/** Vehículos corporativos: un vehículo por fila; de sus usos y mantenimientos solo se expone el conteo. */
+/**
+ * Vehículos corporativos: un vehículo por fila; de sus usos y mantenimientos solo se expone el conteo.
+ * `ejecutivo_cuenta` (de la sucursal) y `usuario_inserta` (quien registró el vehículo) los agrega `load` por lote.
+ */
 export function mapVehiculoCorporativoRow(r: any): OutRow {
     return {
         id: Number(r.id),
@@ -50,18 +54,21 @@ export function mapVehiculoCorporativoRow(r: any): OutRow {
         descripcion: clip(r.descripcion),
         usos: num(r.usos_count) ?? 0,
         mantenimientos: num(r.mantenimientos_count) ?? 0,
+        ejecutivo_cuenta: txt(r.ejecutivo_cuenta),
+        usuario_inserta: txt(r.usuario_inserta),
     };
 }
 
 /**
  * Registro de vehículos corporativos (`c_vehiculos_corporativos`). Cada vehículo guarda su ubicación (puesto, sucursal,
- * contrato, cliente, empresa, división). El periodo se aplica a la fecha de creación del vehículo, como en la app.
+ * contrato, cliente, empresa, división). El periodo (`from`/`to`) y la «hora del día» se aplican a la fecha de creación del
+ * vehículo (`creado`, `created_at`), como en la app y como la «Fecha de creación» del Excel.
  */
 export const registroVehiculosCorporativos: GuardifyReportModule = {
     id: "registro_vehiculos_corporativos",
     supportsScope: true,
     searchKeys: ["placa", "marca", "modelo", "contrato", "sucursal", "puesto", "cliente"],
-    filterKeys: ["tipo", "estado", "tipo_autoria", "activo", "empresa", "cliente", "contrato", "sucursal", "puesto"],
+    filterKeys: ["tipo", "estado", "tipo_autoria", "activo", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "placa", "marca", "modelo", "anno", "ejecutivo_cuenta", "usuario_inserta"],
     sortKeys: ["creado", "placa", "tipo", "marca", "modelo", "anno", "kilometraje", "estado", "empresa", "cliente", "contrato", "sucursal", "puesto", "usos", "mantenimientos"],
     defaultSort: "creado",
     async load(db, p) {
@@ -70,6 +77,12 @@ export const registroVehiculosCorporativos: GuardifyReportModule = {
         const kept = !scope
             ? rows
             : rows.filter((r) => matchesScope({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.corpo_id, puesto: r.puesto_id }, scope));
-        return kept.map(mapVehiculoCorporativoRow);
+        if (!kept.length) return [];
+        // Datos para los filtros, en lote (nunca por fila).
+        const [ejecutivos, nombres] = await Promise.all([
+            ejecutivoPorCorpo(db, kept.map((r) => r.corpo_id)),
+            nombresEmpleado(db, kept.map((r) => r.created_by)),
+        ]);
+        return kept.map((r) => mapVehiculoCorporativoRow({ ...r, ejecutivo_cuenta: ejecutivos.get(Number(r.corpo_id)), usuario_inserta: usuarioInserta(r.created_by, nombres) }));
     },
 };

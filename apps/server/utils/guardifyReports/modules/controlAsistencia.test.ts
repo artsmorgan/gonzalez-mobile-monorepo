@@ -32,12 +32,17 @@ const tables: Record<string, any[]> = {
         { ...base, id: 3, fecha: new Date("2026-09-10T06:00:00Z"), created_at: new Date("2026-09-10T14:05:00Z") },
         { ...base, id: 2, fecha: new Date("2026-09-30T22:00:00Z"), created_at: new Date("2026-09-30T23:59:00Z"), contrato_id: 101, corpo_id: 11, puesto_id: 2, turno: "N", c_control_asistencia_empleado_firmas: [], colaboradores: "no es json" },
         { ...base, id: 1, fecha: new Date("2026-10-01T06:00:00Z"), created_at: new Date("2026-10-01T00:01:00Z") },
+        // registrado tarde: el turno es de septiembre pero se capturó en octubre -> entra por su fecha
+        { ...base, id: 4, fecha: new Date("2026-09-20T06:00:00Z"), created_at: new Date("2026-10-05T10:00:00Z") },
+        // turno de agosto capturado en septiembre -> fuera del periodo (se filtra por la fecha del turno, no por la de registro)
+        { ...base, id: 5, fecha: new Date("2026-08-31T22:00:00Z"), created_at: new Date("2026-09-01T08:00:00Z") },
     ],
     e_estructura_empresa: [{ id: 1, nombre: "Gonzalez", codigo: "G" }],
     e_estructura_cliente: [{ id: 7, nombre: "Cliente 7" }],
     n_division: [{ id: 3, nombre: "Seguridad" }],
     e_estructura_contrato: [{ id: 100, nombre: "Contrato A", nro_contrato: "C1" }, { id: 101, nombre: "Contrato B", nro_contrato: null }],
-    e_estructura_sucursal: [{ id: 10, nombre: "Central", nro_sucursal: "S1" }, { id: 11, nombre: "Norte", nro_sucursal: null }],
+    e_estructura_sucursal: [{ id: 10, nombre: "Central", nro_sucursal: "S1", ejecutivoCuenta_id: 5 }, { id: 11, nombre: "Norte", nro_sucursal: null, ejecutivoCuenta_id: null }],
+    n_ejecutivo_cuenta: [{ id: 5, nombre: "Laura Vega" }],
     e_estructura_puesto: [{ id: 1, nombre: "Entrada", codigo: "P1" }, { id: 2, nombre: "Garita", codigo: null }],
     c_empleado: [{ id: 50, nombre: "Ana", primer_apellido: "Soto", segundo_apellido: "Rojas" }],
 };
@@ -53,7 +58,9 @@ const P = { from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: n
 
 describe("control de asistencia", () => {
     it("mapea conteos de colaboradores, sin nombres de colaboradores ni firmas", () => {
-        const o = mapControlAsistenciaRow({ ...base, id: 3, fecha: new Date("2026-09-10T06:00:00Z"), created_at: new Date("2026-09-10T14:05:00Z"), turno_label: "Diurno", empresa_nombre: "G - Gonzalez", cliente_nombre: "Cliente 7", division_nombre: "Seguridad", contrato_nombre: "C1 - A", corpo_nombre: "S1 - B", puesto_nombre: "P1 - Entrada", comentarios: "c".repeat(800) }, { nombre: "Ana", primer_apellido: "Soto", segundo_apellido: "Rojas" });
+        const o = mapControlAsistenciaRow({ ...base, id: 3, fecha: new Date("2026-09-10T06:00:00Z"), created_at: new Date("2026-09-10T14:05:00Z"), turno_label: "Diurno", empresa_nombre: "G - Gonzalez", cliente_nombre: "Cliente 7", division_nombre: "Seguridad", contrato_nombre: "C1 - A", corpo_nombre: "S1 - B", puesto_nombre: "P1 - Entrada", comentarios: "c".repeat(800) }, { nombre: "Ana", primer_apellido: "Soto", segundo_apellido: "Rojas" }, "Laura Vega");
+        assert.equal(o.ejecutivo_cuenta, "Laura Vega");
+        assert.equal(Object.keys(o).at(-1), "ejecutivo_cuenta");
         assert.deepEqual([o.fecha, o.creado, o.turno, o.presentes, o.total_turno, o.ausentes, o.reemplazos, o.firmas], ["2026-09-10T06:00:00", "2026-09-10T14:05:00", "Diurno", 1, 3, 2, 1, 1]);
         assert.equal(o.creado_por, "Ana Soto Rojas");
         assert.equal(String(o.comentarios).length, 500);
@@ -63,17 +70,19 @@ describe("control de asistencia", () => {
     it("tolera nulos y colaboradores ilegibles", () => {
         const o = mapControlAsistenciaRow({ id: 9, fecha: null, created_at: null, colaboradores: "no es json", total_presentes: null, nombre_supervisor: " ", turno: "M" });
         assert.deepEqual([o.fecha, o.empresa, o.presentes, o.ausentes, o.reemplazos, o.firmas, o.supervisor, o.creado_por, o.comentarios, o.turno], [null, null, null, 0, 0, 0, null, null, null, "M"]);
+        assert.equal(o.ejecutivo_cuenta, null);
     });
-    it("trae el periodo [from, to) por fecha de creación, con ubicación y creador", async () => {
+    it("trae el periodo [from, to) por la fecha del turno (no la de registro), con ubicación, creador y ejecutivo", async () => {
         const rows = await controlAsistencia.load(db, P);
-        assert.deepEqual(rows.map((r) => r.id).sort(), [2, 3]);
+        assert.deepEqual(rows.map((r) => r.id).sort(), [2, 3, 4]); // 4: registrado tarde; 5: turno de agosto; 1: turno de octubre
+        assert.deepEqual(rows.map((r) => [r.id, r.ejecutivo_cuenta]).sort().slice(0, 3), [[2, null], [3, "Laura Vega"], [4, "Laura Vega"]]);
         const r3 = rows.find((r) => r.id === 3)!;
         assert.deepEqual([r3.empresa, r3.contrato, r3.sucursal, r3.puesto, r3.turno, r3.creado_por], ["G - Gonzalez", "C1 - Contrato A", "S1 - Central", "P1 - Entrada", "Diurno", "Ana Soto Rojas"]);
         assert.equal(JSON.stringify(rows).includes("base64"), false);
     });
     it("alcance: filtra por los ids de la fila", async () => {
         assert.deepEqual((await controlAsistencia.load(db, { ...P, scope: [{ nivel: "puesto", id: 2 }] })).map((r) => r.id), [2]);
-        assert.deepEqual((await controlAsistencia.load(db, { ...P, scope: [{ nivel: "contrato", id: 100 }] })).map((r) => r.id), [3]);
+        assert.deepEqual((await controlAsistencia.load(db, { ...P, scope: [{ nivel: "contrato", id: 100 }] })).map((r) => r.id).sort(), [3, 4]);
         assert.deepEqual(await controlAsistencia.load(db, { ...P, scope: [] }), []);
     });
     it("las claves de orden, búsqueda y filtro existen en la fila", async () => {

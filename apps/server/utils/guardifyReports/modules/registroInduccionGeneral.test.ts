@@ -63,6 +63,27 @@ describe("registro de inducción general", () => {
         assert.equal(o.nombres_capacitadores, "Marta (2-2)");
         const json = JSON.stringify(o);
         for (const secreto of ["base64", "RESP", "F1", "F2"]) assert.equal(json.includes(secreto), false, secreto);
+        assert.equal(o.participantes, "Juan (1-1); Rosa; Marta (2-2)");
+        assert.equal(o.codigos_colaboradores, null);
+        assert.equal(o.ejecutivo_cuenta, null);
+        assert.equal(o.usuario_inserta, null);
+    });
+    it("columnas para los filtros: «código - nombre (cédula)», códigos de colaboradores, ejecutivo y usuario que registró", () => {
+        const o = mapInduccionGeneralRow(
+            {
+                ...registro(1, 20), ejecutivo_cuenta: "Marta Ruiz", usuario_inserta: "Ana Soto",
+                colaboradores: JSON.stringify([{ nombre: "Juan", cedula: "1-1" }, { nombre: "Rosa", cedula: "2-2" }, { nombre: "Luis", cedula: "3-3" }]),
+                capacitadores: JSON.stringify([{ nombre: "Marta", cedula: "9-9" }]),
+            },
+            new Map([["1-1", "1934"], ["3-3", "1934"], ["9-9", "55"]]),
+        );
+        assert.equal(o.nombres_colaboradores, "1934 - Juan (1-1); Rosa (2-2); 1934 - Luis (3-3)");
+        assert.equal(o.nombres_capacitadores, "55 - Marta (9-9)");
+        assert.equal(o.codigos_colaboradores, "1934"); // sin repetir; el código del capacitador no entra
+        assert.equal(o.participantes, "1934 - Juan (1-1); Rosa (2-2); 1934 - Luis (3-3); 55 - Marta (9-9)");
+        assert.equal(o.ejecutivo_cuenta, "Marta Ruiz");
+        assert.equal(o.usuario_inserta, "Ana Soto");
+        assert.deepEqual(Object.keys(o).slice(-4), ["participantes", "codigos_colaboradores", "ejecutivo_cuenta", "usuario_inserta"]);
     });
     it("una fila casi vacía no rompe", () => {
         const o = mapInduccionGeneralRow({ id: 3, temas_a_tratar: null, colaboradores: "[]", capacitadores: undefined, empresa_nombre: "0" });
@@ -81,16 +102,21 @@ describe("registro de inducción general", () => {
         const db = fakeDb({
             c_registro_induccion_general: [registro(1, 20), registro(2, 21)],
             c_colaboradores_induccion_general: [{ registro_id: 2, nombre: "Juan", cedula: "1", puesto_text: "x", puesto_id: 1, firma: "S" }],
+            n_ejecutivo_cuenta: [{ id: 50, nombre: "Marta Ejecutiva" }],
             c_capacitadores_induccion_general: [],
             e_estructura_empresa: [{ id: 1, nombre: "Emp", codigo: "9" }],
             e_estructura_cliente: [{ id: 5, nombre: "Cli" }],
             n_division: [{ id: 3, nombre: "Div", codigo: "D" }],
             e_estructura_contrato: [{ id: 20, nombre: "A", nro_contrato: "20" }, { id: 21, nombre: "B", nro_contrato: "21" }],
-            e_estructura_sucursal: [{ id: 10, nombre: "Suc", nro_sucursal: "1" }],
+            e_estructura_sucursal: [{ id: 10, nombre: "Suc", nro_sucursal: "1", ejecutivoCuenta_id: 50 }],
             e_estructura_puesto: [{ id: 101, nombre: "Pu1", codigo: "A" }, { id: 102, nombre: "Pu2", codigo: "B" }],
-            c_empleado: [{ id: 7, codigo: "E7", nombre: "Ana", primer_apellido: "Soto", segundo_apellido: null }],
+            c_empleado: [{ id: 7, codigo: "E7", cedula: "1", nombre: "Ana", primer_apellido: "Soto", segundo_apellido: null }],
         });
-        assert.equal((await registroInduccionGeneral.load(db, P)).length, 2);
+        const todos = await registroInduccionGeneral.load(db, P);
+        assert.equal(todos.length, 2);
+        // enriquecimiento por lote: ejecutivo de la sucursal, quien registró y el código del colaborador (cédula «1» → E7)
+        assert.deepEqual(todos.map((x) => [x.id, x.ejecutivo_cuenta, x.usuario_inserta, x.codigos_colaboradores]).sort(), [[1, "Marta Ejecutiva", "Ana Soto", null], [2, "Marta Ejecutiva", "Ana Soto", "E7"]]);
+        assert.equal(todos.find((x) => x.id === 2)?.nombres_colaboradores, "E7 - Juan (1)");
         const r = await registroInduccionGeneral.load(db, { ...P, scope: [{ nivel: "corpo", id: 10 }, { nivel: "contrato", id: 99 }] });
         assert.equal(r.length, 2);
         const solo = await registroInduccionGeneral.load(db, { ...P, scope: [{ nivel: "contrato", id: 21 }] });

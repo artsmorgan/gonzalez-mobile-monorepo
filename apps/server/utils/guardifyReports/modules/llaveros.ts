@@ -1,4 +1,5 @@
 import type { ReportDataAccess } from "../../reportDynamicPrisma";
+import { ejecutivoPorCorpo } from "../enrich";
 import { fmtDt } from "../mappers";
 import type { OutRow } from "../listing";
 import { addDays, type ReportParams } from "../params";
@@ -41,7 +42,7 @@ export function latestMovimiento(movs: any[]): any | null {
  * Fila cruda de `queryLlaverosRows` → fila plana. Nunca se exponen `firma_responsable`, `firma_entrega`, `firma_recibe`
  * ni el teléfono de los movimientos.
  */
-export function mapLlaveroRow(r: any, creador?: any): OutRow {
+export function mapLlaveroRow(r: any, creador?: any, ejecutivo?: string | null): OutRow {
     const movs: any[] = Array.isArray(r.e_movimiento_llavero) ? r.e_movimiento_llavero : [];
     const links: any[] = Array.isArray(r.e_llave_en_llavero) ? r.e_llave_en_llavero : [];
     const llaves = links.map((x) => x?.e_llave).filter(Boolean);
@@ -65,6 +66,9 @@ export function mapLlaveroRow(r: any, creador?: any): OutRow {
         ultima_recibe: last ? txt(last.nombre_persona_recibe) : null,
         observaciones: short(r.observaciones),
         creado_por: nombre(creador),
+        ejecutivo_cuenta: txt(ejecutivo),
+        // Quien registró el llavero (`created_by`); es el mismo dato que `creado_por`, con el nombre de columna común a los filtros.
+        usuario_inserta: nombre(creador),
     };
 }
 
@@ -80,16 +84,17 @@ export async function loadLlaveros(db: ReportDataAccess, p: ReportParams, query:
     const ids = [...new Set(kept.map((r: any) => Number(r.created_by)).filter((n: number) => Number.isFinite(n) && n > 0))];
     const empleados = ids.length ? await db.c_empleado!.findMany({ where: { id: { in: ids } }, select: { id: true, nombre: true, primer_apellido: true, segundo_apellido: true } }) : [];
     const creadorById = new Map(empleados.map((e: any) => [Number(e.id), e]));
-    return kept.map((r: any) => mapLlaveroRow(r, creadorById.get(Number(r.created_by))));
+    const ejecutivos = await ejecutivoPorCorpo(db as any, kept.map((r: any) => r.corpo_id));
+    return kept.map((r: any) => mapLlaveroRow(r, creadorById.get(Number(r.created_by)), ejecutivos.get(Number(r.corpo_id))));
 }
 
 /** Llaveros (`e_llavero`). Cada fila trae sus ids de empresa, cliente, división, contrato, sucursal y puesto. */
 export const llaveros: GuardifyReportModule = {
     id: "llaveros",
     supportsScope: true,
-    searchKeys: ["numero", "nombre", "numeros_llaves", "sucursal", "puesto", "ultima_entrega", "ultima_recibe", "creado_por"],
-    filterKeys: ["empresa", "cliente", "contrato", "sucursal", "puesto"],
-    sortKeys: ["creado", "numero", "nombre", "empresa", "cliente", "contrato", "sucursal", "puesto", "llaves", "movimientos", "ultimo_movimiento"],
+    searchKeys: ["numero", "nombre", "numeros_llaves", "sucursal", "puesto", "ultima_entrega", "ultima_recibe", "creado_por", "ejecutivo_cuenta"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "usuario_inserta"],
+    sortKeys: ["creado", "numero", "nombre", "empresa", "cliente", "contrato", "sucursal", "puesto", "llaves", "movimientos", "ultimo_movimiento", "division", "ejecutivo_cuenta", "usuario_inserta"],
     defaultSort: "creado",
     async load(db, p) {
         // Import diferido: el módulo de consulta arrastra exceljs, que no hace falta para mapear ni para probar.

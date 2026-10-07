@@ -55,6 +55,9 @@ describe("mantenimiento de artículos: mapeo", () => {
         assert.equal(o.reincidencia_30_dias, "No");
         assert.equal(o.adjuntos, 3);
         assert.ok(!("mant_armas_form" in o) && !("formulario_armas" in o));
+        assert.equal(o.ejecutivo_cuenta, null);
+        assert.equal(mapMantenimientoArticuloRow(crudo(), " Marta Vega ").ejecutivo_cuenta, "Marta Vega");
+        assert.equal(Object.keys(o).at(-1), "ejecutivo_cuenta");
     });
     it("tolera nulos y textos vacíos", () => {
         const o = mapMantenimientoArticuloRow(crudo({ fecha_solucion: null, fecha_inicio: null, fecha_fin: null, observaciones: "", marca: "", costo_mo: null, costo_total: null, kilometraje: null, reincidencia_treinta_dias_txt: "", archivos_adjuntos_count: 0, puesto_txt: "" }));
@@ -71,7 +74,22 @@ describe("mantenimiento de artículos: mapeo", () => {
     });
 });
 
+/** `db` falso: cada tabla devuelve sus filas (respeta `where.id.in`, ignora el resto) y cuenta las consultas. */
+function fakeDb(tables: Record<string, any[]>, calls: string[] = []) {
+    return new Proxy({}, {
+        get: (_t, name: string) => ({
+            findMany: async (args: any = {}) => {
+                calls.push(name);
+                const rows = tables[name] ?? [];
+                const ids: number[] | undefined = args.where?.id?.in;
+                return ids ? rows.filter((r) => ids.includes(r.id)) : rows;
+            },
+        }),
+    }) as any;
+}
+
 describe("mantenimiento de artículos: carga y alcance", () => {
+    const db = fakeDb({ e_estructura_sucursal: [{ id: 5, ejecutivoCuenta_id: 8 }], n_ejecutivo_cuenta: [{ id: 8, nombre: "Marta Vega" }] });
     const rows = [
         crudo({ id: 1, created_at: new Date("2026-09-05T08:00:00Z") }),
         crudo({ id: 2, empresa_id: 1, contrato_id: 40, corpo_id: 50, puesto_id: 60, created_at: new Date("2026-09-30T23:59:00Z") }),
@@ -87,14 +105,21 @@ describe("mantenimiento de artículos: carga y alcance", () => {
     };
     it("sin alcance hace una sola consulta del periodo y descarta lo que cae fuera (to exclusivo)", async () => {
         calls.length = 0;
-        const out = await loadMantenimientoArticulos({} as any, P, query as any);
+        const out = await loadMantenimientoArticulos(db, P, query as any);
         assert.equal(calls.length, 1);
         assert.deepEqual(calls[0], { creadoDesde: "2026-09-01T00:00:00", creadoHasta: "2026-09-30T23:59:59" });
         assert.deepEqual(out.map((r) => r.id).sort(), [1, 2]);
     });
+    it("agrega el ejecutivo de cuenta de la sucursal por lote (sin consultas por fila)", async () => {
+        const consultas: string[] = [];
+        const out = await loadMantenimientoArticulos(fakeDb({ e_estructura_sucursal: [{ id: 5, ejecutivoCuenta_id: 8 }], n_ejecutivo_cuenta: [{ id: 8, nombre: "Marta Vega" }] }, consultas), P, query as any);
+        assert.equal(out.find((r) => r.id === 1)!.ejecutivo_cuenta, "Marta Vega");
+        assert.equal(out.find((r) => r.id === 2)!.ejecutivo_cuenta, null); // sucursal 50 sin ejecutivo
+        assert.deepEqual(consultas, ["e_estructura_sucursal", "n_ejecutivo_cuenta"]);
+    });
     it("con alcance consulta por nodo, une sin repetir y filtra por ubicación", async () => {
         calls.length = 0;
-        const ids = async (scope: string) => (await loadMantenimientoArticulos({} as any, { ...P, scope: parseScope(scope) }, query as any)).map((r) => r.id).sort();
+        const ids = async (scope: string) => (await loadMantenimientoArticulos(db, { ...P, scope: parseScope(scope) }, query as any)).map((r) => r.id).sort();
         assert.deepEqual(await ids("contrato:4"), [1]);
         assert.equal(calls[0].contratoIds[0], 4);
         assert.deepEqual(await ids("puesto:60"), [2]);
@@ -103,7 +128,7 @@ describe("mantenimiento de artículos: carga y alcance", () => {
     });
     it("un alcance vacío no consulta nada", async () => {
         calls.length = 0;
-        assert.deepEqual(await loadMantenimientoArticulos({} as any, { ...P, scope: [] }, query as any), []);
+        assert.deepEqual(await loadMantenimientoArticulos(db, { ...P, scope: [] }, query as any), []);
         assert.equal(calls.length, 0);
     });
     it("las claves de búsqueda, filtro y orden existen en la fila", () => {

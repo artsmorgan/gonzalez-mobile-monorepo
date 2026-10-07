@@ -27,6 +27,17 @@ describe("llaves: mapeo", () => {
         assert.equal((o.observaciones as string).length, 500);
         assert.equal(o.creado_por, "Carla Soto Ruiz");
     });
+    it("agrega ejecutivo de cuenta y las personas de todos los movimientos", () => {
+        const o = mapLlaveRow(raw, undefined, { ejecutivo: "Luis Mora", division: "Otra" });
+        assert.equal(o.ejecutivo_cuenta, "Luis Mora");
+        assert.equal(o.division, "División", "la división de la fila manda");
+        assert.equal(o.entregadas_por, "Ana; Zoe");
+        assert.equal(o.recibidas_por, "Beto; Ana");
+        const sin = mapLlaveRow({ ...raw, division_nombre: "0", e_movimiento_llave: [] }, undefined, { division: "Seguridad" });
+        assert.deepEqual([sin.division, sin.ejecutivo_cuenta, sin.entregadas_por, sin.recibidas_por], ["Seguridad", null, null, null]);
+        const largo = mapLlaveRow({ ...raw, e_movimiento_llave: Array.from({ length: 100 }, (_, i) => ({ nombre_persona_entrega: `Persona número ${i}`, nombre_persona_recibe: "x" })) });
+        assert.equal((largo.entregadas_por as string).length, 500);
+    });
     it("nunca expone firmas ni teléfonos", () => {
         const s = JSON.stringify(mapLlaveRow(raw));
         for (const bad of ["base64", "8888-0000", "firma"]) assert.equal(s.includes(bad), false, bad);
@@ -42,7 +53,15 @@ describe("llaves: carga y alcance", () => {
     const data = [mk(1, 5), mk(2, 8)];
     let seen: any;
     const query = async (_db: any, filters: any, orderKey: string) => { seen = { filters, orderKey }; return data; };
-    const db = { c_empleado: { findMany: async () => [] } } as any;
+    const tables: Record<string, any[]> = {
+        c_empleado: [{ id: 11, nombre: "Carla", primer_apellido: "Soto", segundo_apellido: null }],
+        e_estructura_sucursal: [{ id: 5, ejecutivoCuenta_id: 70 }, { id: 8, ejecutivoCuenta_id: null }],
+        n_ejecutivo_cuenta: [{ id: 70, nombre: "Luis Mora" }],
+        e_estructura_contrato: [{ id: 4, division_id: 30 }],
+        n_division: [{ id: 30, nombre: "Seguridad" }],
+    };
+    const calls: string[] = [];
+    const db = new Proxy({}, { get: (_t, name: string) => ({ findMany: async (a: any) => { calls.push(name); const ids = a?.where?.id?.in ?? []; return (tables[name] ?? []).filter((x) => ids.includes(x.id)); } }) }) as any;
     const params = (extra: Record<string, string> = {}) => parseReportParams(new URLSearchParams({ from: "2026-09-01", to: "2026-10-01", ...extra }));
     it("pide el periodo [from, to) con límite inclusivo al último día", async () => {
         await loadLlaves(db, params(), query);
@@ -53,6 +72,12 @@ describe("llaves: carga y alcance", () => {
         assert.deepEqual((await loadLlaves(db, params({ scope: "corpo:8" }), query)).map((r) => r.id), [2]);
         assert.deepEqual((await loadLlaves(db, params({ scope: "corpo:8,cliente:2" }), query)).map((r) => r.id), [1, 2]);
         assert.equal((await loadLlaves(db, params({ scope: "" }), query)).length, 0);
+    });
+    it("completa ejecutivo, creador y división por lote (sin consultas por fila)", async () => {
+        calls.length = 0;
+        const rows = await loadLlaves(db, params(), async () => [mk(1, 5), { ...mk(2, 8), division_nombre: "0" }, { ...mk(3, 5), division_nombre: "0" }]);
+        assert.deepEqual(rows.map((r) => [r.ejecutivo_cuenta, r.creado_por, r.division]), [["Luis Mora", "Carla Soto", "División"], [null, "Carla Soto", "Seguridad"], ["Luis Mora", "Carla Soto", "Seguridad"]]);
+        assert.deepEqual(calls.sort(), ["c_empleado", "e_estructura_contrato", "e_estructura_sucursal", "n_division", "n_ejecutivo_cuenta"]);
     });
     it("declara alcance y sus claves existen en la fila", () => {
         assert.equal(llaves.supportsScope, true);

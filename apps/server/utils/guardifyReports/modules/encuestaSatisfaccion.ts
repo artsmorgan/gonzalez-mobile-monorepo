@@ -1,3 +1,4 @@
+import { ejecutivoPorCorpo, findByIds } from "../enrich";
 import type { OutRow } from "../listing";
 import { fmtDt } from "../mappers";
 import { addDays } from "../params";
@@ -19,6 +20,18 @@ const place = (id: unknown, name: unknown): string | null => {
     const s = txt(name);
     return !s || s === String(id ?? "") ? null : s;
 };
+
+/** «código - nombre» (solo el nombre si no hay código; solo el código si no hay nombre o el «nombre» es el propio código). */
+const conCodigo = (codigo: unknown, nombre: unknown): string | null => {
+    const c = txt(codigo);
+    const n = txt(nombre);
+    if (!c) return n;
+    if (!n || n === c || n.startsWith(`${c} - `)) return c;
+    return `${c} - ${n}`;
+};
+
+/** Datos que no vienen en la fila de la encuesta y se cargan por lote: ejecutivo de cuenta de la sucursal y código del responsable. */
+export type EncuestaExtra = { ejecutivo?: string | null; responsableCodigo?: string | null };
 
 /** En la app, `apply` ausente significa que la pregunta aplica. */
 function applies(raw: unknown): boolean {
@@ -70,7 +83,7 @@ export function resumenEvaluaciones(raw: unknown): { promedio: number | null; co
  * Encuesta de satisfacción del cliente (`c_encuesta_cliente`) a fila plana. Se omiten a propósito las firmas, el correo, el
  * teléfono y la cédula de la persona evaluada (es personal del cliente) y el detalle de las preguntas: solo el promedio.
  */
-export function mapEncuestaRow(r: any): OutRow {
+export function mapEncuestaRow(r: any, x: EncuestaExtra = {}): OutRow {
     const { promedio, conoceQuejas } = resumenEvaluaciones(r.evaluaciones);
     return {
         id: Number(r.id),
@@ -82,13 +95,24 @@ export function mapEncuestaRow(r: any): OutRow {
         contrato: place(r.contrato_id, r.contrato_nombre),
         sucursal: place(r.corpo_id, r.corpo_nombre),
         puesto: place(r.puesto_id, r.puesto_nombre),
-        responsable: place(r.responsable_id, r.responsable_nombre) ?? txt(r.nombre_responsable),
+        responsable: conCodigo(x.responsableCodigo, place(r.responsable_id, r.responsable_nombre) ?? txt(r.nombre_responsable)),
         cedula_responsable: txt(r.cedula_responsable),
         evaluado: txt(r.nombre_evaluado),
         promedio,
         conoce_quejas: conoceQuejas,
         observaciones: clip(r.observaciones),
+        ejecutivo_cuenta: txt(x.ejecutivo),
     };
+}
+
+/**
+ * Datos por lote (sin consultas por fila): ejecutivo de cuenta de cada sucursal (`ejecutivoPorCorpo`) y código de cada responsable
+ * (`c_empleado.codigo`, para mostrar «código - nombre»). Devuelve cada fila ya mapeada.
+ */
+export async function mapEncuestasConExtras(db: any, rows: any[]): Promise<OutRow[]> {
+    const ejecutivos = await ejecutivoPorCorpo(db, rows.map((r) => r.corpo_id));
+    const responsables = await findByIds<{ codigo?: string | null }>(db, "c_empleado", rows.map((r) => r.responsable_id), { codigo: true });
+    return rows.map((r) => mapEncuestaRow(r, { ejecutivo: ejecutivos.get(Number(r.corpo_id)) ?? null, responsableCodigo: txt(responsables.get(Number(r.responsable_id))?.codigo) }));
 }
 
 /** Cada encuesta guarda los ids de empresa/cliente/división/contrato/corpo/puesto: se filtra directo por el alcance. */
@@ -97,18 +121,21 @@ export function filterEncuestasByScope(rows: any[], scope: ScopeItem[] | null): 
     return rows.filter((r) => matchesScope({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.corpo_id, puesto: r.puesto_id }, scope));
 }
 
-/** Encuestas de satisfacción. El periodo es sobre la fecha de creación del registro (`created_at`), como el filtro «creado» de la app. */
+/**
+ * Encuestas de satisfacción. El periodo es sobre la fecha de creación del registro (`created_at`): es la «Fecha» del Excel y el filtro
+ * «Creado desde/hasta» de la app (la columna `creado`).
+ */
 export const encuestaSatisfaccion: GuardifyReportModule = {
     id: "encuesta_satisfaccion",
     supportsScope: true,
     searchKeys: ["evaluado", "responsable", "cedula_responsable", "cliente", "sucursal", "puesto", "observaciones"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "conoce_quejas"],
-    sortKeys: ["creado", "fecha", "empresa", "cliente", "contrato", "sucursal", "puesto", "responsable", "evaluado", "promedio"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "conoce_quejas", "responsable", "ejecutivo_cuenta"],
+    sortKeys: ["creado", "fecha", "empresa", "cliente", "contrato", "sucursal", "puesto", "responsable", "evaluado", "promedio", "ejecutivo_cuenta"],
     defaultSort: "creado",
     async load(db, p) {
         // Import perezoso: el módulo de consulta arrastra exceljs y Prisma, que no hacen falta para mapear ni para probar.
         const { queryEncuestaSatisfaccionRows } = await import("../../reports-functions/encuestaSatisfaccionReport");
         const rows = await queryEncuestaSatisfaccionRows(db, { creadoDesde: `${p.from}T00:00:00`, creadoHasta: `${addDays(p.to, -1)}T23:59:59` }, "fecha");
-        return filterEncuestasByScope(rows, p.scope).map(mapEncuestaRow);
+        return mapEncuestasConExtras(db, filterEncuestasByScope(rows, p.scope));
     },
 };

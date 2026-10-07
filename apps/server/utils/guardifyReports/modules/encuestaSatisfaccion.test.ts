@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { encuestaSatisfaccion, filterEncuestasByScope, mapEncuestaRow, resumenEvaluaciones } from "./encuestaSatisfaccion";
+import { encuestaSatisfaccion, filterEncuestasByScope, mapEncuestaRow, mapEncuestasConExtras, resumenEvaluaciones } from "./encuestaSatisfaccion";
 
 const form = JSON.stringify({
     form: [
@@ -50,6 +50,32 @@ describe("encuesta de satisfacción: mapeo", () => {
     it("el módulo declara columnas de búsqueda, filtro y orden que existen en la fila", () => {
         const cols = Object.keys(mapEncuestaRow(raw()));
         for (const k of [...encuestaSatisfaccion.searchKeys, ...encuestaSatisfaccion.filterKeys, ...encuestaSatisfaccion.sortKeys, encuestaSatisfaccion.defaultSort]) assert.ok(cols.includes(k), k);
+    });
+});
+
+describe("encuesta de satisfacción: columnas para filtros", () => {
+    it("trae ejecutivo de cuenta y muestra al responsable como «código - nombre»", () => {
+        const o = mapEncuestaRow(raw(), { ejecutivo: "Eva Rojas", responsableCodigo: "1934" });
+        assert.equal(o.responsable, "1934 - Ana Soto");
+        assert.equal(o.ejecutivo_cuenta, "Eva Rojas");
+        assert.deepEqual(Object.keys(o).slice(-2), ["observaciones", "ejecutivo_cuenta"]);
+        assert.equal(mapEncuestaRow(raw()).responsable, "Ana Soto");
+        assert.equal(mapEncuestaRow(raw()).ejecutivo_cuenta, null);
+        assert.equal(mapEncuestaRow(raw({ responsable_nombre: "1934" }), { responsableCodigo: "1934" }).responsable, "1934");
+    });
+    it("carga ejecutivos y códigos por lote, una consulta por tabla", async () => {
+        const table = (rows: any[]) => ({ findMany: async (a: any) => rows.filter((r) => !a?.where?.id?.in || a.where.id.in.includes(r.id)) });
+        const calls: string[] = [];
+        const wrap = (name: string, rows: any[]) => ({ findMany: async (a: any) => { calls.push(name); return table(rows).findMany(a); } });
+        const db: any = {
+            e_estructura_sucursal: wrap("sucursal", [{ id: 55, ejecutivoCuenta_id: 10 }, { id: 56, ejecutivoCuenta_id: null }]),
+            n_ejecutivo_cuenta: wrap("ejecutivo", [{ id: 10, nombre: "Eva Rojas" }]),
+            c_empleado: wrap("empleado", [{ id: 8, codigo: "1934" }]),
+        };
+        const out = await mapEncuestasConExtras(db, [raw({ id: 1 }), raw({ id: 2, corpo_id: 56 }), raw({ id: 3, responsable_id: 99 })]);
+        assert.deepEqual(out.map((o) => o.ejecutivo_cuenta), ["Eva Rojas", null, "Eva Rojas"]);
+        assert.deepEqual(out.map((o) => o.responsable), ["1934 - Ana Soto", "1934 - Ana Soto", "Ana Soto"]);
+        assert.equal(calls.length, 3);
     });
 });
 

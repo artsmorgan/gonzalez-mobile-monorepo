@@ -63,7 +63,8 @@ describe("mutuos acuerdos: mapeo", () => {
         assert.equal(o.fecha_acepta_ausente, "2026-09-12T10:00:00");
         assert.equal(o.fecha_acepta_reemplaza, null);
         assert.equal(String(o.motivo).length, 500);
-        assert.equal(o.estado, "aprobado");
+        assert.equal(o.estado, "Aprobado");
+        assert.equal(mapMutuoAcuerdoRow(crudo({ estado: " RECHAZADO " })).estado, "Rechazado");
         assert.equal(o.cambio_guardia, 55);
         assert.equal(o.firma_digital, "Sí");
         assert.ok(!JSON.stringify(o).includes("base64"));
@@ -75,7 +76,7 @@ describe("mutuos acuerdos: mapeo", () => {
         assert.equal(o.ausente_acepta, null);
         assert.equal(o.reemplaza_acepta, null);
         assert.equal(o.fecha_acepta_ausente, null);
-        assert.equal(o.estado, "pendiente");
+        assert.equal(o.estado, "Pendiente");
         assert.equal(o.motivo, null);
         assert.equal(o.puesto, null);
         assert.equal(o.empresa, null);

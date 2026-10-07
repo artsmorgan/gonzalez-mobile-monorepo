@@ -25,6 +25,12 @@ describe("llaveros: mapeo", () => {
         assert.deepEqual([o.ultimo_movimiento, o.ultima_entrega, o.ultima_recibe], ["2026-09-12T09:00:00", "Zoe", "Ana"]);
         assert.equal((o.observaciones as string).length, 500);
         assert.equal(o.creado_por, "Carla Soto");
+        assert.deepEqual([o.division, o.ejecutivo_cuenta, o.usuario_inserta], ["División", null, "Carla Soto"]);
+    });
+    it("pone ejecutivo de cuenta y usuario que lo registró al final de la fila", () => {
+        const o = mapLlaveroRow(raw, { nombre: "Carla", primer_apellido: "Soto" }, " Ana Rojas ");
+        assert.deepEqual(Object.keys(o).slice(-3), ["creado_por", "ejecutivo_cuenta", "usuario_inserta"]);
+        assert.equal(o.ejecutivo_cuenta, "Ana Rojas");
     });
     it("nunca expone firmas ni teléfonos", () => {
         const s = JSON.stringify(mapLlaveroRow(raw));
@@ -32,7 +38,7 @@ describe("llaveros: mapeo", () => {
     });
     it("tolera nulos y llaveros sin llaves ni movimientos", () => {
         const o = mapLlaveroRow({ id: 1, created_at: null, numero_llavero: "", nombre_llavero: null, observaciones: null });
-        assert.deepEqual([o.creado, o.numero, o.nombre, o.llaves, o.numeros_llaves, o.movimientos, o.ultimo_movimiento, o.ultima_entrega, o.observaciones, o.creado_por], [null, null, null, 0, null, 0, null, null, null, null]);
+        assert.deepEqual([o.creado, o.numero, o.nombre, o.llaves, o.numeros_llaves, o.movimientos, o.ultimo_movimiento, o.ultima_entrega, o.observaciones, o.creado_por, o.ejecutivo_cuenta, o.usuario_inserta], [null, null, null, 0, null, 0, null, null, null, null, null, null]);
     });
     it("combina fecha y hora del movimiento (también como texto) y elige el último", () => {
         assert.equal(movimientoDt({ fecha: "2026-09-11T00:00:00.000Z", hora: "1970-01-01T23:59:01.000Z" }), "2026-09-11T23:59:01");
@@ -47,7 +53,12 @@ describe("llaveros: carga y alcance", () => {
     const data = [mk(1, 4), mk(2, 9)];
     let seen: any;
     const query = async (_db: any, filters: any, orderKey: string) => { seen = { filters, orderKey }; return data; };
-    const db = { c_empleado: { findMany: async () => [{ id: 11, nombre: "Carla", primer_apellido: "Soto", segundo_apellido: null }] } } as any;
+    const table = (rows: any[]) => ({ findMany: async (a: any) => rows.filter((r) => !a?.where?.id?.in || a.where.id.in.includes(r.id)) });
+    const db = {
+        c_empleado: { findMany: async () => [{ id: 11, nombre: "Carla", primer_apellido: "Soto", segundo_apellido: null }] },
+        e_estructura_sucursal: table([{ id: 5, ejecutivoCuenta_id: 10 }]),
+        n_ejecutivo_cuenta: table([{ id: 10, nombre: "Ana Rojas" }]),
+    } as any;
     const params = (extra: Record<string, string> = {}) => parseReportParams(new URLSearchParams({ from: "2026-09-01", to: "2026-10-01", ...extra }));
     it("pide el periodo [from, to) con límite inclusivo al último día", async () => {
         await loadLlaveros(db, params(), query);
@@ -58,6 +69,8 @@ describe("llaveros: carga y alcance", () => {
         const one = await loadLlaveros(db, params({ scope: "contrato:9" }), query);
         assert.deepEqual(one.map((r) => r.id), [2]);
         assert.equal(one[0]!.creado_por, "Carla Soto");
+        assert.equal(one[0]!.usuario_inserta, "Carla Soto");
+        assert.equal(one[0]!.ejecutivo_cuenta, "Ana Rojas");
         assert.equal((await loadLlaveros(db, params({ scope: "contrato:4,puesto:6" }), query)).length, 2);
         assert.equal((await loadLlaveros(db, params({ scope: "empresa:77" }), query)).length, 0);
         assert.equal((await loadLlaveros(db, params({ scope: "" }), query)).length, 0);

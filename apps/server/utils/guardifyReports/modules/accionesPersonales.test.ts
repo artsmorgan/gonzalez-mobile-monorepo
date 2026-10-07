@@ -58,15 +58,16 @@ describe("acciones_personales: mapeo", () => {
         assert.equal(o.fecha_fin, null);
         assert.equal(o.registrada, "2026-09-09T14:30:15");
         assert.equal(o.tipo_accion, "AUS — Ausencia");
-        assert.equal(o.empleado, "Ana Soto");
+        assert.equal(o.empleado, "E1 - Ana Soto");
         assert.equal(o.cedula, "1-111-111");
+        assert.equal(o.usuario_inserta, "jefe@x.test");
         assert.equal(o.estado, "Aprobada");
         assert.deepEqual([o.empresa, o.cliente, o.division, o.contrato, o.sucursal, o.puesto], ["G - Gonzalez SA", "Cliente 5", "N - Norte", "C-20 - Contrato 20", "S1 - Sede", "P40 - Recepción"]);
         assert.equal((o.comentarios as string).length, 500);
         assert.equal(o.adjunto, "Sí");
         assert.equal(o.detalle, "Justificada · Ajuste anual");
         const s = JSON.stringify(o);
-        for (const secreto of ["999999", "888888", "secreto.pdf", "jefe@x.test"]) assert.equal(s.includes(secreto), false);
+        for (const secreto of ["999999", "888888", "secreto.pdf"]) assert.equal(s.includes(secreto), false);
     });
     it("tolera nulos", () => {
         const o = mapAccionPersonalRow({ id: 1, fecha_inicio: null, reversible: null, document: null });
@@ -77,20 +78,27 @@ describe("acciones_personales: mapeo", () => {
         assert.equal(o.adjunto, "No");
         assert.equal(o.detalle, null);
         assert.equal(o.puesto, null);
+        assert.equal(o.usuario_inserta, null);
+    });
+    it("empleado sin código se muestra solo con el nombre; usuario inserta numérico se resuelve con el mapa", () => {
+        const sinCodigo = mapAccionPersonalRow(raw({ c_empleado_c_accion_personal_empleado_idToc_empleado: { id: 3, nombre: "Ana", primer_apellido: "Soto", codigo: "" } }));
+        assert.equal(sinCodigo.empleado, "Ana Soto");
+        assert.equal(mapAccionPersonalRow(raw({ usuario_insercion: "12" }), new Map(), new Map([[12, "Luis Mora"]])).usuario_inserta, "Luis Mora");
+        assert.equal(mapAccionPersonalRow(raw({ usuario_insercion: "99" }), new Map(), new Map()).usuario_inserta, null);
     });
 });
 
 describe("acciones_personales: periodo y alcance", () => {
     const rows = [
-        { id: 1, empleado_id: 3, fecha_inicio: new Date("2026-09-10T00:00:00Z"), empresa_id: 1, cliente_id: 5, contrato_id: 20, corpo_id: 30, puesto_id: 40, tipoAccion_id: 2 },
-        { id: 2, empleado_id: 3, fecha_inicio: new Date("2026-10-01T00:00:00Z"), empresa_id: 1, cliente_id: 5, contrato_id: 21, corpo_id: 31, puesto_id: 41, tipoAccion_id: 2 }, // to exclusivo
-        { id: 3, empleado_id: 4, fecha_inicio: new Date("2026-09-01T00:00:00Z"), empresa_id: 1, cliente_id: 5, contrato_id: 21, corpo_id: 31, puesto_id: 41, tipoAccion_id: 2 },
+        { id: 1, empleado_id: 3, usuario_insercion: "jefe@x.test", fecha_inicio: new Date("2026-09-10T00:00:00Z"), empresa_id: 1, cliente_id: 5, contrato_id: 20, corpo_id: 30, puesto_id: 40, tipoAccion_id: 2 },
+        { id: 2, empleado_id: 3, usuario_insercion: "4", fecha_inicio: new Date("2026-10-01T00:00:00Z"), empresa_id: 1, cliente_id: 5, contrato_id: 21, corpo_id: 31, puesto_id: 41, tipoAccion_id: 2 }, // to exclusivo
+        { id: 3, empleado_id: 4, usuario_insercion: "4", fecha_inicio: new Date("2026-09-01T00:00:00Z"), empresa_id: 1, cliente_id: 5, contrato_id: 21, corpo_id: 31, puesto_id: 41, tipoAccion_id: 2 },
     ];
     const byIds = (table: any[]) => ({ findMany: async (a: any) => table.filter((r) => !a?.where?.id?.in || a.where.id.in.includes(r.id)) });
     const db = {
         // el filtro de fechas lo aplica la base: aquí se imita
         c_accion_personal: { findMany: async (a: any) => rows.filter((r) => r.fecha_inicio >= a.where.fecha_inicio.gte && r.fecha_inicio < a.where.fecha_inicio.lt) },
-        c_empleado: byIds([{ id: 3, nombre: "Ana", primer_apellido: "Soto", cedula: "1-111-111" }, { id: 4, nombre: "Luis", primer_apellido: "Mora", cedula: "2-222-222" }]),
+        c_empleado: byIds([{ id: 3, codigo: "E1", nombre: "Ana", primer_apellido: "Soto", cedula: "1-111-111" }, { id: 4, codigo: "E2", nombre: "Luis", primer_apellido: "Mora", cedula: "2-222-222" }]),
         c_tipo_accion: byIds([{ id: 2, codigo: "AUS", nombre: "Ausencia" }]),
         e_estructura_empresa: byIds([{ id: 1, codigo: "G", nombre: "Gonzalez SA" }]),
         e_estructura_cliente: byIds([{ id: 5, nombre: "Cliente 5" }]),
@@ -108,7 +116,9 @@ describe("acciones_personales: periodo y alcance", () => {
         assert.deepEqual(out.map((r) => r.id).sort(), [1, 3]);
         const uno = out.find((r) => r.id === 1)!;
         assert.equal(uno.cedula, "1-111-111");
-        assert.equal(uno.empleado, "Ana Soto");
+        assert.equal(uno.empleado, "E1 - Ana Soto");
+        assert.equal(uno.usuario_inserta, "jefe@x.test"); // texto: tal cual
+        assert.equal(out.find((r) => r.id === 3)!.usuario_inserta, "Luis Mora"); // id de empleado: su nombre, en lote
         assert.equal(uno.tipo_accion, "AUS — Ausencia");
         assert.equal(uno.contrato, "C-20 - Contrato 20");
         assert.equal(uno.division, "S - Sur");

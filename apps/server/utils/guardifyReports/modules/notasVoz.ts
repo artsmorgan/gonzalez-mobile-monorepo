@@ -1,4 +1,5 @@
 import { queryNotasVozRows } from "../../reports-functions/notasVozReport";
+import { ejecutivoPorCorpo } from "../enrich";
 import type { OutRow } from "../listing";
 import { fmtDt } from "../mappers";
 import { addDays } from "../params";
@@ -32,8 +33,9 @@ function nodo(nombre: unknown, id: unknown): string | null {
 /**
  * Fila de `queryNotasVozRows` → fila plana. Se omiten a propósito `path`/`audio_relpath` (ruta del archivo de audio) y
  * `firma_responsable` (imagen de firma); solo se indica si la nota tiene audio.
+ * `ejecutivo`: ejecutivo de cuenta de la sucursal (se carga por lote en `load`).
  */
-export function mapNotaVozRow(r: any): OutRow {
+export function mapNotaVozRow(r: any, ejecutivo?: string | null): OutRow {
     return {
         id: Number(r.id),
         creado: fmtDt(r.created_at),
@@ -48,21 +50,25 @@ export function mapNotaVozRow(r: any): OutRow {
         transcripcion: text(r.transcripcion),
         con_audio: String(r.path ?? "").trim() ? "Sí" : "No",
         creado_por: text(r.creador_nombre, 200),
+        ejecutivo_cuenta: text(ejecutivo, 200),
     };
 }
 
-/** Notas de voz (`c_notas_voz`). Cada fila trae sus ids de empresa/cliente/división/contrato/corpo/puesto. */
+/**
+ * Notas de voz (`c_notas_voz`). Cada fila trae sus ids de empresa/cliente/división/contrato/corpo/puesto. El periodo (`from`/`to`) se
+ * aplica a `creado` (`created_at`, la fecha en que se registró la nota: «Fecha inicio/fin» del Excel «Notas de voz»).
+ */
 export const notasVoz: GuardifyReportModule = {
     id: "notas_voz",
     supportsScope: true,
     searchKeys: ["titulo", "descripcion", "transcripcion", "creado_por", "puesto", "sucursal"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "con_audio"],
-    sortKeys: ["creado", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "titulo", "creado_por"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "con_audio", "ejecutivo_cuenta"],
+    sortKeys: ["creado", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "titulo", "creado_por", "ejecutivo_cuenta"],
     defaultSort: "creado",
     async load(db, p) {
         const rows = await queryNotasVozRows(db, { creadoDesde: `${p.from}T00:00:00`, creadoHasta: `${addDays(p.to, -1)}T23:59:59` }, "created_at");
         const scope = p.scope;
-        return rows
+        const visibles = rows
             .filter((r: any) => {
                 const d = fmtDt(r.created_at)?.slice(0, 10);
                 return !!d && d >= p.from && d < p.to;
@@ -71,7 +77,8 @@ export const notasVoz: GuardifyReportModule = {
                 (r: any) =>
                     !scope ||
                     matchesScope({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.corpo_id, puesto: r.puesto_id }, scope),
-            )
-            .map(mapNotaVozRow);
+            );
+        const ejecutivos = await ejecutivoPorCorpo(db as any, visibles.map((r: any) => r.corpo_id));
+        return visibles.map((r: any) => mapNotaVozRow(r, ejecutivos.get(Number(r.corpo_id)) ?? null));
     },
 };

@@ -34,6 +34,12 @@ function siNo(v: unknown): string | null {
     return s === "Sí" || s === "No" ? s : null;
 }
 
+/** Estado con la primera letra en mayúscula («Aprobado», «Pendiente», «Rechazado»): el filtro por igualdad es exacto. Vacío → «Pendiente». */
+function estadoVisible(v: unknown): string {
+    const s = String(v ?? "").trim().toLowerCase();
+    return s ? `${s.charAt(0).toUpperCase()}${s.slice(1, 50)}` : "Pendiente";
+}
+
 /**
  * Fila de `queryMutuosAcuerdosRows` → fila plana. Se omiten a propósito todas las firmas
  * (`firma_ejecutivo_cuenta_manual`, `firma_ejecutivo_cuenta_digital`, `firma_responsable`, `firma_ausente_manual`,
@@ -61,7 +67,7 @@ export function mapMutuoAcuerdoRow(r: any): OutRow {
         reemplaza_acepta: siNo(r.reemplaza_acepta_txt),
         fecha_acepta_reemplaza: fmtDt(r.reemplaza_acepta_at),
         motivo: text(r.motivo),
-        estado: text(r.estado, 50)?.toLowerCase() ?? "pendiente",
+        estado: estadoVisible(r.estado),
         cambio_guardia: r.cambio_guardia_id == null ? null : Number(r.cambio_guardia_id),
         firma_digital: siNo(r.firma_digital_ejecutivo_txt),
         creado_por: nodo(r.created_by_txt, r.created_by),
@@ -69,14 +75,17 @@ export function mapMutuoAcuerdoRow(r: any): OutRow {
 }
 
 /**
- * Mutuos acuerdos (`e_mutuos_acuerdos`). Cada fila trae sus ids de empresa/cliente/división/contrato/corpo/puesto
+ * Mutuos acuerdos (`e_mutuos_acuerdos`). El periodo (`from`/`to`) se aplica a `creado` (`created_at`, la fecha de registro del mutuo
+ * acuerdo: «Fecha inicio/fin» del Excel «Mutuos acuerdos»). Para los filtros: «Persona ausente/reemplaza» son `oficial_ausente` /
+ * `oficial_reemplaza` («código — nombre»), «Ejecutivo de cuenta» es `ejecutivo` (el del propio acuerdo) y «Usuario inserta» es
+ * `creado_por` («código — nombre»). Cada fila trae sus ids de empresa/cliente/división/contrato/corpo/puesto
  * (los registros antiguos pueden traerlos en 0: con un alcance pedido esas filas no se muestran).
  */
 export const mutuosAcuerdos: GuardifyReportModule = {
     id: "mutuos_acuerdos",
     supportsScope: true,
     searchKeys: ["oficial_ausente", "oficial_reemplaza", "ejecutivo", "motivo", "puesto", "sucursal", "contrato", "creado_por"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "estado", "ausente_acepta", "reemplaza_acepta"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "estado", "ausente_acepta", "reemplaza_acepta", "oficial_ausente", "oficial_reemplaza", "ejecutivo", "creado_por"],
     sortKeys: ["creado", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo", "oficial_ausente", "oficial_reemplaza", "estado", "creado_por"],
     defaultSort: "creado",
     async load(db, p) {

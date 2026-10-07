@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { filterVehiculosByScope, mapVisitaVehiculoRow, visitasVehiculos } from "./visitasVehiculos";
+import { enrichVehiculos, filterByEntrada, filterVehiculosByScope, mapVisitaVehiculoRow, visitasVehiculos } from "./visitasVehiculos";
 
 const raw = {
     id: 9,
@@ -13,6 +13,10 @@ const raw = {
     razon_visita: "Entrega de insumos",
     persona_lugar_visita: "Bodega / Carlos",
     responsable_label: "Ana Mora",
+    responsable_id: 20,
+    c_empleado: { id: 20, codigo: "E-20", nombre: "Ana", primer_apellido: "Mora", segundo_apellido: null },
+    departamento_visita: "Bodega",
+    persona_visita: "Carlos",
     empresa_id: 0, cliente_id: 5, division_id: 0, contrato_id: 2, corpo_id: 3, puesto_id: 7,
     empresa_nombre: "0",
     division_nombre: "0",
@@ -47,12 +51,65 @@ describe("visitas_vehiculos: mapeo", () => {
         assert.equal(o.motivo, null);
         assert.ok(!JSON.stringify(o).includes("foto.jpg"));
     });
+    it("responsable sale como «código - nombre» (solo el nombre si no hay código)", () => {
+        assert.equal(mapVisitaVehiculoRow(raw).responsable, "E-20 - Ana Mora");
+        assert.equal(mapVisitaVehiculoRow({ ...raw, c_empleado: { ...raw.c_empleado, codigo: null } }).responsable, "Ana Mora");
+        assert.equal(mapVisitaVehiculoRow({ ...raw, c_empleado: undefined }).responsable, "Ana Mora");
+    });
+    it("columnas para filtros al final: departamento, persona_visita, ejecutivo_cuenta, usuario_inserta y la división del contrato", () => {
+        const o = mapVisitaVehiculoRow({ ...raw, division_contrato: "Seguridad", ejecutivo_cuenta_nombre: "Rosa Vega", usuario_inserta_nombre: "Ana Mora" });
+        assert.equal(o.departamento, "Bodega");
+        assert.equal(o.persona_visita, "Carlos");
+        assert.equal(o.division, "Seguridad");
+        assert.equal(o.ejecutivo_cuenta, "Rosa Vega");
+        assert.equal(o.usuario_inserta, "Ana Mora");
+        assert.deepEqual(Object.keys(o).slice(-4), ["departamento", "persona_visita", "ejecutivo_cuenta", "usuario_inserta"]);
+        const sin = mapVisitaVehiculoRow({ ...raw, departamento_visita: " ", persona_visita: null });
+        assert.equal(sin.departamento, null);
+        assert.equal(sin.persona_visita, null);
+        assert.equal(sin.ejecutivo_cuenta, null);
+        assert.equal(sin.usuario_inserta, null);
+        assert.equal(sin.division, null);
+    });
     it("recorta el motivo a 500 caracteres", () => {
         assert.equal((mapVisitaVehiculoRow({ ...raw, razon_visita: "y".repeat(900) }).motivo as string).length, 500);
     });
     it("las claves del módulo existen en la fila", () => {
         const o = mapVisitaVehiculoRow(raw);
         for (const k of [...visitasVehiculos.searchKeys, ...visitasVehiculos.filterKeys, ...visitasVehiculos.sortKeys, visitasVehiculos.defaultSort]) assert.ok(k in o, k);
+    });
+});
+
+describe("visitas_vehiculos: enriquecimiento por lote", () => {
+    let calls = 0;
+    const table = (rows: any[]) => ({ findMany: async (a: any) => { calls++; return rows.filter((r) => a.where.id.in.includes(r.id)); } });
+    const db: any = {
+        e_estructura_sucursal: table([{ id: 3, ejecutivoCuenta_id: 10 }]),
+        n_ejecutivo_cuenta: table([{ id: 10, nombre: "Rosa Vega" }]),
+        e_estructura_contrato: table([{ id: 2, division_id: 20 }]),
+        n_division: table([{ id: 20, nombre: "Seguridad" }]),
+        c_empleado: table([{ id: 20, nombre: "Ana", primer_apellido: "Mora" }]),
+    };
+    it("trae ejecutivo, división y usuario en lote (no por fila) y los mapea", async () => {
+        const out = (await enrichVehiculos(db, [raw, { ...raw, id: 10 }, { ...raw, id: 11, corpo_id: 0, contrato_id: 0, responsable_id: 0 }])).map(mapVisitaVehiculoRow);
+        assert.equal(calls, 5); // sucursal, ejecutivo, contrato, división y empleado: una consulta cada uno
+        assert.equal(out[0].ejecutivo_cuenta, "Rosa Vega");
+        assert.equal(out[0].division, "Seguridad");
+        assert.equal(out[1].usuario_inserta, "Ana Mora");
+        assert.equal(out[2].ejecutivo_cuenta, null);
+        assert.equal(out[2].usuario_inserta, null);
+    });
+});
+
+describe("visitas_vehiculos: periodo por entrada", () => {
+    const rows = [
+        { id: 1, hora_entrada: new Date("2026-09-09T23:59:59Z") },
+        { id: 2, hora_entrada: new Date("2026-09-10T00:00:00Z") },
+        { id: 3, hora_entrada: new Date("2026-09-30T23:59:59Z") },
+        { id: 4, hora_entrada: new Date("2026-10-01T00:00:00Z") },
+    ];
+    it("from inclusivo, to exclusivo, sobre la hora de entrada", () => {
+        assert.deepEqual(filterByEntrada(rows, "2026-09-10", "2026-10-01").map((r) => r.id), [2, 3]);
     });
 });
 

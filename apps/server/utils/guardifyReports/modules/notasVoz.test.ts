@@ -42,6 +42,9 @@ describe("notas de voz: mapeo", () => {
         assert.equal(String(o.descripcion).length, 500);
         assert.equal(o.con_audio, "Sí");
         assert.equal(o.creado_por, "123 Ana Pérez");
+        assert.equal(o.ejecutivo_cuenta, null);
+        assert.equal(mapNotaVozRow(crudo(), "Marta Vega").ejecutivo_cuenta, "Marta Vega");
+        assert.equal(Object.keys(o).at(-1), "ejecutivo_cuenta");
         assert.equal(mapNotaVozRow(crudo({ descripcion: `iVBORw0KGgo${"Ab3".repeat(500)}` })).descripcion, null);
         const json = JSON.stringify(o);
         assert.ok(!json.includes("voice-notes") && !json.includes("base64") && !json.includes("m4a"));
@@ -82,11 +85,15 @@ describe("notas de voz: carga y alcance", () => {
         e_estructura_empresa: [{ id: 1, nombre: "Empresa", codigo: "E1" }],
         e_estructura_contrato: [{ id: 4, nombre: "Contrato", nro_contrato: "C4" }, { id: 40, nombre: "Otro", nro_contrato: null }],
         c_empleado: [{ id: 9, codigo: "9", nombre: "Ana", primer_apellido: "Pérez", segundo_apellido: null }],
+        e_estructura_sucursal: [{ id: 5, ejecutivoCuenta_id: 8 }, { id: 50, ejecutivoCuenta_id: null }],
+        n_ejecutivo_cuenta: [{ id: 8, nombre: "Marta Vega" }],
     };
     it("sin alcance trae todo el periodo (to exclusivo)", async () => {
         const rows = await notasVoz.load(fakeDb(tables), P);
         assert.deepEqual(rows.map((r) => r.id).sort(), [1, 2]);
         assert.equal(rows.find((r) => r.id === 1)!.empresa, "E1 - Empresa");
+        assert.equal(rows.find((r) => r.id === 1)!.ejecutivo_cuenta, "Marta Vega");
+        assert.equal(rows.find((r) => r.id === 2)!.ejecutivo_cuenta, null);
     });
     it("con alcance deja solo las filas de los nodos y un alcance vacío no ve nada", async () => {
         assert.deepEqual((await notasVoz.load(fakeDb(tables), { ...P, scope: parseScope("contrato:4") })).map((r) => r.id), [1]);

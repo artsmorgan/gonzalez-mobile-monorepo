@@ -1,4 +1,5 @@
 import { queryProductoNoConformeRows } from "../../reports-functions/productoNoConformeReport";
+import { ejecutivoPorCorpo } from "../enrich";
 import type { OutRow } from "../listing";
 import { fmtDt } from "../mappers";
 import { addDays } from "../params";
@@ -31,8 +32,9 @@ function nodo(nombre: unknown, id: unknown): string | null {
 /**
  * Fila de `queryProductoNoConformeRows` → fila plana. Se omiten a propósito las firmas (`firma_responsable`,
  * `firma_persona_identifico_pnc`, `firma_persona_origino_pnc` y sus `*_data_uri`): son imágenes.
+ * `ejecutivo`: ejecutivo de cuenta de la sucursal (se carga por lote en `load`).
  */
-export function mapProductoNoConformeRow(r: any): OutRow {
+export function mapProductoNoConformeRow(r: any, ejecutivo?: string | null): OutRow {
     return {
         id: Number(r.id),
         creado: fmtDt(r.created_at),
@@ -52,21 +54,27 @@ export function mapProductoNoConformeRow(r: any): OutRow {
         fecha_solucion: fmtDt(r.fecha_solucion),
         responsable_aprobar: text(r.responsable_aprobar, 200),
         creado_por: text(r.created_by_nombre, 200),
+        ejecutivo_cuenta: text(ejecutivo, 200),
     };
 }
 
-/** Producto no conforme (`c_producto_no_conforme`). Cada fila trae sus ids de empresa/cliente/división/contrato/corpo/puesto. */
+/**
+ * Producto no conforme (`c_producto_no_conforme`). Cada fila trae sus ids de empresa/cliente/división/contrato/corpo/puesto. El periodo
+ * (`from`/`to`) se aplica a `creado` (`created_at`, la fecha de registro, igual que el filtro de fechas de la app: «Fecha inicio/fin»
+ * del Excel «Producto no conforme»); `fecha_identificacion` (solo fecha) queda como columna. `creado_por` («código - nombre») es el
+ * «Usuario inserta».
+ */
 export const productoNoConforme: GuardifyReportModule = {
     id: "producto_no_conforme",
     supportsScope: true,
     searchKeys: ["descripcion", "accion_implementada", "tipo_servicio", "persona_identifico", "persona_origino", "responsable_cuenta", "creado_por", "puesto", "sucursal"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "tipo_servicio"],
-    sortKeys: ["creado", "fecha_identificacion", "fecha_solucion", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "tipo_servicio", "responsable_cuenta", "creado_por"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "tipo_servicio", "ejecutivo_cuenta", "creado_por"],
+    sortKeys: ["creado", "fecha_identificacion", "fecha_solucion", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "tipo_servicio", "responsable_cuenta", "creado_por", "ejecutivo_cuenta"],
     defaultSort: "creado",
     async load(db, p) {
         const rows = await queryProductoNoConformeRows(db, { creadoDesde: `${p.from}T00:00:00`, creadoHasta: `${addDays(p.to, -1)}T23:59:59` }, "fecha_identificacion");
         const scope = p.scope;
-        return rows
+        const visibles = rows
             .filter((r: any) => {
                 const d = fmtDt(r.created_at)?.slice(0, 10);
                 return !!d && d >= p.from && d < p.to;
@@ -75,7 +83,8 @@ export const productoNoConforme: GuardifyReportModule = {
                 (r: any) =>
                     !scope ||
                     matchesScope({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.corpo_id, puesto: r.puesto_id }, scope),
-            )
-            .map(mapProductoNoConformeRow);
+            );
+        const ejecutivos = await ejecutivoPorCorpo(db as any, visibles.map((r: any) => r.corpo_id));
+        return visibles.map((r: any) => mapProductoNoConformeRow(r, ejecutivos.get(Number(r.corpo_id)) ?? null));
     },
 };

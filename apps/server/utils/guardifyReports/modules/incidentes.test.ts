@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { filterIncidentesByScope, incidentes, mapIncidenteRow } from "./incidentes";
+import { filterIncidentesByScope, incidentes, mapIncidenteRow, mapIncidentesConExtras } from "./incidentes";
 
 const raw = (o: Record<string, unknown> = {}) => ({
-    id: 7, created_at: new Date("2026-09-10T14:30:00Z"), fecha_incidente: new Date("2026-09-09T00:00:00Z"), fecha_reporte: new Date("2026-09-10T00:00:00Z"),
+    id: 7, created_by: 7, created_at: new Date("2026-09-10T14:30:00Z"), fecha_incidente: new Date("2026-09-09T00:00:00Z"), fecha_reporte: new Date("2026-09-10T00:00:00Z"),
     empresa_id: 9, cliente_id: 4, division_id: 2, contrato_id: 31, corpo_id: 55, puesto_id: 140,
     empresa_nombre: "9 - Seguridad SA", cliente_nombre: "Cliente Uno", division_nombre: "Seguridad", contrato_nombre: "C-31 - Contrato", corpo_nombre: "55 - Sede", puesto_nombre: "P140 - Portón",
     clasificacion: 3, clasificacion_nombre: "Robo", estado: false, nombre_responsable: "Ana Soto", nombre_responsable_atencion: "Luis Mora", ejecutivo_cuenta_nombre: "Eva",
@@ -45,6 +45,37 @@ describe("incidentes: mapeo", () => {
     it("el módulo declara columnas de búsqueda, filtro y orden que existen en la fila", () => {
         const cols = Object.keys(mapIncidenteRow(raw()));
         for (const k of [...incidentes.searchKeys, ...incidentes.filterKeys, ...incidentes.sortKeys, incidentes.defaultSort]) assert.ok(cols.includes(k), k);
+    });
+});
+
+describe("incidentes: columnas para filtros", () => {
+    it("trae quien registró al final de la fila; el ejecutivo de cuenta es el del propio incidente", () => {
+        const o = mapIncidenteRow(raw(), { usuario: "Luis Mora" });
+        assert.equal(o.usuario_inserta, "Luis Mora");
+        assert.equal(o.ejecutivo_cuenta, "Eva");
+        assert.equal(Object.keys(o).at(-1), "usuario_inserta");
+        assert.equal(mapIncidenteRow(raw()).usuario_inserta, null);
+    });
+    it("usa la división del contrato solo cuando el incidente no la guardó", () => {
+        assert.equal(mapIncidenteRow(raw({ division_id: 0, division_nombre: "0" }), { divisionContrato: "Aseo" }).division, "Aseo");
+        assert.equal(mapIncidenteRow(raw(), { divisionContrato: "Aseo" }).division, "Seguridad");
+    });
+    it("estado solo toma los valores «Solucionado» y «No solucionado»; las fechas de solución son fecha-hora", () => {
+        assert.equal(mapIncidenteRow(raw({ estado: 1 })).estado, "Solucionado");
+        const o = mapIncidenteRow(raw({ fecha_solucion: new Date("2026-09-20T00:00:00Z"), fecha_real_solucion: new Date("2026-09-21T00:00:00Z") }));
+        assert.equal(o.fecha_solucion, "2026-09-20T00:00:00");
+        assert.equal(o.fecha_solucion_real, "2026-09-21T00:00:00");
+    });
+    it("carga quien registró y la división del contrato por lote", async () => {
+        const table = (rows: any[]) => ({ findMany: async (a: any) => rows.filter((r) => !a?.where?.id?.in || a.where.id.in.includes(r.id)) });
+        const db: any = {
+            c_empleado: table([{ id: 7, nombre: "Luis", primer_apellido: "Mora", segundo_apellido: null }]),
+            e_estructura_contrato: table([{ id: 31, division_id: 20 }]),
+            n_division: table([{ id: 20, nombre: "Aseo" }]),
+        };
+        const out = await mapIncidentesConExtras(db, [raw({ id: 1 }), raw({ id: 2, division_id: 0, division_nombre: "0", created_by: 99 })]);
+        assert.deepEqual(out.map((o) => o.usuario_inserta), ["Luis Mora", null]);
+        assert.deepEqual(out.map((o) => o.division), ["Seguridad", "Aseo"]);
     });
 });
 

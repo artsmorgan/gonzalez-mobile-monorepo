@@ -46,6 +46,8 @@ describe("articulos_puesto: mapeo", () => {
         assert.deepEqual([o.id, o.articulo, o.origen, o.cantidad, o.marca, o.modelo, o.serie, o.movimientos], [11, "Radio", "Asignado", 1, "Motorola", null, "SN1", 2]);
         assert.equal(o.fecha_entrega, "2026-09-12T08:00:00");
         assert.deepEqual([o.empresa, o.cliente, o.division, o.contrato, o.sucursal, o.puesto], ["G - Gonzalez", "Cliente 5", "Norte", "C-20 - Contrato", "S1 - Sede", "P40 - Recepción"]);
+        assert.equal(o.ejecutivo_cuenta, null);
+        assert.equal(mapArticuloPuestoRow(puesto(), puesto().articulos[0], " Rosa Vega ").ejecutivo_cuenta, "Rosa Vega");
         const s = JSON.stringify(o);
         assert.equal(s.includes("base64"), false);
         assert.equal(s.includes("CCCC"), false);
@@ -61,6 +63,10 @@ describe("articulos_puesto: periodo y alcance", () => {
     it("el plan se muestra siempre y lo asignado solo si se entregó en [from, to)", () => {
         const out = buildArticulosPuestoRows(puestos, "2026-09-01", "2026-10-01", null);
         assert.deepEqual(out.map((r) => r.id), [11, 12, 21]);
+    });
+    it("agrega el ejecutivo de cuenta por sucursal a cada artículo", () => {
+        const out = buildArticulosPuestoRows(puestos, "2026-09-01", "2026-10-01", null, new Map([[30, "Rosa Vega"]]));
+        assert.deepEqual(out.map((r) => [r.id, r.ejecutivo_cuenta]), [[11, "Rosa Vega"], [12, "Rosa Vega"], [21, null]]);
     });
     it("con alcance filtra por nivel; vacío no ve nada", () => {
         const f = (scope: any) => buildArticulosPuestoRows(puestos, "2026-09-01", "2026-10-01", scope).map((r) => r.id);

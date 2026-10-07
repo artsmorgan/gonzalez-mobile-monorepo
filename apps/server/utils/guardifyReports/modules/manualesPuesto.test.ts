@@ -28,6 +28,15 @@ describe("manuales de trabajo: mapeo", () => {
         assert.deepEqual([o.puestos_vinculados, o.empleados_vinculados, o.visualizaciones, o.firmados, o.aprobados], [2, 3, 3, 1, 1]);
         assert.equal(o.creado_por, "11 - Carla Soto");
     });
+    it("agrega los puestos (principal y vinculados), el ejecutivo de cuenta y completa la división", () => {
+        const linked = { ...raw, e_puestos_manual_puesto: [{ puesto_id: 10, e_estructura_puesto: { id: 10, codigo: "P2", nombre: "Ronda" } }, { puesto_id: 11, e_estructura_puesto: null }, { puesto_id: 6, e_estructura_puesto: { id: 6, codigo: "P1", nombre: "Puesto" } }] };
+        const o = mapManualPuestoRow(linked, { ejecutivo: "Luis Mora", puestos: new Map([[11, "P3 - Acceso"]]) });
+        assert.deepEqual([o.puestos, o.ejecutivo_cuenta, o.creado_por, o.division], ["P1 - Puesto; P2 - Ronda; P3 - Acceso", "Luis Mora", "11 - Carla Soto", "D - División"]);
+        assert.deepEqual([mapManualPuestoRow(raw).puestos, mapManualPuestoRow(raw).ejecutivo_cuenta], ["P1 - Puesto", null]);
+        assert.equal(mapManualPuestoRow({ ...raw, division_txt: "0" }, { division: "Seguridad" }).division, "Seguridad");
+        const muchos = mapManualPuestoRow({ ...raw, e_puestos_manual_puesto: Array.from({ length: 100 }, (_, i) => ({ puesto_id: i, e_estructura_puesto: { codigo: `P${i}`, nombre: "Puesto largo" } })) });
+        assert.equal((muchos.puestos as string).length, 500);
+    });
     it("nunca expone firmas, cuestionario ni respuestas", () => {
         const s = JSON.stringify(mapManualPuestoRow(raw));
         for (const bad of ["base64", "secreto", "quiz"]) assert.equal(s.includes(bad), false, bad);
@@ -65,6 +74,21 @@ describe("manuales de trabajo: carga y alcance", () => {
         assert.deepEqual((await loadManualesPuesto(db, params({ scope: "puesto:11" }), query)).map((r) => r.id), [3]);
         assert.deepEqual((await loadManualesPuesto(db, params({ scope: "puesto:6" }), query)).map((r) => r.id), [1]);
         assert.equal((await loadManualesPuesto(db, params({ scope: "" }), query)).length, 0);
+    });
+    it("completa ejecutivo, división y puestos por lote (sin consultas por fila)", async () => {
+        const t: Record<string, any[]> = {
+            e_estructura_sucursal: [{ id: 5, ejecutivoCuenta_id: 70 }], n_ejecutivo_cuenta: [{ id: 70, nombre: "Luis Mora" }],
+            e_estructura_contrato: [{ id: 4, division_id: 30 }], n_division: [{ id: 30, nombre: "Seguridad" }],
+            e_estructura_puesto: [{ id: 10, codigo: "P2", nombre: "Ronda" }],
+        };
+        const calls: string[] = [];
+        const fake = new Proxy({}, { get: (_t, name: string) => ({ findMany: async (a: any) => { calls.push(name); const ids = a?.where?.id?.in ?? []; return (t[name] ?? []).filter((x) => ids.includes(x.id)); } }) }) as any;
+        const rows = await loadManualesPuesto(fake, params(), async () => [
+            { ...raw, id: 1, division_txt: "0", e_puestos_manual_puesto: [{ puesto_id: 10 }] },
+            { ...raw, id: 2, corpo_id: 99, e_puestos_manual_puesto: [{ puesto_id: 10 }] },
+        ]);
+        assert.deepEqual(rows.map((r) => [r.ejecutivo_cuenta, r.division, r.puestos]), [["Luis Mora", "Seguridad", "P1 - Puesto; P2 - Ronda"], [null, "D - División", "P1 - Puesto; P2 - Ronda"]]);
+        assert.deepEqual(calls.sort(), ["e_estructura_contrato", "e_estructura_puesto", "e_estructura_sucursal", "n_division", "n_ejecutivo_cuenta"]);
     });
     it("declara alcance y sus claves existen en la fila", () => {
         assert.equal(manualesPuesto.supportsScope, true);

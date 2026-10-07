@@ -21,7 +21,7 @@ NodeModule._load = function (request: string, ...rest: unknown[]) {
 };
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { mapRevisionVehiculoRow, revisionVehiculos } = require("./revisionVehiculos") as typeof import("./revisionVehiculos");
+const { mapRevisionVehiculoRow, revisionVehiculos, usoPorRevision } = require("./revisionVehiculos") as typeof import("./revisionVehiculos");
 
 function fakeDb(tables: Record<string, any[]>) {
     return new Proxy({}, {
@@ -45,6 +45,10 @@ const GENERAL = JSON.stringify([
     { key: "combustible", label: "Combustible", kind: "select", value: "1/2" },
     { key: "firma_oficial_transito", label: "Firma", kind: "signature", value: "data:image/png;base64,FIRMA" },
     { key: "nombre_oficial_transito", label: "Oficial", kind: "text", value: "Fulano" },
+    { key: "modelo", label: "Modelo", kind: "text", value: "Frontier" },
+    { key: "vin", label: "Número de Vin o chases", kind: "text", value: "VIN123" },
+    { key: "titulo_propiedad", label: "Título propiedad", kind: "text", value: "true" },
+    { key: "rtv", label: "RTV", kind: "text", value: "false" },
 ]);
 const REVISION = JSON.stringify([
     { kind: "heading", label: "Accesorios externos" },
@@ -86,6 +90,29 @@ describe("revisión de vehículos", () => {
         assert.equal(o.fotos, 0);
         assert.equal(o.movimientos, 2);
         assert.equal(String(o.observaciones).length, 500);
+        assert.equal(o.corporativo, "No");
+        for (const k of ["modelo", "vin", "uso_vehiculo", "titulo_propiedad", "rtv", "marchamo", "ejecutivo_cuenta", "usuario_inserta"]) assert.equal(o[k], null, k);
+    });
+    it("columnas para los filtros: de la información general o, si falta, del vehículo vinculado; Sí/No exactos", () => {
+        const o = mapRevisionVehiculoRow({
+            ...bitacora(1, 20, { vehiculo_id: 9 }), vehiculo_txt: "ABC-9 · Toyota Hilux (Vehículo)", ejecutivo_cuenta: "Marta Ruiz", usuario_inserta: "Ana Soto", uso_txt: "Ana - 2026-09-06",
+            veh_marca: "Toyota", veh_modelo: "Hilux", veh_titulo_propiedad: false, veh_rtv: true, veh_marchamo: true,
+        });
+        assert.deepEqual([o.modelo, o.vin, o.corporativo], ["Frontier", "VIN123", "Sí"]); // el modelo de la revisión gana al del vehículo
+        assert.deepEqual([o.titulo_propiedad, o.rtv, o.marchamo], ["Sí", "No", "Sí"]); // título y RTV de la revisión; marchamo del vehículo
+        assert.deepEqual([o.uso_vehiculo, o.ejecutivo_cuenta, o.usuario_inserta], ["Ana - 2026-09-06", "Marta Ruiz", "Ana Soto"]);
+        const sin = mapRevisionVehiculoRow({ id: 2, vehiculo_id: 9, informacion_general: "[]", veh_marca: "Toyota", veh_modelo: "Hilux", veh_titulo_propiedad: true, veh_rtv: false, veh_marchamo: null });
+        assert.deepEqual([sin.marca, sin.modelo, sin.titulo_propiedad, sin.rtv, sin.marchamo], ["Toyota", "Hilux", "Sí", "No", null]);
+        assert.deepEqual(Object.keys(o).slice(-9), ["modelo", "vin", "uso_vehiculo", "corporativo", "titulo_propiedad", "rtv", "marchamo", "ejecutivo_cuenta", "usuario_inserta"]);
+    });
+    it("uso del vehículo vinculado, en lote; si la base falla la revisión queda sin uso", async () => {
+        const db = fakeDb({
+            c_bitacora_vehiculo_detenido: [{ id: 1, uso_id: 4 }, { id: 2, uso_id: null }, { id: 3, uso_id: 99 }],
+            c_usos_vehiculos_corporativos: [{ id: 4, nombre_conductor: " Ana ", fecha: new Date("2026-09-06T00:00:00Z") }],
+        });
+        assert.deepEqual([...(await usoPorRevision(db, [1, 2, 3]))], [[1, "Ana - 2026-09-06"]]);
+        const roto: any = { c_bitacora_vehiculo_detenido: { findMany: async () => { throw new Error("column uso_id does not exist"); } } };
+        assert.deepEqual([...(await usoPorRevision(roto, [1]))], []);
     });
     it("nunca devuelve una imagen aunque venga en un campo de texto", () => {
         const o = mapRevisionVehiculoRow({ id: 6, informacion_general: JSON.stringify([{ key: "marca", kind: "text", value: "data:image/png;base64,ZZZ" }, { key: "color", kind: "text", value: "foto.png" }]) });
@@ -98,18 +125,26 @@ describe("revisión de vehículos", () => {
     });
     it("con alcance filtra por la ubicación de cada revisión (sucursal = corpo)", async () => {
         const db = fakeDb({
-            c_bitacora_vehiculo_detenido: [bitacora(1, 20, { vehiculo_id: 9 }), bitacora(2, 21)],
-            c_vehiculos_corporativos: [{ id: 9, placa: "ABC-9", marca: "Toyota", modelo: "Hilux", tipo: "Vehículo" }],
+            c_bitacora_vehiculo_detenido: [bitacora(1, 20, { vehiculo_id: 9, uso_id: 4 }), bitacora(2, 21)],
+            c_vehiculos_corporativos: [{ id: 9, placa: "ABC-9", marca: "Toyota", modelo: "Hilux", tipo: "Vehículo", titulo_propiedad: true, rtv: true, marchamo: false }],
+            c_usos_vehiculos_corporativos: [{ id: 4, nombre_conductor: "Ana", fecha: new Date("2026-09-06T00:00:00Z") }],
+            c_empleado: [{ id: 7, codigo: "E7", nombre: "Ana", primer_apellido: "Soto", segundo_apellido: null }],
+            n_ejecutivo_cuenta: [{ id: 50, nombre: "Marta Ejecutiva" }],
             e_estructura_empresa: [{ id: 1, nombre: "Emp", codigo: "9" }],
             e_estructura_cliente: [{ id: 5, nombre: "Cli" }],
             n_division: [{ id: 3, nombre: "Div", codigo: "D" }],
             e_estructura_contrato: [{ id: 20, nombre: "A", nro_contrato: "20" }, { id: 21, nombre: "B", nro_contrato: "21" }],
-            e_estructura_sucursal: [{ id: 10, nombre: "Suc", nro_sucursal: "1" }],
+            e_estructura_sucursal: [{ id: 10, nombre: "Suc", nro_sucursal: "1", ejecutivoCuenta_id: 50 }],
             e_estructura_puesto: [{ id: 101, nombre: "Pu1", codigo: "A" }, { id: 102, nombre: "Pu2", codigo: "B" }],
         });
         const all = await revisionVehiculos.load(db, P);
         assert.deepEqual(all.map((r) => r.id).sort(), [1, 2]);
         assert.equal(all.find((r) => r.id === 1)?.vehiculo, "ABC-9 · Toyota Hilux (Vehículo)");
+        // enriquecimiento por lote: uso vinculado, vehículo, ejecutivo de la sucursal y quien registró
+        const r1 = all.find((r) => r.id === 1)!;
+        assert.deepEqual([r1.uso_vehiculo, r1.corporativo, r1.marchamo, r1.ejecutivo_cuenta, r1.usuario_inserta], ["Ana - 2026-09-06", "Sí", "No", "Marta Ejecutiva", "Ana Soto"]);
+        const r2 = all.find((r) => r.id === 2)!;
+        assert.deepEqual([r2.uso_vehiculo, r2.corporativo, r2.ejecutivo_cuenta], [null, "No", "Marta Ejecutiva"]);
         assert.equal((await revisionVehiculos.load(db, { ...P, scope: [{ nivel: "corpo", id: 10 }] })).length, 2);
         const uno = await revisionVehiculos.load(db, { ...P, scope: [{ nivel: "contrato", id: 21 }] });
         assert.deepEqual(uno.map((r) => [r.id, r.contrato, r.sucursal, r.puesto]), [[2, "B", "Suc", "Pu2"]]);

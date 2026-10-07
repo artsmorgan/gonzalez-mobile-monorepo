@@ -1,4 +1,5 @@
 import { queryInduccionRecorridoRows } from "../../reports-functions/induccionRecorridoReport";
+import { ejecutivoPorCorpo, nombresEmpleado, usuarioInserta } from "../enrich";
 import { fmtDt } from "../mappers";
 import type { OutRow } from "../listing";
 import { addDays } from "../params";
@@ -38,11 +39,31 @@ function parseArr(raw: unknown): any[] {
 
 const joinTxt = (items: unknown[]): string | null => clip(items.map((x) => txt(x)).filter(Boolean).join("; "));
 
+/** Código de empleado por cédula (solo si la cédula corresponde a un único código; si es ambigua no se muestra). En bloques de 1000. */
+export async function codigosPorCedula(db: any, cedulas: unknown[]): Promise<Map<string, string>> {
+    const all = [...new Set(cedulas.map((c) => String(c ?? "").trim()).filter(Boolean))];
+    const found = new Map<string, Set<string>>();
+    for (let i = 0; i < all.length; i += 1000) {
+        const rows = await db.c_empleado.findMany({ where: { cedula: { in: all.slice(i, i + 1000) } }, select: { cedula: true, codigo: true } });
+        for (const e of rows) {
+            const ced = String(e.cedula ?? "").trim();
+            const cod = String(e.codigo ?? "").trim();
+            if (!ced || !cod) continue;
+            if (!found.has(ced)) found.set(ced, new Set());
+            found.get(ced)!.add(cod);
+        }
+    }
+    const out = new Map<string, string>();
+    for (const [ced, cods] of found) if (cods.size === 1) out.set(ced, [...cods][0]!);
+    return out;
+}
+
 /**
  * Registro de inducción y recorrido. Nunca se exponen las firmas (`firma_supervisor`, `firma_responsable` ni la de
- * cada participante).
+ * cada participante). Un participante se muestra «código - nombre (cédula)» cuando su cédula corresponde a un empleado
+ * (`codigos`: cédula → código); si no, «nombre (cédula)». `ejecutivo_cuenta` y `usuario_inserta` los agrega `load` por lote.
  */
-export function mapInduccionRecorridoRow(r: any): OutRow {
+export function mapInduccionRecorridoRow(r: any, codigos?: Map<string, string>): OutRow {
     const temas = parseArr(r.temas_desarrollados);
     const aspectos = parseArr(r.aspectos_especificos);
     const participantes = parseArr(r.participantes);
@@ -68,18 +89,26 @@ export function mapInduccionRecorridoRow(r: any): OutRow {
             participantes.map((p: any) => {
                 const n = txt(p?.nombre_completo);
                 const c = txt(p?.cedula);
-                return n && c ? `${n} (${c})` : n ?? c;
+                const cod = c ? codigos?.get(c) : undefined;
+                const base = n && c ? `${n} (${c})` : n ?? c;
+                return base && cod ? `${cod} - ${base}` : base;
             }),
         ),
+        ejecutivo_cuenta: txt(r.ejecutivo_cuenta),
+        usuario_inserta: txt(r.usuario_inserta),
     };
 }
 
-/** Registro de inducción y recorrido (`c_registro_induccion_recorrido`). Cada fila trae su ubicación completa en la estructura. */
+/**
+ * Registro de inducción y recorrido (`c_registro_induccion_recorrido`). Cada fila trae su ubicación completa en la estructura.
+ * El periodo (`from`/`to`) se aplica a la fecha de registro (`creado`, `created_at`), igual que el filtro de fechas de la app;
+ * «Fecha (visita)» (`fecha_visita`) es otra fecha y no se usa para el periodo.
+ */
 export const registroInduccionRecorrido: GuardifyReportModule = {
     id: "registro_induccion_recorrido",
     supportsScope: true,
     searchKeys: ["responsable", "nombres_participantes", "supervisor_cliente", "supervisor_corporacion", "contrato", "sucursal", "puesto", "cliente"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "responsable", "nombres_participantes", "ejecutivo_cuenta", "usuario_inserta"],
     sortKeys: ["creado", "fecha_visita", "empresa", "cliente", "contrato", "sucursal", "puesto", "responsable", "participantes"],
     defaultSort: "creado",
     async load(db, p) {
@@ -88,6 +117,16 @@ export const registroInduccionRecorrido: GuardifyReportModule = {
         const kept = !scope
             ? rows
             : rows.filter((r: any) => matchesScope({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.corpo_id, puesto: r.puesto_id }, scope));
-        return kept.map(mapInduccionRecorridoRow);
+        if (!kept.length) return [];
+        // Datos para los filtros, en lote (nunca por fila).
+        const participantes = kept.map((r: any) => parseArr(r.participantes));
+        const [ejecutivos, nombres, codigos] = await Promise.all([
+            ejecutivoPorCorpo(db, kept.map((r: any) => r.corpo_id)),
+            nombresEmpleado(db, kept.map((r: any) => r.created_by)),
+            codigosPorCedula(db, participantes.flat().map((x: any) => txt(x?.cedula))),
+        ]);
+        return kept.map((r: any) =>
+            mapInduccionRecorridoRow({ ...r, ejecutivo_cuenta: ejecutivos.get(Number(r.corpo_id)), usuario_inserta: usuarioInserta(r.created_by, nombres) }, codigos),
+        );
     },
 };

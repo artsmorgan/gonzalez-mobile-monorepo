@@ -4,6 +4,7 @@ import {
     type MantenimientoArticulosModuleFilters,
 } from "../../reports-functions/mantenimientoArticulosReport";
 import type { ReportDataAccess } from "../../reportDynamicPrisma";
+import { ejecutivoPorCorpo } from "../enrich";
 import type { OutRow } from "../listing";
 import { fmtDt } from "../mappers";
 import { addDays, type ReportParams } from "../params";
@@ -32,8 +33,9 @@ const num = (v: unknown): number | null => (v == null || v === "" || !Number.isF
 /**
  * Fila de `queryMantenimientoArticulosRows` → fila plana. Se omiten ids internos de plan/asignación, el formulario de
  * mantenimiento de armas (texto estructurado largo) y el contenido de los archivos adjuntos (solo se cuenta cuántos hay).
+ * `ejecutivo`: ejecutivo de cuenta de la sucursal (se carga por lote en `load`).
  */
-export function mapMantenimientoArticuloRow(r: MantenimientoArticuloReportRow): OutRow {
+export function mapMantenimientoArticuloRow(r: MantenimientoArticuloReportRow, ejecutivo?: string | null): OutRow {
     return {
         id: Number(r.id),
         creado: fmtDt(r.created_at),
@@ -78,6 +80,7 @@ export function mapMantenimientoArticuloRow(r: MantenimientoArticuloReportRow): 
         tipo_mantenimiento_reincidencia: text(r.tipo_mant_art_reincid, 200),
         adjuntos: num(r.archivos_adjuntos_count) ?? 0,
         actualizado: fmtDt(r.updated_at),
+        ejecutivo_cuenta: text(ejecutivo, 200),
     };
 }
 
@@ -112,26 +115,28 @@ export async function loadMantenimientoArticulos(db: ReportDataAccess, p: Report
             matchesScope({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.corpo_id, puesto: r.puesto_id }, scope),
         );
     }
-    return rows
-        .filter((r) => {
-            const d = fmtDt(r.created_at)?.slice(0, 10);
-            return !!d && d >= p.from && d < p.to;
-        })
-        .map(mapMantenimientoArticuloRow);
+    const enPeriodo = rows.filter((r) => {
+        const d = fmtDt(r.created_at)?.slice(0, 10);
+        return !!d && d >= p.from && d < p.to;
+    });
+    const ejecutivos = await ejecutivoPorCorpo(db as any, enPeriodo.map((r) => r.corpo_id));
+    return enPeriodo.map((r) => mapMantenimientoArticuloRow(r, ejecutivos.get(Number(r.corpo_id)) ?? null));
 }
 
 /**
- * Mantenimiento de artículos (`c_articulo_mantenimiento`). La fila se ubica por el puesto del artículo (plan o asignado),
+ * Mantenimiento de artículos (`c_articulo_mantenimiento`). El periodo (`from`/`to`) se aplica a `creado` (`created_at`, la fecha de
+ * registro del mantenimiento: «Fecha inicio/fin» del Excel «Equipo del puesto»); la fecha de solución se filtra aparte con el filtro
+ * `fecha_solucion`. La fila se ubica por el puesto del artículo (plan o asignado),
  * del que la consulta ya deduce empresa/cliente/división/contrato/corpo.
  */
 export const mantenimientoArticulos: GuardifyReportModule = {
     id: "mantenimiento_articulos",
     supportsScope: true,
     searchKeys: ["articulo", "puesto", "sucursal", "contrato", "proveedor", "marca", "modelo", "serie_placa", "observaciones", "detalle"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "origen", "estado", "accion", "categoria", "reincidencia_30_dias"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "origen", "estado", "accion", "categoria", "reincidencia_30_dias", "ejecutivo_cuenta"],
     sortKeys: [
         "creado", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "articulo", "estado", "accion",
-        "fecha_inicio", "fecha_solucion", "fecha_fin", "proveedor", "costo_total", "actualizado",
+        "fecha_inicio", "fecha_solucion", "fecha_fin", "proveedor", "costo_total", "actualizado", "ejecutivo_cuenta",
     ],
     defaultSort: "creado",
     load: (db, p) => loadMantenimientoArticulos(db, p),

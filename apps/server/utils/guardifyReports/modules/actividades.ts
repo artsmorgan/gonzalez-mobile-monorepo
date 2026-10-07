@@ -1,5 +1,6 @@
 import { batchFindManyByIds } from "../../reportDynamicPrisma";
 import { plazaCodigoExcluyeArroba, queryActividadesReportRows } from "../../reports-functions/actividadesReport";
+import { ejecutivoPorCorpo } from "../enrich";
 import type { OutRow } from "../listing";
 import { fmtDt } from "../mappers";
 import { addDays } from "../params";
@@ -26,8 +27,11 @@ const TURNO: Record<string, string> = { D: "Diurno", M: "Mixto", N: "Nocturno" }
 export type EstructuraNombres = Record<"empresa" | "cliente" | "division" | "contrato" | "corpo", Map<number, string>>;
 const emptyNombres = (): EstructuraNombres => ({ empresa: new Map(), cliente: new Map(), division: new Map(), contrato: new Map(), corpo: new Map() });
 
-/** Una fila por actividad y puesto al que aplica. Las plazas se resumen en conteos (no se expone el detalle por usuario). */
-export function mapActividadPuestoRow(act: any, ap: any | null, h: Hierarchy | undefined, n: EstructuraNombres): OutRow {
+/**
+ * Una fila por actividad y puesto al que aplica. Las plazas se resumen en conteos (no se expone el detalle por usuario).
+ * `ejecutivos` = ejecutivo de cuenta por sucursal (corpo), cargado en lote.
+ */
+export function mapActividadPuestoRow(act: any, ap: any | null, h: Hierarchy | undefined, n: EstructuraNombres, ejecutivos: Map<number, string> = new Map()): OutRow {
     const name = (nivel: keyof EstructuraNombres) => {
         const id = h?.[nivel];
         return id ? (n[nivel].get(Number(id)) ?? null) : null;
@@ -53,6 +57,7 @@ export function mapActividadPuestoRow(act: any, ap: any | null, h: Hierarchy | u
         puesto: ap ? withCode(ap.e_estructura_puesto?.codigo, ap.e_estructura_puesto?.nombre) : null,
         plazas: plazas.length,
         marcadas: plazas.filter((pl) => pl.marcada).length,
+        ejecutivo_cuenta: h?.corpo ? (ejecutivos.get(Number(h.corpo)) ?? null) : null,
         // Nunca se exponen los artículos por plaza ni el usuario que marcó la actividad.
     };
 }
@@ -85,20 +90,23 @@ export async function buildActividadesRows(db: any, acts: any[], from: string, t
     for (const [id, c] of contratos) nombres.contrato.set(id, withCode(c.nro_contrato, c.nombre) ?? "");
     for (const [id, s] of corpos) nombres.corpo.set(id, withCode(s.nro_sucursal, s.nombre) ?? "");
 
-    return kept.map((x) => mapActividadPuestoRow(x.act, x.ap, hier.get(Number(x.ap?.puesto_id)), nombres));
+    const ejecutivos = await ejecutivoPorCorpo(db, ids("corpo"));
+
+    return kept.map((x) => mapActividadPuestoRow(x.act, x.ap, hier.get(Number(x.ap?.puesto_id)), nombres, ejecutivos));
 }
 
 /**
  * Actividades (`e_actividades` → `e_actividades_puesto`). La ubicación no está en la actividad sino en cada puesto al que
  * aplica, así que se deduce del puesto (`loadPuestoHierarchy`). Una actividad sin puestos asignados sale sin ubicación y
- * queda fuera de cualquier consulta con alcance. Periodo: `fecha_inicio`, como el filtro de la app.
+ * queda fuera de cualquier consulta con alcance. Periodo: `fecha_inicio`, como el filtro de la app. La tabla de actividades no guarda
+ * quién la registró, por eso no hay columna de usuario.
  */
 export const actividades: GuardifyReportModule = {
     id: "actividades",
     supportsScope: true,
     searchKeys: ["nombre_actividad", "descripcion", "puesto", "sucursal", "contrato"],
-    filterKeys: ["tipo_turno", "revision_equipo", "frecuencia", "empresa", "cliente", "division", "contrato", "sucursal", "puesto"],
-    sortKeys: ["nombre_actividad", "fecha_inicio", "fecha_fin", "frecuencia", "tipo_turno", "empresa", "cliente", "contrato", "sucursal", "puesto", "plazas", "marcadas"],
+    filterKeys: ["tipo_turno", "revision_equipo", "frecuencia", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta"],
+    sortKeys: ["nombre_actividad", "fecha_inicio", "fecha_fin", "frecuencia", "tipo_turno", "empresa", "cliente", "contrato", "sucursal", "puesto", "plazas", "marcadas", "ejecutivo_cuenta"],
     defaultSort: "fecha_inicio",
     async load(db, p) {
         // Límites holgados (un día de margen) para no depender de la zona horaria del servidor; el periodo exacto se aplica después.

@@ -1,4 +1,5 @@
 import type { ReportDataAccess } from "../../reportDynamicPrisma";
+import { ejecutivoPorCorpo, nombresEmpleado, usuarioInserta } from "../enrich";
 import type { OutRow } from "../listing";
 import { fmtDt } from "../mappers";
 import { addDays } from "../params";
@@ -59,11 +60,14 @@ function parseArticulos(raw: unknown): Array<Record<string, unknown>> {
     }
 }
 
+/** Datos que no vienen en la fila y se cargan por lote: ejecutivo de cuenta de la sucursal y quien registró la entrega. */
+export type EntregaExtra = { ejecutivo?: string | null; usuario?: string | null };
+
 /**
  * Entrega de puesto (`e_registro_entrega_puesto`) a fila plana. Se omiten a propósito las firmas, los ids de marca y el
  * detalle de los artículos (solo se cuentan: cuántos y cuántos con novedad, es decir «Malo» o «No está»).
  */
-export function mapEntregaPuestoRow(r: any): OutRow {
+export function mapEntregaPuestoRow(r: any, x: EntregaExtra = {}): OutRow {
     const arts = parseArticulos(r.articulos_puesto);
     const conNovedad = arts.filter((a) => /^(malo|no est[aá])$/i.test(String(a.estado ?? "").trim())).length;
     return {
@@ -86,7 +90,16 @@ export function mapEntregaPuestoRow(r: any): OutRow {
         articulos: arts.length,
         articulos_con_novedad: conNovedad,
         observaciones: clip(r.observaciones),
+        ejecutivo_cuenta: txt(x.ejecutivo),
+        usuario_inserta: txt(x.usuario),
     };
+}
+
+/** Ejecutivo de cuenta por sucursal y nombre de quien registró (`created_by` = id de empleado), ambos por lote. */
+export async function mapEntregasConExtras(db: any, rows: any[]): Promise<OutRow[]> {
+    const ejecutivos = await ejecutivoPorCorpo(db, rows.map((r) => r.corpo_id));
+    const nombres = await nombresEmpleado(db, rows.map((r) => r.created_by));
+    return rows.map((r) => mapEntregaPuestoRow(r, { ejecutivo: ejecutivos.get(Number(r.corpo_id)) ?? null, usuario: usuarioInserta(r.created_by, nombres) }));
 }
 
 /**
@@ -102,18 +115,22 @@ export async function filterEntregasByScope(db: ReportDataAccess, rows: any[], s
     });
 }
 
-/** Entrega de puesto. El periodo es sobre la fecha de creación del registro (`created_at`), como el filtro «creado» de la app. */
+/**
+ * Entrega de puesto. El periodo es sobre la fecha de creación del registro (`created_at`): es la «Fecha» del Excel y el filtro
+ * «Creado desde/hasta» de la app (la columna `creado`). Los filtros «de quien entrega/recibe» (fecha y hora) usan la columna de entrada
+ * de cada uno (`entrada_entrega`, `entrada_recibe`).
+ */
 export const entregaPuesto: GuardifyReportModule = {
     id: "entrega_puesto",
     supportsScope: true,
     searchKeys: ["oficial_entrega", "oficial_recibe", "puesto", "sucursal", "cliente", "observaciones"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "turno_entrega", "turno_recibe"],
-    sortKeys: ["creado", "empresa", "cliente", "contrato", "sucursal", "puesto", "oficial_entrega", "oficial_recibe", "entrada_entrega", "salida_entrega", "entrada_recibe", "salida_recibe", "articulos", "articulos_con_novedad"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "turno_entrega", "turno_recibe", "oficial_entrega", "oficial_recibe", "ejecutivo_cuenta", "usuario_inserta"],
+    sortKeys: ["creado", "empresa", "cliente", "contrato", "sucursal", "puesto", "oficial_entrega", "oficial_recibe", "entrada_entrega", "salida_entrega", "entrada_recibe", "salida_recibe", "articulos", "articulos_con_novedad", "ejecutivo_cuenta", "usuario_inserta"],
     defaultSort: "creado",
     async load(db, p) {
         // Import perezoso: el módulo de consulta arrastra exceljs y Prisma, que no hacen falta para mapear ni para probar.
         const { queryEntregaPuestoRows } = await import("../../reports-functions/entregaPuestoReport");
         const rows = await queryEntregaPuestoRows(db, { creadoDesde: `${p.from}T00:00:00`, creadoHasta: `${addDays(p.to, -1)}T23:59:59` }, "fecha");
-        return (await filterEntregasByScope(db, rows, p.scope)).map(mapEntregaPuestoRow);
+        return mapEntregasConExtras(db, await filterEntregasByScope(db, rows, p.scope));
     },
 };

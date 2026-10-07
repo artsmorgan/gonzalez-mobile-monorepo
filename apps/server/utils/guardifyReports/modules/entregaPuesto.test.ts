@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { entregaPuesto, filterEntregasByScope, mapEntregaPuestoRow } from "./entregaPuesto";
+import { entregaPuesto, filterEntregasByScope, mapEntregaPuestoRow, mapEntregasConExtras } from "./entregaPuesto";
 
 const raw = (o: Record<string, unknown> = {}) => ({
     id: 3, created_at: new Date("2026-09-22T06:10:00Z"),
@@ -11,7 +11,7 @@ const raw = (o: Record<string, unknown> = {}) => ({
     fecha_salida_entrega: new Date("2026-09-22T00:00:00Z"), hora_salida_entrega: new Date("1970-01-01T06:00:00Z"), turno_entrega: "N",
     oficial_recibe: "Luis Mora", fecha_entrada_recibe: new Date("2026-09-22T00:00:00Z"), hora_entrada_recibe: "1970-01-01T06:00:00.000Z",
     fecha_salida_recibe: new Date("2026-09-22T00:00:00Z"), hora_salida_recibe: "14:00:00", turno_recibe: "D",
-    marca_entrega_id: 123, marca_recibe_id: null,
+    created_by: 7, marca_entrega_id: 123, marca_recibe_id: null,
     articulos_puesto: JSON.stringify([{ nombre: "Radio", estado: "Bueno" }, { nombre: "Linterna", estado: "Malo", observaciones: "sin pilas" }, { nombre: "Llave", estado: "No está" }]),
     observaciones: "o".repeat(700), firma_entrega: "data:image/png;base64,AAAA", firma_recibe: "BBBB", firma_responsable: "CCCC",
     ...o,
@@ -54,6 +54,31 @@ describe("entrega de puesto: mapeo", () => {
     it("el módulo declara columnas de búsqueda, filtro y orden que existen en la fila", () => {
         const cols = Object.keys(mapEntregaPuestoRow(raw()));
         for (const k of [...entregaPuesto.searchKeys, ...entregaPuesto.filterKeys, ...entregaPuesto.sortKeys, entregaPuesto.defaultSort]) assert.ok(cols.includes(k), k);
+    });
+});
+
+describe("entrega de puesto: columnas para filtros", () => {
+    it("trae ejecutivo de cuenta y usuario que registró al final de la fila", () => {
+        const o = mapEntregaPuestoRow(raw(), { ejecutivo: "Eva Rojas", usuario: "Luis Mora" });
+        assert.equal(o.ejecutivo_cuenta, "Eva Rojas");
+        assert.equal(o.usuario_inserta, "Luis Mora");
+        assert.deepEqual(Object.keys(o).slice(-3), ["observaciones", "ejecutivo_cuenta", "usuario_inserta"]);
+        assert.equal(mapEntregaPuestoRow(raw()).usuario_inserta, null);
+    });
+    it("carga ejecutivos y nombres de quien registró por lote", async () => {
+        const table = (rows: any[]) => ({ findMany: async (a: any) => rows.filter((r) => !a?.where?.id?.in || a.where.id.in.includes(r.id)) });
+        const db: any = {
+            e_estructura_sucursal: table([{ id: 55, ejecutivoCuenta_id: 10 }]),
+            n_ejecutivo_cuenta: table([{ id: 10, nombre: "Eva Rojas" }]),
+            c_empleado: table([{ id: 7, nombre: "Luis", primer_apellido: "Mora", segundo_apellido: null }]),
+        };
+        const out = await mapEntregasConExtras(db, [raw({ id: 1 }), raw({ id: 2, corpo_id: 56, created_by: 99 })]);
+        assert.deepEqual(out.map((o) => o.ejecutivo_cuenta), ["Eva Rojas", null]);
+        assert.deepEqual(out.map((o) => o.usuario_inserta), ["Luis Mora", null]);
+    });
+    it("las columnas de fecha y hora de quien entrega y recibe son fecha-hora (para los filtros de rango)", () => {
+        const o = mapEntregaPuestoRow(raw());
+        for (const k of ["entrada_entrega", "entrada_recibe"]) assert.match(String(o[k]), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
     });
 });
 
