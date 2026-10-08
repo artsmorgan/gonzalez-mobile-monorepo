@@ -64,3 +64,38 @@ export function usuarioInserta(raw: unknown, nombres: Map<number, string>): stri
     if (!s) return null;
     return /^\d+$/.test(s) ? nombres.get(Number(s)) ?? null : s.slice(0, 120);
 }
+
+/** Ids de la ubicación de un registro (los nombres de columna varían entre tablas, por eso se pasan ya normalizados). */
+export type UbicacionIds = { empresa?: unknown; cliente?: unknown; division?: unknown; contrato?: unknown; corpo?: unknown; puesto?: unknown };
+export type UbicacionTextos = { empresa: string | null; cliente: string | null; division: string | null; contrato: string | null; sucursal: string | null; puesto: string | null };
+
+const conCodigo = (codigo: unknown, nombre: unknown): string | null => {
+    const n = String(nombre ?? "").trim();
+    if (!n) return null;
+    const c = String(codigo ?? "").trim();
+    return c ? `${c} - ${n}` : n;
+};
+
+/**
+ * Textos de la ubicación («código - nombre») de muchos registros con una consulta por nivel. Devuelve una función que, dada la ubicación
+ * por ids de un registro, da sus textos (null si no se encontró; nunca el id como texto).
+ */
+export async function ubicacionTextos(db: Db, items: UbicacionIds[]): Promise<(u: UbicacionIds) => UbicacionTextos> {
+    const col = (k: keyof UbicacionIds) => items.map((i) => i[k]);
+    const [empresas, clientes, divisiones, contratos, corpos, puestos] = await Promise.all([
+        findByIds<any>(db, "e_estructura_empresa", col("empresa"), { codigo: true, nombre: true }),
+        findByIds<any>(db, "e_estructura_cliente", col("cliente"), { nombre: true }),
+        findByIds<any>(db, "n_division", col("division"), { nombre: true }),
+        findByIds<any>(db, "e_estructura_contrato", col("contrato"), { nro_contrato: true, nombre: true }),
+        findByIds<any>(db, "e_estructura_sucursal", col("corpo"), { nro_sucursal: true, nombre: true }),
+        findByIds<any>(db, "e_estructura_puesto", col("puesto"), { codigo: true, nombre: true }),
+    ]);
+    return (u) => {
+        const e = empresas.get(Number(u.empresa)), c = clientes.get(Number(u.cliente)), d = divisiones.get(Number(u.division));
+        const k = contratos.get(Number(u.contrato)), s = corpos.get(Number(u.corpo)), p = puestos.get(Number(u.puesto));
+        return {
+            empresa: e ? conCodigo(e.codigo, e.nombre) : null, cliente: c ? conCodigo(null, c.nombre) : null, division: d ? conCodigo(null, d.nombre) : null,
+            contrato: k ? conCodigo(k.nro_contrato, k.nombre) : null, sucursal: s ? conCodigo(s.nro_sucursal, s.nombre) : null, puesto: p ? conCodigo(p.codigo, p.nombre) : null,
+        };
+    };
+}

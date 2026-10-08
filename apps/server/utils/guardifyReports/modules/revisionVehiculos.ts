@@ -5,6 +5,7 @@ import type { OutRow } from "../listing";
 import { addDays } from "../params";
 import { matchesScope } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { revisionVehiculosForm } from "./revisionVehiculosForm";
 
 const txt = (v: unknown): string | null => {
     const s = String(v ?? "").trim();
@@ -142,6 +143,7 @@ export const revisionVehiculos: GuardifyReportModule = {
     filterKeys: ["tipo", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "vehiculo", "uso_vehiculo", "marca", "modelo", "vin", "corporativo", "titulo_propiedad", "rtv", "marchamo", "ejecutivo_cuenta", "usuario_inserta"],
     sortKeys: ["creado", "tipo", "vehiculo", "placa", "marca", "empresa", "cliente", "contrato", "sucursal", "puesto", "puntos_revisados", "movimientos", "fotos"],
     defaultSort: "creado",
+    form: revisionVehiculosForm,
     async load(db, p) {
         const rows = await queryRevisionVehiculosRows(db, { creadoDesde: `${p.from}T00:00:00`, creadoHasta: `${addDays(p.to, -1)}T23:59:59` }, "created_at");
         const scope = p.scope;

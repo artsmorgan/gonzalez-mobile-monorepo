@@ -1,6 +1,7 @@
 import type { ReportDataAccess } from "../reportDynamicPrisma";
 import type { OutRow } from "./listing";
 import type { ReportParams } from "./params";
+import type { GuardifyFormModule } from "./forms";
 
 /** Un reporte que MonitoreApp expone a Guardify. Las columnas de `OutRow` deben coincidir con las del manifiesto de Guardify. */
 export type GuardifyReportModule = {
@@ -16,4 +17,6 @@ export type GuardifyReportModule = {
     defaultSort: string;
     /** Trae TODAS las filas del periodo (y del alcance); la búsqueda, el orden y la paginación los aplica el manejador. */
     load: (db: ReportDataAccess, p: ReportParams) => Promise<OutRow[]>;
+    /** Si el reporte se puede exportar como formulario (un documento por registro): cómo entregar cada registro estructurado. */
+    form?: GuardifyFormModule;
 };
