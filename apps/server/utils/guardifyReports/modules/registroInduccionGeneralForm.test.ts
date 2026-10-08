@@ -26,7 +26,7 @@ describe("registro de inducción general como formulario", () => {
         assert.equal(varianteDe(0, "Seguridad privada"), "Seguridad");
         assert.equal(varianteDe(0, ""), "Aseo y limpieza");
     });
-    it("entrega todos los temas del catálogo, marcados o no, y las personas con la marca de firma", () => {
+    it("entrega todos los temas del catálogo, marcados o no, y las personas con «Firmada» si firmaron", () => {
         const r = armarRegistro(raw(), ubic, false);
         assert.equal(r.variante, "Aseo y limpieza");
         assert.equal(r.listas.temas.length, flattenTemasForDocx(TEMAS_DIV_AYL).filter((t) => t.kind === "leaf").length);
@@ -49,9 +49,26 @@ describe("registro de inducción general como formulario", () => {
         assert.equal(r.listas.temas.length, flattenTemasForDocx(TEMAS_DIV_SEG).filter((t) => t.kind === "leaf").length);
         assert.equal(r.listas.temas.find((t) => t.clave === "tema_8.1.i")!.valor, MARCA);
     });
-    it("la firma digital del responsable no es imagen; no se entregan firmas de las personas ni la firma en bruto", () => {
+    it("firma por renglón: la imagen solo con firmas=1; sin pedirla «Firmada»; la firma digital nunca sale; sin firma, null", () => {
+        const personas = [
+            { id: 1, nombre: "Con imagen", cedula: "1", firma: SAMPLE_PNG },
+            { id: 2, nombre: "Base64 PNG", cedula: "2", firma: SAMPLE_PNG.replace("data:image/png;base64,", "") },
+            { id: 3, nombre: "Digital", cedula: "3", firma: DIGITAL },
+            { id: 4, nombre: "Sin firma", cedula: "4", firma: "" },
+            { id: 5, nombre: "Nula", cedula: "5", firma: null },
+        ];
+        const con = armarRegistro(raw({ colaboradores: personas, capacitadores: personas }), ubic, true);
+        for (const lista of [con.listas.colaboradores, con.listas.capacitadores]) {
+            assert.deepEqual(lista.map((p) => p.firma), [SAMPLE_PNG, SAMPLE_PNG, "Firmada", null, null]);
+        }
+        const sin = armarRegistro(raw({ colaboradores: personas, capacitadores: personas }), ubic, false);
+        for (const lista of [sin.listas.colaboradores, sin.listas.capacitadores]) assert.deepEqual(lista.map((p) => p.firma), ["Firmada", "Firmada", "Firmada", null, null]);
+        assert.ok(!JSON.stringify(sin).includes("data:image") && !JSON.stringify(sin).includes("iVBOR"));
+        assert.ok(!JSON.stringify(con).includes(DIGITAL));
+    });
+    it("la firma digital del responsable no es imagen; no se entrega en bruto", () => {
         const s = JSON.stringify(armarRegistro(raw(), ubic, true));
-        assert.ok(!s.includes("data:image") && !s.includes(DIGITAL));
+        assert.ok(!s.includes(DIGITAL));
         assert.deepEqual(armarRegistro(raw({ firma_responsable: SAMPLE_PNG }), ubic, true).firmas, { firma_responsable: SAMPLE_PNG });
         assert.deepEqual(armarRegistro(raw({ firma_responsable: SAMPLE_PNG }), ubic, false).firmas, { firma_responsable: null });
         assert.deepEqual(armarRegistro(raw({ firma_responsable: "" }), ubic, true).firmasPresentes, []);

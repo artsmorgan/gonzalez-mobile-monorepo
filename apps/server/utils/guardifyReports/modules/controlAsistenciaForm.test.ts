@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { SAMPLE_PNG, writeFormSample } from "../formSamples";
-import { armarRegistro, controlAsistenciaForm, INSTRUCCION, soloHora, turnoLabel, turnoMarcado } from "./controlAsistenciaForm";
+import { armarRegistro, celdaFirma, controlAsistenciaForm, INSTRUCCION, soloHora, turnoLabel, turnoMarcado } from "./controlAsistenciaForm";
 
 const FIRMA = "data:image/png;base64,iVBORw0KGgo" + "A".repeat(300);
 // Colaboradores como los guarda `buildColaboradoresFromMarcas` (api/attendance-control).
@@ -42,20 +42,41 @@ describe("control de asistencia como formulario", () => {
         });
         assert.deepEqual(r.hier, { empresa: 1, cliente: 2, division: 3, contrato: 4, corpo: 5, puesto: 6 });
     });
-    it("cada renglón casa su firma como el generador: titular, ausente y sustituto", () => {
+    it("cada renglón casa su firma como el generador: titular, ausente y sustituto (sin pedir imágenes: «Firmada»)", () => {
         const [a, b, c] = armarRegistro(raw, ubic, false).listas.colaboradores!;
-        assert.deepEqual(a, { numero: 1, nombre: "Luis Mora", cedula: "1-0111-0222", firma_comentario: "Firmado", entrada: "06:00", salida: "14:00", sustituto: null, cedula_sustituto: null, firma_sustituto: null, presente: "Sí" });
-        assert.equal(b!.firma_comentario, "Ausente");
+        assert.deepEqual(a, { numero: 1, nombre: "Luis Mora", cedula: "1-0111-0222", firma_colaborador: "Firmada", comentario: null, entrada: "06:00", salida: "14:00", sustituto: null, cedula_sustituto: null, firma_sustituto: null, presente: "Sí" });
+        assert.equal(b!.firma_colaborador, null);
+        assert.equal(b!.comentario, "Ausente");
         assert.equal(b!.presente, null);
-        assert.deepEqual(c, { numero: 3, nombre: "Pedro Rojas", cedula: "3-0555-0666", firma_comentario: "Reemplazado", entrada: "06:00", salida: "14:00", sustituto: "Ana Solís", cedula_sustituto: "3-0555-0666", firma_sustituto: "Firmado", presente: "Sí" });
+        assert.deepEqual(c, { numero: 3, nombre: "Pedro Rojas", cedula: "3-0555-0666", firma_colaborador: null, comentario: "Reemplazado", entrada: "06:00", salida: "14:00", sustituto: "Ana Solís", cedula_sustituto: "3-0555-0666", firma_sustituto: "Firmada", presente: "Sí" });
     });
-    it("las imágenes de los colaboradores nunca viajan; la del supervisor solo con firmas=1", () => {
+    it("celdaFirma: imagen solo con firmas=true; sin pedirla o si no es imagen, «Firmada»; sin firma, null", () => {
+        assert.equal(celdaFirma(FIRMA, true), FIRMA);
+        assert.equal(celdaFirma(FIRMA, false), "Firmada");
+        assert.equal(celdaFirma("iVBORw0KGgo" + "A".repeat(50), true), "data:image/png;base64,iVBORw0KGgo" + "A".repeat(50));
+        assert.equal(celdaFirma("/9j/" + "A".repeat(50), true), "data:image/jpeg;base64,/9j/" + "A".repeat(50));
+        assert.equal(celdaFirma("c2VzaW9uLWVtcGxlYWRvLWdwcw==", true), "Firmada");
+        assert.equal(celdaFirma("  ", true), null);
+        assert.equal(celdaFirma(null, true), null);
+    });
+    it("con firmas=true los renglones traen la imagen; con firmas=false jamás; una firma no-imagen sigue en «Firmada»", () => {
+        const con = armarRegistro(raw, ubic, true).listas.colaboradores!;
+        assert.equal(con[0]!.firma_colaborador, FIRMA);
+        assert.equal(con[2]!.firma_sustituto, FIRMA);
+        const sin = JSON.stringify(armarRegistro(raw, ubic, false).listas);
+        assert.ok(!sin.includes("data:image") && !sin.includes("iVBOR"));
+        const digital = armarRegistro({ ...raw, c_control_asistencia_empleado_firmas: [{ empleado_id: 11, firma: "c2VzaW9uLWVtcGxlYWRvLWdwcw==" }, { empleado_id: 14, firma: "" }] }, ubic, true);
+        assert.equal(digital.listas.colaboradores![0]!.firma_colaborador, "Firmada");
+        assert.equal(digital.listas.colaboradores![2]!.firma_sustituto, null);
+        assert.ok(!JSON.stringify(digital).includes("c2VzaW9u"), "la cadena no-imagen nunca sale");
+    });
+    it("la firma del supervisor solo con firmas=1; la digital del responsable nunca sale", () => {
         const sin = armarRegistro(raw, ubic, false);
         assert.deepEqual(sin.firmas, { firma_supervisor: null });
         assert.deepEqual(sin.firmasPresentes, ["firma_supervisor"]);
         const con = armarRegistro(raw, ubic, true);
         assert.equal(con.firmas.firma_supervisor, FIRMA);
-        assert.ok(!JSON.stringify(con.listas).includes("data:image"));
+        assert.ok(!JSON.stringify(sin.listas).includes("data:image"));
         assert.ok(!JSON.stringify(con).includes("aGFzaA"), "la firma digital del responsable no sale");
     });
     it("sin colaboradores ni firma de supervisor: listas vacías, sin firmas", () => {
@@ -84,10 +105,12 @@ describe("control de asistencia como formulario", () => {
         ];
         const r = armarRegistro({
             ...raw, firma_manual_supervisor: SAMPLE_PNG, colaboradores: JSON.stringify(cols),
-            c_control_asistencia_empleado_firmas: [{ empleado_id: 14, firma: SAMPLE_PNG }, { empleado_id: 22, firma: SAMPLE_PNG }],
+            // Titular y sustituto firmaron: así el renglón de la muestra lleva las dos firmas.
+            c_control_asistencia_empleado_firmas: [13, 14, 21, 22].map((empleado_id) => ({ empleado_id, firma: SAMPLE_PNG })),
         }, ubic, true);
         writeFormSample("control-de-asistencia", [r]);
         assert.ok(r.listas.colaboradores!.every((f) => Object.values(f).every((v) => v !== null && v !== "")));
         assert.equal(r.firmas.firma_supervisor, SAMPLE_PNG);
+        assert.ok(r.listas.colaboradores!.every((f) => f.firma_colaborador === SAMPLE_PNG && f.firma_sustituto === SAMPLE_PNG));
     });
 });

@@ -27,16 +27,25 @@ export function varianteDe(tipo: unknown): string | null {
 }
 
 /**
- * Las firmas del conductor y del mecánico se guardan como base64 sin prefijo; la del responsable es un código de sesión (QR/GPS), no una
- * imagen: de esa solo se informa que existe. Devuelve el data URL si el valor es una imagen; si no, null.
+ * Las firmas del conductor (de cada uso) y del mecánico (de cada mantenimiento) se guardan como imagen en base64 y salen dentro de su tabla; la del
+ * responsable es un código de sesión (QR/GPS), no una imagen: de esa solo se informa que existe.
+ */
+/**
+ * Imagen de una firma: data URL, o base64 que empieza como PNG (`iVBORw0KGgo`) o JPEG (`/9j/`), que se normaliza a data URL. Cualquier otra cosa
+ * (p. ej. la «firma» digital del móvil: sesión, empleado y GPS en base64) no es una imagen y nunca sale.
  */
 export function imagenDeFirma(v: unknown): string | null {
     const s = String(v ?? "").trim();
-    if (!s) return null;
     if (s.startsWith("data:image/")) return s;
-    if (/^[A-Za-z0-9+/=\s]{200,}$/.test(s)) return `data:image/${s.startsWith("/9j/") ? "jpeg" : "png"};base64,${s.replace(/\s+/g, "")}`;
+    if (/^iVBORw0KGgo[A-Za-z0-9+/=\s]*$/.test(s)) return `data:image/png;base64,${s.replace(/\s+/g, "")}`;
+    if (/^\/9j\/[A-Za-z0-9+/=\s]*$/.test(s)) return `data:image/jpeg;base64,${s.replace(/\s+/g, "")}`;
     return null;
 }
+/** Celda de firma de un renglón: la imagen (solo con `firmas`), «Firmada» si existe sin imagen o sin pedirla, y null si no hay firma. */
+export const celdaFirma = (v: unknown, firmas: boolean): string | null => {
+    if (!txt(v)) return null;
+    return (firmas ? imagenDeFirma(v) : null) ?? "Firmada";
+};
 
 export type VehiculoCrudo = Record<string, any> & { usos?: any[]; mantenimientos?: any[]; creador?: string | null };
 
@@ -57,12 +66,13 @@ export function armarRegistro(raw: VehiculoCrudo, ubic: FormRecord["estructura"]
     const usos = (raw.usos ?? []).map((u) => ({
         conductor: txt(u.nombre_conductor), codigo: txt(u.codigo_conductor), fecha: dia(u.fecha), inicio: hora(u.inicio), fin: hora(u.fin),
         km_inicio: num(u.km_inicio), km_fin: num(u.km_fin), motivo: txt(u.motivo), combustible_inicio: txt(u.combustible_inicio), combustible_fin: txt(u.combustible_fin),
+        firma_conductor: celdaFirma(u.firma_conductor, firmas),
     }));
     const mantenimientos = (raw.mantenimientos ?? []).map((m) => ({
         fecha: dia(m.fecha), tipo: txt(m.tipo), mantenimiento: txt(m.mantenimiento), diagnostico: txt(m.diagnostico),
-        km_siguiente: num(m.kilometraje_siguiente_revision), mecanico: txt(m.nombre_mecanico),
+        km_siguiente: num(m.kilometraje_siguiente_revision), mecanico: txt(m.nombre_mecanico), firma_mecanico: celdaFirma(m.firma_mecanico, firmas),
     }));
-    // Solo la firma del responsable del vehículo cabe en el pie; las de conductor y mecánico son por fila de tabla y no se dibujan.
+    // Al pie solo va la firma del responsable del vehículo; las del conductor y del mecánico van en las celdas de sus tablas.
     const responsable = txt(raw.firma_responsable);
     const presentes = responsable ? ["firma_responsable"] : [];
     return {
@@ -87,15 +97,15 @@ export const registroVehiculosCorporativosForm: GuardifyFormModule = {
         });
         if (!rows.length) return [];
         const vids = rows.map((r) => r.id);
-        // Una consulta por tabla hija; sin las columnas de fotos ni de firmas (las de conductor y mecánico no se dibujan).
+        // Una consulta por tabla hija; sin las columnas de fotos; las firmas de conductor y mecánico se leen solo para su celda (la imagen sale únicamente con `firmas`).
         const [usos, mants, ubic, nombres] = await Promise.all([
             (db as any).c_usos_vehiculos_corporativos.findMany({
                 where: { vehiculo_id: { in: vids } }, orderBy: { id: "asc" },
-                select: { id: true, vehiculo_id: true, nombre_conductor: true, codigo_conductor: true, fecha: true, inicio: true, fin: true, km_inicio: true, km_fin: true, motivo: true, combustible_inicio: true, combustible_fin: true },
+                select: { id: true, vehiculo_id: true, nombre_conductor: true, codigo_conductor: true, fecha: true, inicio: true, fin: true, km_inicio: true, km_fin: true, motivo: true, combustible_inicio: true, combustible_fin: true, firma_conductor: true },
             }),
             (db as any).c_mantenimiento_vehiculos_corporativos.findMany({
                 where: { vehiculo_id: { in: vids } }, orderBy: { id: "asc" },
-                select: { id: true, vehiculo_id: true, fecha: true, tipo: true, mantenimiento: true, diagnostico: true, kilometraje_siguiente_revision: true, nombre_mecanico: true },
+                select: { id: true, vehiculo_id: true, fecha: true, tipo: true, mantenimiento: true, diagnostico: true, kilometraje_siguiente_revision: true, nombre_mecanico: true, firma_mecanico: true },
             }),
             ubicacionTextos(db as any, rows.map((r) => ({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.sucursal_id, puesto: r.puesto_id }))),
             nombresEmpleado(db as any, rows.map((r) => r.created_by)),

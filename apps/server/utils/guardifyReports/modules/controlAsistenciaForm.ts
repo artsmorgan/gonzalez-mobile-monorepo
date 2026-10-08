@@ -6,8 +6,8 @@ import { fmtDt } from "../mappers";
 /**
  * Control de asistencia como formulario (`c_control_asistencia`): una hoja por control, igual que `buildControlAsistenciaExcelIndividual`.
  * El turno (Diurno / Mixto / Nocturno) es solo una casilla marcada: el formato es el mismo, no hay variantes.
- * Las firmas de los colaboradores y sustitutos van DENTRO de la tabla del papel (una por renglón); la tabla de la definición es de texto, así que
- * cada renglón dice «Firmado» y no entrega la imagen. La única firma que se entrega como imagen es la del supervisor.
+ * Las firmas de los colaboradores y sustitutos van DENTRO de la tabla del papel (una por renglón): son columnas de firma de la definición. La celda trae la
+ * imagen (data URL) solo con `firmas=true`; sin ella, o si lo guardado no es una imagen, dice «Firmada». Sin firma, null.
  * `firma_responsable` (firma digital con ubicación del QR) no es una imagen y el papel no la imprime: no se entrega.
  */
 const txt = (v: unknown): string | null => { const s = String(v ?? "").trim(); return s ? s : null; };
@@ -22,6 +22,14 @@ function firmaImagen(raw: unknown): string | null {
     if (s.startsWith("iVBOR")) return `data:image/png;base64,${s}`;
     if (s.startsWith("/9j/")) return `data:image/jpeg;base64,${s}`;
     return null;
+}
+
+/** Celda de firma de una tabla (contrato de Guardify): imagen solo si se pidió y es imagen de verdad; «Firmada» si existe; null si no hay. */
+export function celdaFirma(raw: unknown, firmas: boolean): string | null {
+    const s = String(raw ?? "").trim();
+    if (!s) return null;
+    const img = firmaImagen(s);
+    return img && firmas ? img : "Firmada";
 }
 
 function parseColaboradores(raw: unknown): any[] {
@@ -62,7 +70,8 @@ export function armarRegistro(raw: any, ubic: FormRecord["estructura"], firmas: 
     const creado = fmtDt(raw.created_at);
     const porEmpleado = new Map<number, string>();
     for (const f of Array.isArray(raw.c_control_asistencia_empleado_firmas) ? raw.c_control_asistencia_empleado_firmas : []) {
-        if (firmaImagen(f?.firma)) porEmpleado.set(Number(f.empleado_id || 0), String(f.firma));
+        // Se guarda cualquier firma no vacía: si no es una imagen, la celda dirá «Firmada» y la cadena no sale.
+        if (String(f?.firma ?? "").trim()) porEmpleado.set(Number(f.empleado_id || 0), String(f.firma));
     }
     const filas = parseColaboradores(raw.colaboradores).map((c, i) => {
         const activa = porEmpleado.get(Number(c?.empleado_id || 0)) ?? porEmpleado.get(Number(c?.empleado_reemplaza_id || 0));
@@ -70,19 +79,21 @@ export function armarRegistro(raw: any, ubic: FormRecord["estructura"], firmas: 
         const sustituto = porEmpleado.get(Number(c?.empleado_reemplaza_id || 0));
         const nombreSustituto = txt(c?.nombre_reemplazo);
         const ausente = !!c?.ausente;
-        // Con sustituto, la firma del renglón es la del sustituto; sin él, la del titular. Si no firmó, el papel queda en blanco para escribir el motivo.
-        const firmaTitular = !nombreSustituto && !!(original ?? activa);
-        const firmaSust = !!nombreSustituto && !!(sustituto ?? activa);
+        // Titular: su propia firma (sin sustituto, la que casa el generador). Con sustituto solo cuenta si el titular original firmó él mismo
+        // (la `activa` sería la del sustituto y se repetiría en la otra columna). Sustituto: la del reemplazo o, si no, la activa.
+        const firmaTitular = original ?? (nombreSustituto ? undefined : activa);
+        const firmaSust = nombreSustituto ? (sustituto ?? activa) : undefined;
         return {
             numero: i + 1,
             nombre: txt(c?.nombre_original) ?? txt(c?.nombre),
             cedula: txt(c?.cedula),
-            firma_comentario: firmaTitular ? "Firmado" : nombreSustituto ? "Reemplazado" : ausente ? "Ausente" : null,
+            firma_colaborador: celdaFirma(firmaTitular, firmas),
+            comentario: nombreSustituto ? "Reemplazado" : ausente ? "Ausente" : null,
             entrada: soloHora(c?.hora_inicio),
             salida: soloHora(c?.hora_fin),
             sustituto: nombreSustituto,
             cedula_sustituto: txt(c?.cedula_reemplazo),
-            firma_sustituto: firmaSust ? "Firmado" : null,
+            firma_sustituto: celdaFirma(firmaSust, firmas),
             presente: ausente ? null : "Sí",
         };
     });

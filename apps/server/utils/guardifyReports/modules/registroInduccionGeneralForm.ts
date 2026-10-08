@@ -20,8 +20,15 @@ export function clasificarFirma(v: unknown): { imagen: string | null } | null {
     const s = String(v ?? "").trim();
     if (!s) return null;
     if (/^data:image\//i.test(s)) return { imagen: s };
-    if (/^(iVBORw0KGgo|\/9j\/|R0lGOD|UklGR)/.test(s)) return { imagen: `data:image/${s.startsWith("/9j/") ? "jpeg" : "png"};base64,${s.replace(/\s+/g, "")}` };
+    if (/^(iVBORw0KGgo|\/9j\/)/.test(s)) return { imagen: `data:image/${s.startsWith("/9j/") ? "jpeg" : "png"};base64,${s.replace(/\s+/g, "")}` };
     return { imagen: null };
+}
+
+/** Celda de firma de un renglón de tabla: la imagen (data URL) solo con `firmas=1`; «Firmada» si existe sin pedir la imagen o si no es una imagen (firma digital); null si no hay. */
+export function celdaFirma(v: unknown, firmas: boolean): string | null {
+    const f = clasificarFirma(v);
+    if (!f) return null;
+    return firmas && f.imagen ? f.imagen : "Firmada";
 }
 
 /** Mismo criterio que el .docx: división 4 = Seguridad, 5 = Aseo; si no, el texto de la división. */
@@ -51,9 +58,9 @@ export function armarRegistro(raw: any, ubic: FormRecord["estructura"], firmas: 
         valores: { fecha: dia(raw.fecha), puesto_colaboradores: txt(puestos.join(", ")) },
         listas: {
             temas,
-            // La imagen de la firma de cada persona no cabe en una celda de tabla: se indica si firmó.
-            capacitadores: lista(raw.capacitadores).map((p) => ({ nombre: txt(p?.nombre), cedula: txt(p?.cedula), firma: clasificarFirma(p?.firma) ? "Firmada" : null })),
-            colaboradores: colaboradores.map((p) => ({ nombre: txt(p?.nombre), firma: clasificarFirma(p?.firma) ? "Firmada" : null, cedula: txt(p?.cedula) })),
+            // Firma de cada persona: la imagen dentro de la celda (solo con firmas=1) o «Firmada».
+            capacitadores: lista(raw.capacitadores).map((p) => ({ nombre: txt(p?.nombre), cedula: txt(p?.cedula), firma: celdaFirma(p?.firma, firmas) })),
+            colaboradores: colaboradores.map((p) => ({ nombre: txt(p?.nombre), firma: celdaFirma(p?.firma, firmas), cedula: txt(p?.cedula) })),
         },
         firmas: firma ? { firma_responsable: firmas ? firma.imagen : null } : {},
         firmasPresentes: firma ? ["firma_responsable"] : [],

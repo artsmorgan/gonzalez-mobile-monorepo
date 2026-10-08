@@ -7,8 +7,8 @@ import { fmtDt } from "../mappers";
  * Incidente (`c_incidente`) como formulario «Control de incidentes» (SEG-F-004). El generador individual lo imprime en una sola fila ancha;
  * aquí se entrega estructurado: datos generales, detalle, solución y las listas repetibles (involucrados, libro de novedades, aportes).
  *
- * No se entregan: el enlace del informe (`link_informe`, igual que en la lista), los archivos adjuntos del incidente ni de los aportes,
- * ni las firmas de terceros de los aportes (son una por aporte; el formato no tiene dónde dibujarlas, solo se dice si el aporte la trae).
+ * No se entregan: el enlace del informe (`link_informe`, igual que en la lista) ni los archivos adjuntos del incidente ni de los aportes.
+ * La firma del tercero de cada aporte es un dibujo y va en la celda de su renglón (la imagen solo con `firmas=1`; si no, «Firmada»).
  */
 const txt = (v: unknown): string | null => { const s = String(v ?? "").trim(); return s ? s : null; };
 const dia = (v: unknown): string | null => fmtDt(v as any)?.slice(0, 10) ?? null;
@@ -19,11 +19,24 @@ const parseList = (raw: unknown): any[] => {
     try { const v = JSON.parse(raw); return Array.isArray(v) ? v : []; } catch { return []; }
 };
 
+/** Una firma es imagen si es un data URL de imagen o base64 que empieza como PNG/JPEG; cualquier otra cadena (p. ej. la firma digital de la app) no se entrega nunca. */
+export function imagenDeFirma(v: unknown): string | null {
+    const s = String(v ?? "").trim();
+    if (/^data:image\//i.test(s)) return s;
+    if (/^(iVBORw0KGgo|\/9j\/)/.test(s)) return `data:image/${s.startsWith("/9j/") ? "jpeg" : "png"};base64,${s.replace(/\s+/g, "")}`;
+    return null;
+}
+
+/** Celda de firma del renglón: imagen con `firmas=1`; «Firmada» si existe sin pedir la imagen o si no es imagen; null si no hay. */
+export function celdaFirma(v: unknown, firmas: boolean): string | null {
+    if (!String(v ?? "").trim()) return null;
+    return (firmas && imagenDeFirma(v)) || "Firmada";
+}
+
 /** Datos que no vienen en la fila y se cargan por lote. */
 export type IncidenteFormExtra = { ejecutivo?: string | null; empleados?: Map<number, string> };
 
 export function armarRegistro(raw: any, ubic: FormRecord["estructura"], firmas: boolean, x: IncidenteFormExtra = {}): FormRecord {
-    void firmas; // el incidente no tiene firmas que dibujar; se acepta el parámetro para mantener la misma forma que los demás cargadores
     const creado = fmtDt(raw.created_at);
     const involucrados = parseList(raw.involucrados).filter((i) => i && typeof i === "object").map((i) => ({ nombre: txt(i.nombre), codigo: txt(i.codigo) })).filter((i) => i.nombre || i.codigo);
     const novedades = parseList(raw.fecha_libro_novedades).filter((n) => n && typeof n === "object").map((n) => ({ numero: txt(n.numero), fecha: txt(n.fecha) })).filter((n) => n.numero || n.fecha);
@@ -36,7 +49,7 @@ export function armarRegistro(raw: any, ubic: FormRecord["estructura"], firmas: 
             nombre_tercero: txt(a.nombre_aporte),
             aporte: txt(a.aporte),
             fecha: dia(a.created_at),
-            firma: String(a.firma_aporte_tercero ?? "").trim() ? "Sí" : "No",
+            firma: celdaFirma(a.firma_aporte_tercero, firmas),
         }));
     const valores: FormRecord["valores"] = {
         numero: Number(raw.id),

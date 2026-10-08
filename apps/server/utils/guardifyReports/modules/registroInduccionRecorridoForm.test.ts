@@ -37,6 +37,21 @@ describe("registro de inducción y recorrido como formulario", () => {
         assert.deepEqual(r.listas.participantes, [{ nombre_completo: "Ana Mora Soto", firma: "Firmada", cedula: "1-0111-0222" }, { nombre_completo: "Luis Vega", firma: null, cedula: "2-0333-0444" }]);
         assert.deepEqual(r.hier, { empresa: 9, cliente: 2, division: 5, contrato: 4, corpo: 5, puesto: 6 });
     });
+    it("firma por participante: la imagen solo con firmas=1; sin pedirla «Firmada»; la firma digital nunca sale; sin firma, null", () => {
+        const participantes = [
+            { nombre_completo: "Con imagen", cedula: "1", firma: SAMPLE_PNG },
+            { nombre_completo: "Base64 JPEG", cedula: "2", firma: "/9j/4AAQSkZJRgABAQ" },
+            { nombre_completo: "Digital", cedula: "3", firma: DIGITAL },
+            { nombre_completo: "Sin firma", cedula: "4", firma: "" },
+            { nombre_completo: "Nula", cedula: "5", firma: null },
+        ];
+        const con = armarRegistro(raw({ participantes }), ubic, true);
+        assert.deepEqual(con.listas.participantes.map((p) => p.firma), [SAMPLE_PNG, "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ", "Firmada", null, null]);
+        const sin = armarRegistro(raw({ participantes }), ubic, false);
+        assert.deepEqual(sin.listas.participantes.map((p) => p.firma), ["Firmada", "Firmada", "Firmada", null, null]);
+        assert.ok(!JSON.stringify(sin).includes("data:image") && !JSON.stringify(sin).includes("/9j/"));
+        assert.ok(!JSON.stringify(con).includes(DIGITAL));
+    });
     it("la firma del supervisor (imagen) solo sale con firmas=1; la del responsable es digital y nunca es imagen", () => {
         const sin = armarRegistro(raw(), ubic, false);
         assert.deepEqual(sin.firmasPresentes, ["firma_supervisor", "firma_responsable"]);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { writeFormSample, SAMPLE_PNG } from "../formSamples";
-import { armarRegistro, manualesPuestoForm, tipoPregunta, type ManualRaw } from "./manualesPuestoForm";
+import { armarRegistro, celdaFirma, manualesPuestoForm, tipoPregunta, type ManualRaw } from "./manualesPuestoForm";
 
 const DIGITAL = Buffer.from("sesion-1:20:9.93:-84.08:1788000000000").toString("base64");
 const ubic = { empresa: "CH - Empresa", cliente: "Municipalidad", division: "Aseo", contrato: "C1 - Contrato", sucursal: "S1 - Sede", puesto: "P1 - Misceláneo" };
@@ -19,8 +19,8 @@ const manual = (extra: any = {}) => ({
 const rawArmado = (extra: Partial<ManualRaw> = {}): ManualRaw => ({
     manual: manual(), puestos: ["P1 - Misceláneo", "P2 - Jardinero"], empleados: ["E1 Ana Mora Soto", "E2 Luis Vega Díaz"], creadoPor: "A1 - Marta Rojas", puestoPrincipal: "P1 - Misceláneo",
     visualizaciones: [
-        { empleado: "E1 Ana Mora Soto", visto: true, firmado: true, approved: true }, { empleado: "E3 Eva Soto", visto: true, firmado: false, approved: false },
-        { empleado: "E2 Luis Vega Díaz", visto: false, firmado: false, approved: null },
+        { empleado: "E1 Ana Mora Soto", visto: true, firma: SAMPLE_PNG, approved: true }, { empleado: "E3 Eva Soto", visto: true, firma: null, approved: false },
+        { empleado: "E2 Luis Vega Díaz", visto: false, firma: null, approved: null },
     ], ...extra,
 });
 
@@ -42,7 +42,7 @@ describe("manuales de trabajo como formulario", () => {
             { numero: "2", enunciado: "¿Qué equipo se usa para químicos?", tipo: "Selección múltiple", puntos: 10, opciones: "Guantes | Mascarilla | Sandalias" },
         ]);
         assert.deepEqual(r.listas.visualizacion, [
-            { empleado: "E1 Ana Mora Soto", estado: "Firmado", aprobado: "Aprobado" }, { empleado: "E3 Eva Soto", estado: "Visto", aprobado: "Reprobado" }, { empleado: "E2 Luis Vega Díaz", estado: "No visto", aprobado: "Pendiente" },
+            { empleado: "E1 Ana Mora Soto", estado: "Firmado", firma: "Firmada", aprobado: "Aprobado" }, { empleado: "E3 Eva Soto", estado: "Visto", firma: null, aprobado: "Reprobado" }, { empleado: "E2 Luis Vega Díaz", estado: "No visto", firma: null, aprobado: "Pendiente" },
         ]);
         assert.deepEqual(r.hier, { empresa: 9, cliente: 2, division: 0, contrato: 4, corpo: 5, puesto: 6 });
     });
@@ -89,11 +89,37 @@ describe("manuales de trabajo como formulario", () => {
         assert.deepEqual(m8.listas.puestos, [{ puesto: "P1 - Misceláneo" }, { puesto: "P70 - Recepción" }]);
         assert.deepEqual(m8.listas.empleados, [{ empleado: "E1 Ana Mora Soto" }, { empleado: "E2 Luis Vega" }]);
         assert.deepEqual(m8.listas.visualizacion, [
-            { empleado: "E1 Ana Mora Soto", estado: "Firmado", aprobado: "Aprobado" }, { empleado: "E2 Luis Vega", estado: "No visto", aprobado: "Pendiente" },
+            { empleado: "E1 Ana Mora Soto", estado: "Firmado", firma: "Firmada", aprobado: "Aprobado" }, { empleado: "E2 Luis Vega", estado: "No visto", firma: null, aprobado: "Pendiente" },
         ]);
         assert.equal(m8.valores.creado_por, "A1 - Marta Rojas");
         assert.equal(out[0]!.listas.visualizacion.length, 0); // las visualizaciones son del manual 8
-        assert.ok(!JSON.stringify(out).includes("data:image")); // la firma manual del empleado nunca sale
+        assert.ok(!JSON.stringify(out).includes("data:image")); // con firmas=false la imagen de la firma manual jamás sale
+    });
+    it("celdaFirma y la firma manual por renglón: imagen solo con firmas=true; no-imagen «Firmada»; sin firma null", async () => {
+        assert.equal(celdaFirma(SAMPLE_PNG, true), SAMPLE_PNG);
+        assert.equal(celdaFirma(SAMPLE_PNG, false), "Firmada");
+        assert.equal(celdaFirma("iVBORw0KGgo" + "A".repeat(40), true), "data:image/png;base64,iVBORw0KGgo" + "A".repeat(40));
+        assert.equal(celdaFirma("/9j/" + "A".repeat(40), true), "data:image/jpeg;base64,/9j/" + "A".repeat(40));
+        assert.equal(celdaFirma(DIGITAL, true), "Firmada");
+        assert.equal(celdaFirma("", true), null);
+        assert.equal(celdaFirma(null, false), null);
+        const con = armarRegistro(rawArmado(), ubic, true).listas.visualizacion!;
+        assert.deepEqual(con.map((v) => v.firma), [SAMPLE_PNG, null, null]);
+        const sin = JSON.stringify(armarRegistro(rawArmado(), ubic, false));
+        assert.ok(!sin.includes("data:image") && !sin.includes("iVBOR"));
+        const digital = armarRegistro(rawArmado({ visualizaciones: [{ empleado: "E1", visto: true, firma: DIGITAL, approved: true }] }), ubic, true);
+        assert.equal(digital.listas.visualizacion![0]!.firma, "Firmada");
+        assert.equal(digital.listas.visualizacion![0]!.estado, "Firmado");
+        assert.ok(!JSON.stringify(digital).includes(DIGITAL), "la cadena no-imagen nunca sale");
+        // La carga en lote con firmas=true entrega la imagen del renglón.
+        const db: any = {
+            e_manual_puesto: { findMany: async () => [manual()] }, e_puestos_manual_puesto: { findMany: async () => [] }, e_empleados_manual_puesto: { findMany: async () => [] },
+            e_empleado_visualizacion_manual_puesto: { findMany: async () => [{ id: 5, manual_puesto_id: 8, empleado_id: 1, nombre_empleado: "Ana Mora Soto", approved: true, firma_empleado_manual: SAMPLE_PNG }] },
+            c_empleado: { findMany: async () => [] }, e_estructura_puesto: { findMany: async () => [] }, e_estructura_empresa: { findMany: async () => [] }, e_estructura_cliente: { findMany: async () => [] },
+            n_division: { findMany: async () => [] }, e_estructura_contrato: { findMany: async () => [] }, e_estructura_sucursal: { findMany: async () => [] },
+        };
+        const [m] = await manualesPuestoForm.loadRecords(db, [8], { firmas: true });
+        assert.equal(m!.listas.visualizacion![0]!.firma, SAMPLE_PNG);
     });
     it("muestra completa para Guardify (quiz, puestos, empleados y los tres estados)", () => {
         // Todas las preguntas con opciones y puntos, para que ninguna celda de la muestra quede vacía.
@@ -102,7 +128,9 @@ describe("manuales de trabajo como formulario", () => {
             { id: "q2", title: "¿Qué equipo se usa para químicos?", type: "multiple_select", points: 10, options: ["Guantes", "Mascarilla", "Sandalias"], answers: ["Guantes", "Mascarilla"] },
             { id: "q3", title: "Seleccione el producto para vidrios", type: "list", points: 5, options: ["Multiuso", "Limpiavidrios"], answer: "Limpiavidrios" },
         ] };
-        const completo = armarRegistro(rawArmado({ manual: manual({ quiz: JSON.stringify(quizCompleto) }), puestos: ["P1 - Misceláneo", "P2 - Jardinero", "P3 - Bodega"] }), { ...ubic, division: "Aseo" }, true);
+        // Los tres renglones con firma manual para que la celda de firma nunca quede vacía en la muestra.
+        const visualizaciones = rawArmado().visualizaciones.map((v) => ({ ...v, firma: SAMPLE_PNG }));
+        const completo = armarRegistro(rawArmado({ manual: manual({ quiz: JSON.stringify(quizCompleto) }), puestos: ["P1 - Misceláneo", "P2 - Jardinero", "P3 - Bodega"], visualizaciones }), { ...ubic, division: "Aseo" }, true);
         writeFormSample("manuales-de-trabajo", [completo]);
         assert.equal(completo.listas.visualizacion.length, 3);
     });

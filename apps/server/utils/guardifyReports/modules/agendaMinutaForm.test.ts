@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { SAMPLE_PNG, writeFormSample } from "../formSamples";
-import { agendaMinutaForm, armarRegistro, horaHHmm, rowHierarchy } from "./agendaMinutaForm";
+import { agendaMinutaForm, armarRegistro, celdaFirma, horaHHmm, rowHierarchy } from "./agendaMinutaForm";
 
 const FIRMA = "data:image/png;base64,iVBORw0KGgo" + "A".repeat(300);
 const raw = {
@@ -27,7 +27,7 @@ describe("agenda / minuta como formulario", () => {
         assert.deepEqual(r.valores, {
             titulo: "Reunión mensual de seguridad", fecha: "2026-04-20", hora_inicio: "09:00", hora_fin: "10:30", autor: "Marta Quesada", numero: 14, temas: "1. Rondas nocturnas\n2. Equipo de comunicación",
         });
-        assert.deepEqual(r.listas.participantes, [{ nombre: "Luis Mora", puesto: "Oficial", firma: "Firmó" }, { nombre: "Rosa Vega", puesto: "Supervisora", firma: null }]);
+        assert.deepEqual(r.listas.participantes, [{ nombre: "Luis Mora", puesto: "Oficial", firma: "Firmada" }, { nombre: "Rosa Vega", puesto: "Supervisora", firma: null }]);
         assert.deepEqual(r.listas.acuerdos, [
             { acuerdo: "1) Revisar rondas", responsable: "Luis Mora", fecha_limite: "2026-05-01" },
             { acuerdo: "2) Entregar informe", responsable: "Rosa Vega", fecha_limite: "2026-05-10" },
@@ -46,12 +46,30 @@ describe("agenda / minuta como formulario", () => {
         assert.equal(r.valores.numero, null);
         assert.equal(r.valores.hora_fin, null);
     });
-    it("ninguna imagen ni firma digital sale, ni siquiera con firmas=1", () => {
+    it("celdaFirma: imagen solo con firmas=true; sin pedirla o si no es imagen, «Firmada»; sin firma, null", () => {
+        assert.equal(celdaFirma(FIRMA, true), FIRMA);
+        assert.equal(celdaFirma(FIRMA, false), "Firmada");
+        assert.equal(celdaFirma("iVBORw0KGgo" + "A".repeat(50), true), "data:image/png;base64,iVBORw0KGgo" + "A".repeat(50));
+        assert.equal(celdaFirma("/9j/" + "A".repeat(50), true), "data:image/jpeg;base64,/9j/" + "A".repeat(50));
+        assert.equal(celdaFirma("c2VzaW9uLWVtcGxlYWRvLWdwcw==", true), "Firmada");
+        assert.equal(celdaFirma("", true), null);
+        assert.equal(celdaFirma(undefined, true), null);
+    });
+    it("con firmas=true los participantes traen la imagen; con firmas=false jamás", () => {
+        const con = armarRegistro(raw, ubic, true);
+        assert.deepEqual(con.listas.participantes, [{ nombre: "Luis Mora", puesto: "Oficial", firma: FIRMA }, { nombre: "Rosa Vega", puesto: "Supervisora", firma: null }]);
+        const sin = JSON.stringify(armarRegistro(raw, ubic, false));
+        assert.ok(!sin.includes("data:image") && !sin.includes("iVBOR"));
+    });
+    it("una firma de participante que no es imagen sale «Firmada» aun con firmas=1 y la cadena no aparece", () => {
+        const r = armarRegistro({ ...raw, participantes: JSON.stringify([{ nombre: "Luis Mora", puesto: "Oficial", firma: "c2VzaW9uLWVtcGxlYWRvLWdwcw==" }]) }, ubic, true);
+        assert.equal(r.listas.participantes![0]!.firma, "Firmada");
+        assert.ok(!JSON.stringify(r).includes("c2VzaW9u"));
+    });
+    it("no salen firmas sueltas, ni la digital del responsable ni las observaciones", () => {
         const r = armarRegistro(raw, ubic, true);
         assert.deepEqual(r.firmas, {});
         assert.deepEqual(r.firmasPresentes, []);
-        assert.ok(!JSON.stringify(r).includes("data:image"));
-        assert.ok(!JSON.stringify(r).includes("iVBOR"));
         assert.ok(!JSON.stringify(r).includes("aGFzaC1k"));
         assert.ok(!JSON.stringify(r).includes("No se imprime"), "las observaciones no están en el formato del papel");
     });
@@ -82,6 +100,6 @@ describe("agenda / minuta como formulario", () => {
             participantes: JSON.stringify([{ nombre: "Luis Mora", puesto: "Oficial", firma: SAMPLE_PNG }, { nombre: "Rosa Vega", puesto: "Supervisora", firma: SAMPLE_PNG }]),
         }, ubic, true);
         writeFormSample("agenda-minuta", [r]);
-        assert.ok(r.listas.participantes!.every((p) => p.firma === "Firmó"));
+        assert.ok(r.listas.participantes!.every((p) => p.firma === SAMPLE_PNG));
     });
 });

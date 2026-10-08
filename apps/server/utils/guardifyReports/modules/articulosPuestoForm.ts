@@ -8,8 +8,9 @@ import { loadPuestoHierarchy, type Hierarchy } from "../scope";
  *
  * Hay dos formatos: «Plan» (lo que el puesto debe tener: cantidad y combo) y «Asignado» (lo entregado: marca, modelo, serie y fecha de
  * entrega). El id de la fila es el del registro en SU tabla (plan o entrega), y las dos tablas numeran por separado: si un id existe
- * en ambas se entregan los dos registros. Las firmas del papel son las del ÚLTIMO movimiento del artículo.
- * Nunca se entrega la firma del responsable (es un código de sesión con ubicación, no una imagen): solo se informa si existe.
+ * en ambas se entregan los dos registros. Cada movimiento lleva sus tres firmas en su renglón de la tabla: entrega y recibo salen como
+ * imagen con `firmas=1` (solo si es una imagen de verdad); la del responsable es un código de sesión con ubicación, no una imagen: solo se informa
+ * «Firmada» y nunca se entrega.
  */
 const txt = (v: unknown): string | null => { const s = String(v ?? "").trim(); return s ? s : null; };
 const ymd = (v: unknown): string | null => { if (v == null || v === "") return null; return (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) || null; };
@@ -18,11 +19,21 @@ const hhmm = (v: unknown): string | null => {
     const m = /(?:T|^|\s)(\d{2}):(\d{2})/.exec(v instanceof Date ? v.toISOString() : String(v));
     return m ? `${m[1]}:${m[2]}` : null;
 };
-/** La firma dibujada es una imagen (data URL o base64 pelado); cualquier otra cosa no se entrega. */
-const imagen = (v: unknown): string | null => {
+/**
+ * Imagen de una firma: data URL, o base64 que empieza como PNG (`iVBORw0KGgo`) o JPEG (`/9j/`), que se normaliza a data URL. Cualquier otra cosa
+ * (referencia local, código de sesión) no es una imagen y nunca sale.
+ */
+export function imagenDeFirma(v: unknown): string | null {
     const s = String(v ?? "").trim();
     if (s.startsWith("data:image/")) return s;
-    return /^[A-Za-z0-9+/=\s]{200,}$/.test(s) ? `data:image/png;base64,${s.replace(/\s+/g, "")}` : null;
+    if (/^iVBORw0KGgo[A-Za-z0-9+/=\s]*$/.test(s)) return `data:image/png;base64,${s.replace(/\s+/g, "")}`;
+    if (/^\/9j\/[A-Za-z0-9+/=\s]*$/.test(s)) return `data:image/jpeg;base64,${s.replace(/\s+/g, "")}`;
+    return null;
+}
+/** Celda de firma de un renglón: la imagen (solo con `firmas`), «Firmada» si existe sin imagen o sin pedirla, y null si no hay firma. */
+export const celdaFirma = (v: unknown, firmas: boolean): string | null => {
+    if (!txt(v)) return null;
+    return (firmas ? imagenDeFirma(v) : null) ?? "Firmada";
 };
 
 export type ArticuloRaw = {
@@ -46,15 +57,8 @@ export function armarRegistro(raw: ArticuloRaw, ubic: FormRecord["estructura"], 
     const movimientos = raw.movimientos.map((m) => ({
         persona_entrega: txt(m.nombre_persona_entrega), persona_recibe: txt(m.nombre_persona_recibe), departamento: txt(m.departamento), telefono: txt(m.telefono),
         entrega: txt(m.entrega), recibe: txt(m.recibe), fecha: ymd(m.fecha), hora: hhmm(m.hora),
+        firma_entrega: celdaFirma(m.firma_entrega, firmas), firma_recibe: celdaFirma(m.firma_recibe, firmas), firma_responsable: celdaFirma(m.firma_responsable, false),
     }));
-    const ultimo = raw.movimientos[raw.movimientos.length - 1];
-    const sign: Record<string, string | null> = {};
-    if (ultimo) {
-        const e = imagen(ultimo.firma_entrega), r = imagen(ultimo.firma_recibe);
-        if (e) sign.firma_entrega = e;
-        if (r) sign.firma_recibe = r;
-        if (txt(ultimo.firma_responsable)) sign.firma_responsable = null; // existe, pero no es una imagen y no se entrega
-    }
     return {
         id: raw.id,
         variante: raw.origen,
@@ -74,8 +78,9 @@ export function armarRegistro(raw: ArticuloRaw, ubic: FormRecord["estructura"], 
             ejecutivo_cuenta: txt(raw.ejecutivo),
         },
         listas: { movimientos },
-        firmas: Object.fromEntries(Object.keys(sign).map((k) => [k, firmas ? (sign[k] ?? null) : null])),
-        firmasPresentes: Object.keys(sign),
+        // Las firmas van dentro de la tabla de movimientos (una por renglón); al pie no queda ninguna.
+        firmas: {},
+        firmasPresentes: [],
         hier: raw.hier,
     };
 }
@@ -105,7 +110,7 @@ export const articulosPuestoForm: GuardifyFormModule = {
             findByIds<any>(d, "n_articulo_corpo_puesto", [...planes.map((p: any) => p.articuloCP_id), ...entregas.map((e: any) => e.nomencladorArticuloCP_id)], { nombre: true }),
             findByIds<any>(d, "e_estructura_combo_articulo_cp", planes.map((p: any) => p.combo_id), { nombre: true }),
         ]);
-        // Movimientos de todos los artículos en una sola consulta (sin la firma del responsable: solo si existe).
+        // Movimientos de todos los artículos en una sola consulta (las firmas se leen solo para su celda; la del responsable nunca se entrega).
         const or: any[] = [];
         if (planes.length) or.push({ articulo_plan_id: { in: planes.map((p: any) => Number(p.id)) } });
         if (entregas.length) or.push({ articulo_asignado_id: { in: entregas.map((e: any) => Number(e.id)) } });

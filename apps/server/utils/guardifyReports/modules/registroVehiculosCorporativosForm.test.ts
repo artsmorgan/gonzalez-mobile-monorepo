@@ -3,15 +3,16 @@ import { describe, it } from "node:test";
 import { SAMPLE_PNG, writeFormSample } from "../formSamples";
 import { armarRegistro, imagenDeFirma, registroVehiculosCorporativosForm, varianteDe } from "./registroVehiculosCorporativosForm";
 
-const PNG_SUELTO = "A".repeat(300); // base64 sin prefijo, como lo guarda el móvil
+const PNG_SUELTO = SAMPLE_PNG.split(",")[1]!; // base64 sin prefijo
+const DIGITAL = "c2Vzc2lvbjoxOjk6LTg0OjE3MDAw"; // sesión + empleado + GPS en base64: no es una imagen
 const ubic = { empresa: "CH - Empresa", cliente: "CCSS", division: "Seguridad", contrato: "C1 - Contrato", sucursal: "S1 - Sede", puesto: "P1 - Puesto" };
 const D = (s: string) => new Date(s);
 const vehiculo = (extra: Record<string, unknown> = {}) => ({
     id: 11, tipo: "Vehículo", placa: "BCD-123", tipo_autoria: "Corporativo", estado: "Activo", marca: "Toyota", modelo: "Hilux", anno: 2022, kilometraje: 45210, prox_cambio_aceite: 50000,
-    descripcion: "Pick-up de patrullaje", titulo_propiedad: true, rtv: true, marchamo: false, firma_responsable: "c2Vzc2lvbjoxOjk6LTg0OjE3MDAw", created_at: D("2026-04-20T08:12:30Z"), created_by: 77,
+    descripcion: "Pick-up de patrullaje", titulo_propiedad: true, rtv: true, marchamo: false, firma_responsable: DIGITAL, created_at: D("2026-04-20T08:12:30Z"), created_by: 77,
     empresa_id: 1, cliente_id: 2, division_id: 3, contrato_id: 4, sucursal_id: 5, puesto_id: 6, creador: "Ana Soto",
-    usos: [{ nombre_conductor: "Luis Mora", codigo_conductor: "E-100", fecha: D("2026-04-21T00:00:00Z"), inicio: D("2026-04-21T07:30:00Z"), fin: D("2026-04-21T12:45:00Z"), km_inicio: 45210, km_fin: 45290, motivo: "Ronda", combustible_inicio: "Lleno", combustible_fin: "Medio" }],
-    mantenimientos: [{ fecha: D("2026-04-25T00:00:00Z"), tipo: "Preventivo", mantenimiento: "Cambio de aceite", diagnostico: "Sin novedad", kilometraje_siguiente_revision: 50000, nombre_mecanico: "Pedro Vega" }],
+    usos: [{ nombre_conductor: "Luis Mora", codigo_conductor: "E-100", fecha: D("2026-04-21T00:00:00Z"), inicio: D("2026-04-21T07:30:00Z"), fin: D("2026-04-21T12:45:00Z"), km_inicio: 45210, km_fin: 45290, motivo: "Ronda", combustible_inicio: "Lleno", combustible_fin: "Medio", firma_conductor: SAMPLE_PNG }],
+    mantenimientos: [{ fecha: D("2026-04-25T00:00:00Z"), tipo: "Preventivo", mantenimiento: "Cambio de aceite", diagnostico: "Sin novedad", kilometraje_siguiente_revision: 50000, nombre_mecanico: "Pedro Vega", firma_mecanico: null }],
     ...extra,
 });
 
@@ -24,17 +25,19 @@ describe("registro de vehículos corporativos como formulario", () => {
         assert.equal(varianteDe(""), null);
         assert.equal(imagenDeFirma(SAMPLE_PNG), SAMPLE_PNG);
         assert.equal(imagenDeFirma(PNG_SUELTO), `data:image/png;base64,${PNG_SUELTO}`);
-        assert.equal(imagenDeFirma("c2Vzc2lvbjoxOjk6LTg0OjE3MDAw"), null); // el código de sesión del responsable no es una imagen
+        assert.equal(imagenDeFirma("/9j/4AAQSkZJRgABAQ=="), "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ==");
+        assert.equal(imagenDeFirma(DIGITAL), null); // el código de sesión del responsable no es una imagen
+        assert.equal(imagenDeFirma("A".repeat(300)), null); // un base64 largo cualquiera tampoco
         assert.equal(imagenDeFirma(""), null);
     });
     it("arma el registro con valores legibles, documentos y tablas hijas", () => {
-        const r = armarRegistro(vehiculo(), ubic, false);
+        const r = armarRegistro(vehiculo(), ubic, true);
         assert.equal(r.variante, "Vehículo");
         assert.deepEqual([r.valores.placa, r.valores.anno, r.valores.kilometraje], ["BCD-123", 2022, 45210]);
         assert.deepEqual([r.valores.fecha_creacion, r.valores.hora_creacion, r.valores.creado_por], ["2026-04-20", "08:12", "Ana Soto"]);
         assert.deepEqual(r.listas.documentos, [{ item: "Título de propiedad", valor: "Sí" }, { item: "RTV", valor: "Sí" }, { item: "Marchamo", valor: "No" }]);
-        assert.deepEqual(r.listas.usos[0], { conductor: "Luis Mora", codigo: "E-100", fecha: "2026-04-21", inicio: "07:30", fin: "12:45", km_inicio: 45210, km_fin: 45290, motivo: "Ronda", combustible_inicio: "Lleno", combustible_fin: "Medio" });
-        assert.deepEqual(r.listas.mantenimientos[0], { fecha: "2026-04-25", tipo: "Preventivo", mantenimiento: "Cambio de aceite", diagnostico: "Sin novedad", km_siguiente: 50000, mecanico: "Pedro Vega" });
+        assert.deepEqual(r.listas.usos[0], { conductor: "Luis Mora", codigo: "E-100", fecha: "2026-04-21", inicio: "07:30", fin: "12:45", km_inicio: 45210, km_fin: 45290, motivo: "Ronda", combustible_inicio: "Lleno", combustible_fin: "Medio", firma_conductor: SAMPLE_PNG });
+        assert.deepEqual(r.listas.mantenimientos[0], { fecha: "2026-04-25", tipo: "Preventivo", mantenimiento: "Cambio de aceite", diagnostico: "Sin novedad", km_siguiente: 50000, mecanico: "Pedro Vega", firma_mecanico: null });
         assert.deepEqual(r.hier, { empresa: 1, cliente: 2, division: 3, contrato: 4, corpo: 5, puesto: 6 });
         assert.deepEqual(r.firmasPresentes, ["firma_responsable"]);
         assert.deepEqual(r.firmas, { firma_responsable: null });
@@ -52,7 +55,19 @@ describe("registro de vehículos corporativos como formulario", () => {
         assert.equal(armarRegistro(vehiculo({ firma_responsable: SAMPLE_PNG }), ubic, false).firmas.firma_responsable, null);
         assert.equal(armarRegistro(vehiculo(), ubic, true).firmas.firma_responsable, null);
     });
-    it("carga en lote: una consulta por tabla, sin columnas de fotos ni firmas de las filas hijas", async () => {
+    it("firmas por renglón: imagen con firmas=1, «Firmada» sin pedirla o si no es imagen, vacía si no hay", () => {
+        const usos = [{ ...vehiculo().usos[0], firma_conductor: PNG_SUELTO }, { ...vehiculo().usos[0], firma_conductor: DIGITAL }, { ...vehiculo().usos[0], firma_conductor: "" }];
+        const mantenimientos = [{ ...vehiculo().mantenimientos[0], firma_mecanico: SAMPLE_PNG }, { ...vehiculo().mantenimientos[0], firma_mecanico: DIGITAL }, { ...vehiculo().mantenimientos[0], firma_mecanico: null }];
+        const con = armarRegistro(vehiculo({ usos, mantenimientos }), ubic, true);
+        assert.deepEqual(con.listas.usos.map((u: any) => u.firma_conductor), [SAMPLE_PNG, "Firmada", null]);
+        assert.deepEqual(con.listas.mantenimientos.map((m: any) => m.firma_mecanico), [SAMPLE_PNG, "Firmada", null]);
+        const sin = armarRegistro(vehiculo({ usos, mantenimientos }), ubic, false);
+        assert.deepEqual(sin.listas.usos.map((u: any) => u.firma_conductor), ["Firmada", "Firmada", null]);
+        assert.deepEqual(sin.listas.mantenimientos.map((m: any) => m.firma_mecanico), ["Firmada", "Firmada", null]);
+        for (const r of [con, sin]) assert.ok(!JSON.stringify(r).includes(DIGITAL));
+        assert.ok(!JSON.stringify(sin).includes("data:image") && !JSON.stringify(sin).includes("iVBOR"));
+    });
+    it("carga en lote: una consulta por tabla, sin columnas de fotos y con las firmas solo de conductor y mecánico", async () => {
         const calls: { name: string; args: any }[] = [];
         const t = (name: string, rows: any[]) => ({ findMany: async (a: any) => { calls.push({ name, args: a }); return rows; } });
         const { usos, mantenimientos, creador: _c, ...base } = vehiculo();
@@ -70,7 +85,7 @@ describe("registro de vehículos corporativos como formulario", () => {
         assert.equal(out[0]!.valores.creado_por, "Ana Soto Ruiz");
         assert.equal(calls.length, 10); // vehículos, usos, mantenimientos, empleados y las seis consultas de estructura
         const hijas = calls.filter((c) => c.name === "usos" || c.name === "mant");
-        for (const c of hijas) for (const k of Object.keys(c.args.select)) assert.ok(!/imagen|firma/i.test(k), `no debe pedir ${k}`);
+        for (const c of hijas) for (const k of Object.keys(c.args.select)) assert.ok(!/imagen/i.test(k) && (!/firma/i.test(k) || ["firma_conductor", "firma_mecanico"].includes(k)), `no debe pedir ${k}`);
     });
     it("sin registros no consulta nada más", async () => {
         const calls: string[] = [];
@@ -80,8 +95,8 @@ describe("registro de vehículos corporativos como formulario", () => {
     });
 
     it("muestra completa por variante para Guardify", () => {
-        const usos = [1, 2].map((i) => ({ nombre_conductor: `Conductor ${i}`, codigo_conductor: `E-10${i}`, fecha: D(`2026-04-2${i}T00:00:00Z`), inicio: D(`2026-04-2${i}T07:30:00Z`), fin: D(`2026-04-2${i}T12:45:00Z`), km_inicio: 1000 * i, km_fin: 1000 * i + 80, motivo: `Ronda ${i}`, combustible_inicio: "Lleno", combustible_fin: "Medio" }));
-        const mantenimientos = [1, 2].map((i) => ({ fecha: D(`2026-04-2${i + 4}T00:00:00Z`), tipo: i === 1 ? "Preventivo" : "Correctivo", mantenimiento: `Trabajo ${i}`, diagnostico: `Diagnóstico ${i}`, kilometraje_siguiente_revision: 50000 + i, nombre_mecanico: `Mecánico ${i}` }));
+        const usos = [1, 2].map((i) => ({ nombre_conductor: `Conductor ${i}`, codigo_conductor: `E-10${i}`, fecha: D(`2026-04-2${i}T00:00:00Z`), inicio: D(`2026-04-2${i}T07:30:00Z`), fin: D(`2026-04-2${i}T12:45:00Z`), km_inicio: 1000 * i, km_fin: 1000 * i + 80, motivo: `Ronda ${i}`, combustible_inicio: "Lleno", combustible_fin: "Medio", firma_conductor: SAMPLE_PNG }));
+        const mantenimientos = [1, 2].map((i) => ({ fecha: D(`2026-04-2${i + 4}T00:00:00Z`), tipo: i === 1 ? "Preventivo" : "Correctivo", mantenimiento: `Trabajo ${i}`, diagnostico: `Diagnóstico ${i}`, kilometraje_siguiente_revision: 50000 + i, nombre_mecanico: `Mecánico ${i}`, firma_mecanico: SAMPLE_PNG }));
         const completo = (tipo: string, id: number) => {
             const bici = tipo === "Bicicleta";
             const r = armarRegistro(vehiculo({ id, tipo, usos, mantenimientos, firma_responsable: SAMPLE_PNG, ...(bici ? { placa: null, modelo: null, anno: null, kilometraje: null, prox_cambio_aceite: null } : {}) }), ubic, true);

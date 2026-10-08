@@ -5,7 +5,7 @@ import { armarRegistro, articulosPuestoForm, type ArticuloRaw } from "./articulo
 
 const ubic = { empresa: "CH - Corporación González", cliente: "CCSS", division: "Seguridad", contrato: "C1 - Contrato", sucursal: "S1 - Sede Central", puesto: "P7 - Oficial de recepción" };
 const hier = { empresa: 1, cliente: 2, division: 3, contrato: 4, corpo: 5, puesto: 7 };
-const FIRMA = "data:image/png;base64," + "A".repeat(300);
+const FIRMA = SAMPLE_PNG;
 const mov = (o: Record<string, any> = {}) => ({
     id: 1, nombre_persona_entrega: "Ana Soto", nombre_persona_recibe: "Luis Mora", departamento: "Operaciones", telefono: "8888-1234", entrega: "Radio portátil", recibe: "Radio portátil en buen estado",
     fecha: new Date("2026-09-12T00:00:00Z"), hora: new Date("1970-01-01T08:30:00Z"), firma_entrega: FIRMA, firma_recibe: FIRMA, firma_responsable: "SESION-SECRETA|42|9.9|-84.1|1789000000", ...o,
@@ -16,31 +16,28 @@ const raw = (o: Partial<ArticuloRaw> = {}): ArticuloRaw => ({
 });
 
 describe("artículos del puesto como formulario", () => {
-    it("arma un artículo asignado con sus movimientos y las firmas del último", () => {
-        const r = armarRegistro(raw(), ubic, false);
+    it("arma un artículo asignado con sus movimientos y la firma de cada renglón", () => {
+        const r = armarRegistro(raw(), ubic, true);
         assert.equal(r.variante, "Asignado");
         assert.equal(r.creado, "2026-09-12T08:00:00");
         assert.deepEqual([r.valores.articulo, r.valores.origen, r.valores.marca, r.valores.modelo, r.valores.serie, r.valores.fecha_entrega, r.valores.hora_entrega, r.valores.ejecutivo_cuenta],
             ["Radio portátil", "Asignado", "Motorola", "DEP450", "SN-1234", "2026-09-12", "08:00", "Rosa Vega"]);
         assert.equal(r.valores.cantidad, null);
-        assert.deepEqual(r.listas.movimientos![0], { persona_entrega: "Ana Soto", persona_recibe: "Luis Mora", departamento: "Operaciones", telefono: "8888-1234", entrega: "Radio portátil", recibe: "Radio portátil en buen estado", fecha: "2026-09-12", hora: "08:30" });
+        assert.deepEqual(r.listas.movimientos![0], { persona_entrega: "Ana Soto", persona_recibe: "Luis Mora", departamento: "Operaciones", telefono: "8888-1234", entrega: "Radio portátil", recibe: "Radio portátil en buen estado", fecha: "2026-09-12", hora: "08:30", firma_entrega: FIRMA, firma_recibe: FIRMA, firma_responsable: "Firmada" });
         assert.equal(r.listas.movimientos!.length, 2);
-        // el último movimiento no tiene firma de entrega: no se muestra la del anterior
-        assert.deepEqual(r.firmasPresentes, ["firma_recibe", "firma_responsable"]);
-        assert.deepEqual(r.firmas, { firma_recibe: null, firma_responsable: null });
+        // cada renglón trae solo SUS firmas: el segundo no tiene firma de entrega
+        assert.deepEqual([r.listas.movimientos![1]!.firma_entrega, r.listas.movimientos![1]!.firma_recibe], [null, FIRMA]);
+        assert.deepEqual([r.firmas, r.firmasPresentes], [{}, []]);
         assert.deepEqual(r.hier, hier);
     });
-    it("con firmas=1 entrega las imágenes, pero nunca el código de la firma del responsable", () => {
-        const r = armarRegistro(raw({ movimientos: [mov()] }), ubic, true);
-        assert.equal(r.firmas.firma_entrega, FIRMA);
-        assert.equal(r.firmas.firma_recibe, FIRMA);
-        assert.equal(r.firmas.firma_responsable, null);
-        assert.deepEqual(r.firmasPresentes, ["firma_entrega", "firma_recibe", "firma_responsable"]);
-        assert.equal(JSON.stringify(r).includes("SESION-SECRETA"), false);
-    });
-    it("una firma que no es imagen (referencia local, texto corto) no cuenta", () => {
-        const r = armarRegistro(raw({ movimientos: [mov({ firma_entrega: "mov_firma_entrega_123.png", firma_recibe: null, firma_responsable: "" })] }), ubic, true);
-        assert.deepEqual(r.firmasPresentes, []);
+    it("firmas por renglón: imagen con firmas=1, «Firmada» sin pedirla o si no es imagen, vacía si no hay; nunca el código del responsable", () => {
+        const movimientos = [mov({ firma_entrega: SAMPLE_PNG.split(",")[1], firma_recibe: "mov_firma_recibe_123.png" }), mov({ firma_entrega: "", firma_recibe: null, firma_responsable: "" }), mov({ firma_entrega: "A".repeat(300) })];
+        const con = armarRegistro(raw({ movimientos }), ubic, true).listas.movimientos as any[];
+        assert.deepEqual(con.map((m) => [m.firma_entrega, m.firma_recibe, m.firma_responsable]), [[FIRMA, "Firmada", "Firmada"], [null, null, null], ["Firmada", FIRMA, "Firmada"]]);
+        const sinR = armarRegistro(raw({ movimientos }), ubic, false);
+        assert.deepEqual((sinR.listas.movimientos as any[]).map((m) => [m.firma_entrega, m.firma_recibe, m.firma_responsable]), [["Firmada", "Firmada", "Firmada"], [null, null, null], ["Firmada", "Firmada", "Firmada"]]);
+        assert.ok(!JSON.stringify(sinR).includes("data:image") && !JSON.stringify(sinR).includes("iVBOR"));
+        assert.equal(JSON.stringify([con, sinR]).includes("SESION-SECRETA"), false);
     });
     it("arma un artículo del plan con cantidad y combo, y tolera nulos", () => {
         const r = armarRegistro(raw({ origen: "Plan", id: 12, articulo: "Extintor", cantidad: 3, combo: "Combo A", marca: null, modelo: null, serie: null, fecha_entrega: null, movimientos: [] }), ubic, false);
@@ -103,8 +100,7 @@ describe("artículos del puesto como formulario", () => {
         assert.deepEqual([plan13.estructura.puesto, plan13.estructura.cliente, plan13.hier], [null, null, {}]);
         // movimientos en orden de id, y solo los de su artículo
         assert.deepEqual(asig11.listas.movimientos!.map((m) => m.persona_recibe), ["Marta Quirós", "Luis Mora"]);
-        assert.equal(asig11.firmas.firma_recibe, null);
-        assert.deepEqual(asig11.firmasPresentes, ["firma_entrega", "firma_recibe", "firma_responsable"]);
+        assert.deepEqual(asig11.listas.movimientos!.map((m) => [m.firma_entrega, m.firma_recibe, m.firma_responsable]), [["Firmada", "Firmada", "Firmada"], ["Firmada", "Firmada", "Firmada"]]);
         // una consulta por tabla (no una por registro)
         const porTabla = new Map<string, number>();
         for (const c of calls) porTabla.set(c.table, (porTabla.get(c.table) ?? 0) + 1);
@@ -112,10 +108,11 @@ describe("artículos del puesto como formulario", () => {
         assert.equal(porTabla.get("c_movimientos_articulo_mantenimiento"), 1);
         assert.equal(JSON.stringify(out).includes("SESION-SECRETA"), false);
     });
-    it("con firmas=1 entrega la imagen del último movimiento", async () => {
+    it("con firmas=1 entrega la imagen de cada movimiento", async () => {
         const { db } = fakeDb(tablas());
         const out = await articulosPuestoForm.loadRecords(db, [11], { firmas: true });
-        assert.equal(out.find((r) => r.variante === "Asignado")!.firmas.firma_recibe, FIRMA);
+        assert.deepEqual(out.find((r) => r.variante === "Asignado")!.listas.movimientos!.map((m) => m.firma_recibe), [FIRMA, FIRMA]);
+        assert.equal(JSON.stringify(out).includes("SESION-SECRETA"), false);
     });
     it("sin registros no consulta movimientos", async () => {
         const { db, calls } = fakeDb(tablas());
@@ -131,7 +128,7 @@ describe("artículos del puesto como formulario", () => {
         ];
         const plan = armarRegistro(raw({ origen: "Plan", id: 12, articulo: "Extintor de 10 libras", cantidad: 3, combo: "Combo recepción", marca: null, modelo: null, serie: null, fecha_entrega: null, movimientos: movs }), ubic, true);
         const asignado = armarRegistro(raw({ origen: "Asignado", id: 11, movimientos: movs }), ubic, true);
-        for (const r of [plan, asignado]) { assert.equal(r.listas.movimientos!.length, 3); assert.deepEqual(r.firmasPresentes, ["firma_entrega", "firma_recibe", "firma_responsable"]); }
+        for (const r of [plan, asignado]) { assert.equal(r.listas.movimientos!.length, 3); assert.ok(r.listas.movimientos!.every((m) => m.firma_entrega === SAMPLE_PNG && m.firma_recibe === SAMPLE_PNG && m.firma_responsable === "Firmada")); }
         writeFormSample("articulos-del-puesto", [plan, asignado].map(({ hier: _h, ...r }) => r));
     });
 });

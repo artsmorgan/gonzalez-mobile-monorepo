@@ -8,8 +8,9 @@ import { fmtDt } from "../mappers";
  * «Puestos del manual», «Empleados del manual» y «Visualización»). Se entrega el manual, los puestos y empleados a los que llega, la ESTRUCTURA
  * del cuestionario y quién lo ha visto, firmado y aprobado.
  *
- * Decisiones de seguridad (las mismas que el módulo de lista): NO se entregan las respuestas de los empleados al cuestionario, NI las respuestas
- * correctas del cuestionario, NI las firmas manuales de los empleados (solo si firmaron) NI los anexos del manual (archivos).
+ * Decisiones de seguridad: NO se entregan las respuestas de los empleados al cuestionario, NI las respuestas correctas del cuestionario, NI los anexos
+ * del manual (archivos). La firma manual (dibujada) de cada empleado va en su renglón de «Visualización»: la imagen solo con `firmas=true`; sin ella,
+ * o si lo guardado no es una imagen, dice «Firmada»; sin firma, null. La firma digital del responsable (`firma`) no es una imagen y nunca sale.
  */
 const txt = (v: unknown): string | null => { const s = String(v ?? "").trim(); return s ? s : null; };
 
@@ -20,6 +21,13 @@ export function clasificarFirma(v: unknown): { imagen: string | null } | null {
     if (/^data:image\//i.test(s)) return { imagen: s };
     if (/^(iVBORw0KGgo|\/9j\/|R0lGOD|UklGR)/.test(s)) return { imagen: `data:image/${s.startsWith("/9j/") ? "jpeg" : "png"};base64,${s.replace(/\s+/g, "")}` };
     return { imagen: null };
+}
+
+/** Celda de firma de una tabla (contrato de Guardify): imagen solo si se pidió y es imagen de verdad; «Firmada» si existe; null si no hay. */
+export function celdaFirma(raw: unknown, firmas: boolean): string | null {
+    const s = String(raw ?? "").trim();
+    if (!s) return null;
+    return firmas ? clasificarFirma(s)?.imagen ?? "Firmada" : "Firmada";
 }
 
 const parseJson = (raw: unknown): any => {
@@ -52,8 +60,8 @@ export type ManualRaw = {
     puestos: (string | null)[];
     /** Empleados vinculados ya con su texto. */
     empleados: (string | null)[];
-    /** Una por visualización: { empleado (texto), firmado, approved } y los vinculados que aún no la ven: { empleado, visto: false }. */
-    visualizaciones: { empleado: string | null; visto: boolean; firmado: boolean; approved: boolean | null }[];
+    /** Una por visualización: { empleado (texto), firma (la manual tal como se guardó), approved } y los vinculados que aún no la ven: { empleado, visto: false }. */
+    visualizaciones: { empleado: string | null; visto: boolean; firma: string | null; approved: boolean | null }[];
     creadoPor: string | null;
     puestoPrincipal: string | null;
 };
@@ -79,7 +87,7 @@ export function armarRegistro(raw: ManualRaw, ubic: FormRecord["estructura"], fi
                 puntos: Number.isFinite(Number(q.points)) && String(q.points ?? "").trim() !== "" ? Number(q.points) : null,
                 opciones: Array.isArray(q.options) && q.options.length ? q.options.map((o: unknown) => String(o)).join(" | ") : null,
             })),
-            visualizacion: raw.visualizaciones.map((v) => ({ empleado: v.empleado, estado: !v.visto ? "No visto" : v.firmado ? "Firmado" : "Visto", aprobado: estadoAprobado(v) })),
+            visualizacion: raw.visualizaciones.map((v) => ({ empleado: v.empleado, estado: !v.visto ? "No visto" : txt(v.firma) ? "Firmado" : "Visto", firma: celdaFirma(v.firma, firmas), aprobado: estadoAprobado(v) })),
         },
         firmas: firma ? { firma_responsable: firmas ? firma.imagen : null } : {},
         firmasPresentes: firma ? ["firma_responsable"] : [],
@@ -132,9 +140,9 @@ export const manualesPuestoForm: GuardifyFormModule = {
                     puestos: (pPor.get(id) ?? []).map((l) => puestoTxt(puestos.get(Number(l.puesto_id)))),
                     empleados: (ePor.get(id) ?? []).map((l) => empleadoTxt(empleados.get(Number(l.empleado_id)))),
                     visualizaciones: [
-                        ...vis.map((v) => ({ empleado: empleadoTxt(empleados.get(Number(v.empleado_id))) ?? txt(v.nombre_empleado), visto: true, firmado: !!txt(v.firma_empleado_manual), approved: v.approved ?? null })),
+                        ...vis.map((v) => ({ empleado: empleadoTxt(empleados.get(Number(v.empleado_id))) ?? txt(v.nombre_empleado), visto: true, firma: txt(v.firma_empleado_manual), approved: v.approved ?? null })),
                         // Igual que el consolidado: cada empleado vinculado que aún no tiene visualización sale como «No visto».
-                        ...(ePor.get(id) ?? []).filter((l) => !vistos.has(Number(l.empleado_id))).map((l) => ({ empleado: empleadoTxt(empleados.get(Number(l.empleado_id))), visto: false, firmado: false, approved: null })),
+                        ...(ePor.get(id) ?? []).filter((l) => !vistos.has(Number(l.empleado_id))).map((l) => ({ empleado: empleadoTxt(empleados.get(Number(l.empleado_id))), visto: false, firma: null, approved: null })),
                     ],
                     creadoPor: empleadoGuion(creador),
                     puestoPrincipal: u.puesto,

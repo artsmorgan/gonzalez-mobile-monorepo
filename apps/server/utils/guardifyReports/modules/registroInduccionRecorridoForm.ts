@@ -21,8 +21,15 @@ export function clasificarFirma(v: unknown): { imagen: string | null } | null {
     const s = String(v ?? "").trim();
     if (!s) return null;
     if (/^data:image\//i.test(s)) return { imagen: s };
-    if (/^(iVBORw0KGgo|\/9j\/|R0lGOD|UklGR)/.test(s)) return { imagen: `data:image/${s.startsWith("/9j/") ? "jpeg" : "png"};base64,${s.replace(/\s+/g, "")}` };
+    if (/^(iVBORw0KGgo|\/9j\/)/.test(s)) return { imagen: `data:image/${s.startsWith("/9j/") ? "jpeg" : "png"};base64,${s.replace(/\s+/g, "")}` };
     return { imagen: null };
+}
+
+/** Celda de firma de un renglón de tabla: la imagen (data URL) solo con `firmas=1`; «Firmada» si existe sin pedir la imagen o si no es una imagen (firma digital); null si no hay. */
+export function celdaFirma(v: unknown, firmas: boolean): string | null {
+    const f = clasificarFirma(v);
+    if (!f) return null;
+    return firmas && f.imagen ? f.imagen : "Firmada";
 }
 
 /** SI / NO / NA como las marca el papel; el generador compara en mayúsculas y la pantalla solo guarda esas tres. */
@@ -48,8 +55,8 @@ export function armarRegistro(raw: any, ubic: FormRecord["estructura"], firmas: 
         listas: {
             temas: parseArr(raw.temas_desarrollados).filter((t) => t && typeof t === "object").map(fila("tema")),
             aspectos: parseArr(raw.aspectos_especificos).filter((a) => a && typeof a === "object").map(fila("aspecto")),
-            // La imagen de la firma de cada participante no cabe en una celda de tabla: se indica si firmó.
-            participantes: parseArr(raw.participantes).filter((p) => p && typeof p === "object").map((p) => ({ nombre_completo: txt(p.nombre_completo), firma: clasificarFirma(p.firma) ? "Firmada" : null, cedula: txt(p.cedula) })),
+            // Firma de cada participante: la imagen dentro de la celda (solo con firmas=1) o «Firmada».
+            participantes: parseArr(raw.participantes).filter((p) => p && typeof p === "object").map((p) => ({ nombre_completo: txt(p.nombre_completo), firma: celdaFirma(p.firma, firmas), cedula: txt(p.cedula) })),
         },
         firmas: Object.fromEntries(presentes.map(([k, f]) => [k, firmas ? f!.imagen : null])),
         firmasPresentes: presentes.map(([k]) => k),

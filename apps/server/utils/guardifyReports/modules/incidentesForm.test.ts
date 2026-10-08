@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { writeFormSample } from "../formSamples";
-import { armarRegistro, incidentesForm } from "./incidentesForm";
+import { SAMPLE_PNG, writeFormSample } from "../formSamples";
+import { armarRegistro, celdaFirma, incidentesForm } from "./incidentesForm";
 
 const raw = {
     id: 12, created_at: new Date("2026-09-10T14:30:05Z"), empresa_id: 9, cliente_id: 4, division_id: 2, contrato_id: 31, corpo_id: 55, puesto_id: 140,
@@ -14,7 +14,7 @@ const raw = {
     costo_asociado: "₡15000", consecutivo_informe: "INF-2026-009", link_informe: "https://secreto/informe.pdf",
     c_contribucion_incidente: [
         { id: 2, empleado_id: 7, rol_aporte: "Supervisor", nombre_aporte: null, aporte: "Segundo aporte", created_at: new Date("2026-09-11T10:00:00Z"), firma_aporte_tercero: null },
-        { id: 1, empleado_id: 8, rol_aporte: "Tercero", nombre_aporte: "Carlos Vega", aporte: "Primer aporte", created_at: new Date("2026-09-10T16:00:00Z"), firma_aporte_tercero: "data:image/png;base64,AAAA" },
+        { id: 1, empleado_id: 8, rol_aporte: "Tercero", nombre_aporte: "Carlos Vega", aporte: "Primer aporte", created_at: new Date("2026-09-10T16:00:00Z"), firma_aporte_tercero: SAMPLE_PNG },
     ],
 };
 const ubic = { empresa: "9 - Seguridad SA", cliente: "Cliente Uno", division: "Seguridad", contrato: "C-31 - Contrato", sucursal: "55 - Sede", puesto: "P140 - Portón" };
@@ -22,7 +22,7 @@ const empleados = new Map([[7, "Eva Chaves"], [8, "Marta Solís"]]);
 
 describe("incidentes como formulario", () => {
     it("arma el registro: valores legibles, listas planas y sin enlace ni firmas", () => {
-        const r = armarRegistro(raw, ubic, true, { ejecutivo: "Eva Ruiz", empleados });
+        const r = armarRegistro(raw, ubic, false, { ejecutivo: "Eva Ruiz", empleados });
         assert.equal(r.variante, null);
         assert.equal(r.creado, "2026-09-10T14:30:05");
         assert.equal(r.valores.numero, 12);
@@ -34,12 +34,26 @@ describe("incidentes como formulario", () => {
         assert.equal("link_informe" in r.valores, false);
         assert.deepEqual(r.listas.involucrados, [{ nombre: "Pedro Rojas", codigo: "E1" }, { nombre: "Juan Mora", codigo: "E2" }]);
         assert.deepEqual(r.listas.novedades, [{ numero: "45", fecha: "2026-09-09" }]);
-        // aportes en orden cronológico, con el nombre del empleado y solo si traen firma (nunca la imagen)
-        assert.deepEqual(r.listas.aportes.map((a) => [a.aporte, a.empleado, a.firma]), [["Primer aporte", "Marta Solís", "Sí"], ["Segundo aporte", "Eva Chaves", "No"]]);
-        assert.ok(!JSON.stringify(r).includes("AAAA"));
+        // aportes en orden cronológico, con el nombre del empleado; sin pedir las firmas solo se dice «Firmada» (nunca la imagen)
+        assert.deepEqual(r.listas.aportes.map((a) => [a.aporte, a.empleado, a.firma]), [["Primer aporte", "Marta Solís", "Firmada"], ["Segundo aporte", "Eva Chaves", null]]);
+        assert.ok(!JSON.stringify(r).includes("data:image"));
         assert.deepEqual(r.firmas, {});
         assert.deepEqual(r.firmasPresentes, []);
         assert.deepEqual(r.hier, { empresa: 9, cliente: 4, division: 2, contrato: 31, corpo: 55, puesto: 140 });
+    });
+    it("firma del tercero por aporte: imagen con firmas=1, «Firmada» sin pedirla o si no es imagen, null si no hay", () => {
+        const DIGITAL = Buffer.from("sesion-1:20:9.93:-84.08:1788000000000").toString("base64");
+        assert.equal(celdaFirma(SAMPLE_PNG, true), SAMPLE_PNG);
+        assert.equal(celdaFirma(SAMPLE_PNG, false), "Firmada");
+        assert.equal(celdaFirma(SAMPLE_PNG.replace("data:image/png;base64,", ""), true), SAMPLE_PNG);
+        assert.equal(celdaFirma(DIGITAL, true), "Firmada");
+        assert.equal(celdaFirma("  ", true), null);
+        assert.equal(celdaFirma(null, true), null);
+        const aportes = (firmas: boolean) => armarRegistro({ ...raw, c_contribucion_incidente: [{ ...raw.c_contribucion_incidente[1], firma_aporte_tercero: DIGITAL }, raw.c_contribucion_incidente[1]] }, ubic, firmas, { empleados }).listas.aportes;
+        assert.deepEqual(aportes(true).map((a) => a.firma), ["Firmada", SAMPLE_PNG]); // la digital no es imagen aun con firmas=1
+        const s = JSON.stringify(aportes(true)) + JSON.stringify(aportes(false));
+        assert.ok(!s.includes(DIGITAL));
+        assert.ok(!JSON.stringify(aportes(false)).includes("data:image"));
     });
     it("tolera datos vacíos o JSON roto", () => {
         const r = armarRegistro({ ...raw, involucrados: "no es json", fecha_libro_novedades: null, c_contribucion_incidente: undefined, estado: false, solucion: "  ", fecha_solucion: null }, ubic, false);
@@ -68,7 +82,7 @@ describe("incidentes como formulario", () => {
     });
     it("muestra completa para Guardify", () => {
         // Completa: todos los aportes con nombre y firma, para que cualquier clave mal escrita en la definición se note.
-        const completo = { ...raw, c_contribucion_incidente: raw.c_contribucion_incidente.map((a) => ({ ...a, nombre_aporte: a.nombre_aporte ?? "Nombre del aporte", firma_aporte_tercero: "data:image/png;base64,AAAA" })) };
+        const completo = { ...raw, c_contribucion_incidente: raw.c_contribucion_incidente.map((a) => ({ ...a, nombre_aporte: a.nombre_aporte ?? "Nombre del aporte", firma_aporte_tercero: SAMPLE_PNG })) };
         const r = armarRegistro(completo, ubic, true, { ejecutivo: "Eva Ruiz", empleados });
         writeFormSample("registro-de-incidentes", [r]);
     });
