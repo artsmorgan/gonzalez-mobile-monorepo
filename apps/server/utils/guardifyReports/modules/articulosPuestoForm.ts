@@ -98,7 +98,7 @@ export const articulosPuestoForm: GuardifyFormModule = {
         const d = db as any;
         const [planes, entregas] = await Promise.all([
             d.e_estructura_articulo_corpo_puesto_plan.findMany({ where: { id: { in: ids } }, select: { id: true, puesto_id: true, corpo_id: true, cantidad: true, articuloCP_id: true, combo_id: true } }),
-            d.e_estructura_articulo_corpo_puesto_entrega.findMany({ where: { id: { in: ids } }, select: { id: true, puesto_id: true, corpo_id: true, marca: true, modelo: true, serie: true, fechaEntrega: true, nomencladorArticuloCP_id: true } }),
+            d.e_estructura_articulo_corpo_puesto_entrega.findMany({ where: { id: { in: ids } }, select: { id: true, puesto_id: true, corpo_id: true, marca: true, serie: true, fechaEntrega: true, nomencladorArticuloCP_id: true } }),
         ]);
         if (!planes.length && !entregas.length) return [];
         const [nomencladores, combos] = await Promise.all([

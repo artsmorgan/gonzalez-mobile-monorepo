@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
 import { clearGuardifyReportCache } from "./handler";
-import { FORMS_PER_CALL, handleGuardifyForms, type FormRecord } from "./forms";
+import { FORMS_PER_CALL, handleGuardifyForms, lenientDb, type FormRecord } from "./forms";
 import type { OutRow } from "./listing";
 import type { GuardifyReportModule } from "./types";
 
@@ -57,5 +57,20 @@ describe("formularios por registro (protocolo de la app)", () => {
         assert.equal((await call("con/forms?ids=abc", "records")).status, 400);
         const muchos = Array.from({ length: FORMS_PER_CALL + 1 }, (_, i) => i + 1).join(",");
         assert.equal((await call(`con/forms?ids=${muchos}`, "records")).status, 400);
+    });
+});
+
+describe("lenientDb: columnas que la base real no tiene", () => {
+    it("reintenta sin select una vez y avisa; sin select no oculta el error", async () => {
+        const calls: any[] = [];
+        const db: any = { t: { findMany: async (a: any) => { calls.push(a); if (a.select) throw new Error("Unknown field `modelo`"); return [{ id: 1, modelo: null }]; }, create: async () => "x" }, u: { findMany: async () => { throw new Error("boom"); } } };
+        const logs: string[] = [];
+        const l = lenientDb(db, (m) => logs.push(m));
+        assert.deepEqual(await l.t.findMany({ where: { id: 1 }, select: { id: true, modelo: true } }), [{ id: 1, modelo: null }]);
+        assert.equal(calls.length, 2);
+        assert.equal("select" in calls[1], false);
+        assert.equal(logs.length, 1);
+        await assert.rejects(() => l.u.findMany({ where: {} }), /boom/);
+        assert.equal(await l.t.create({}), "x");
     });
 });

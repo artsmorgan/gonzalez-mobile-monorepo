@@ -44,6 +44,29 @@ export const FORMS_MAX_IDS = 5000;
 const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 
+/**
+ * Los cargadores piden solo las columnas que usan (`select`). Si la base real no tiene alguna (el esquema del repo y el de la base se han
+ * desfasado), esa consulta falla y no habría formulario. Se reintenta UNA vez sin `select` (los cargadores igual solo leen lo suyo) y queda
+ * un aviso en el log para corregir el cargador.
+ */
+export function lenientDb(db: any, log: (msg: string) => void = (m) => console.warn(JSON.stringify({ level: "warn", msg: "guardify_form_select_fallback", detail: m }))): any {
+    const wrap = (table: string, h: any) => new Proxy(h, {
+        get(target, prop, recv) {
+            const fn = Reflect.get(target, prop, recv);
+            if (typeof fn !== "function" || !["findMany", "findFirst", "findUnique"].includes(String(prop))) return typeof fn === "function" ? fn.bind(target) : fn;
+            return async (args: any = {}) => {
+                try { return await fn.call(target, args); } catch (e) {
+                    if (!args?.select) throw e;
+                    log(`${table}.${String(prop)} falló con select (${String(e).replace(/\s+/g, " ").slice(-160)}); se reintenta sin select`);
+                    const { select: _s, ...rest } = args;
+                    return fn.call(target, rest);
+                }
+            };
+        },
+    });
+    return new Proxy(db, { get: (t, table) => { const h = Reflect.get(t, table); return h && typeof h === "object" ? wrap(String(table), h) : h; } });
+}
+
 export type FormsDeps = { registry: Record<string, GuardifyReportModule>; getDb: () => any; env?: Record<string, string | undefined> };
 
 /**
@@ -78,7 +101,7 @@ export async function handleGuardifyForms(req: Request, modulo: string, kind: "i
         const scope = scopeRaw === null ? null : (await import("./scope")).parseScope(scopeRaw);
         if (scope !== null && !mod.supportsScope) throw new ScopeUnsupportedError();
         const firmas = sp.get("firmas") === "1";
-        const found = await mod.form.loadRecords(deps.getDb(), ids, { firmas });
+        const found = await mod.form.loadRecords(lenientDb(deps.getDb()), ids, { firmas });
         // El alcance se aplica también aquí: un id suelto no da acceso a lo que la persona no puede ver.
         const kept = found.filter((r) => !scope || matchesScope(r.hier, scope));
         log(200, { pedidos: ids.length, entregados: kept.length, firmas });
