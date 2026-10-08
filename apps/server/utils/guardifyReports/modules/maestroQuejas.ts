@@ -5,6 +5,7 @@ import { addDays, type ReportParams } from "../params";
 import { matchesScope } from "../scope";
 import { divisionPorContrato, ejecutivoPorCorpo } from "../enrich";
 import type { GuardifyReportModule } from "../types";
+import { maestroQuejasForm } from "./maestroQuejasForm";
 
 const txt = (v: unknown): string | null => {
     const s = String(v ?? "").trim();
@@ -87,6 +88,7 @@ export const maestroQuejas: GuardifyReportModule = {
     filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "medio_recepcion", "tipo_cliente", "tipo_queja", "nivel_queja", "estado", "recibida_por", "ejecutivo_cuenta", "creado_por"],
     sortKeys: ["creado", "fecha_queja", "fecha_atencion", "fecha_realizacion", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "medio_recepcion", "tipo_queja", "nivel_queja", "estado", "ejecutivo_cuenta", "creado_por"],
     defaultSort: "fecha_queja",
+    form: maestroQuejasForm,
     async load(db, p) {
         // Import diferido: el módulo de consulta arrastra exceljs, que no hace falta para mapear ni para probar.
         const { queryMaestroQuejasRows } = await import("../../reports-functions/maestroQuejasReport");

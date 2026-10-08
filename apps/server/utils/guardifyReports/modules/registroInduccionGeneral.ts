@@ -6,6 +6,7 @@ import type { OutRow } from "../listing";
 import { addDays } from "../params";
 import { matchesScope } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { registroInduccionGeneralForm } from "./registroInduccionGeneralForm";
 
 const txt = (v: unknown): string | null => {
     const s = String(v ?? "").trim();
@@ -121,6 +122,7 @@ export const registroInduccionGeneral: GuardifyReportModule = {
     filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "participantes", "codigos_colaboradores", "nombres_colaboradores", "ejecutivo_cuenta", "usuario_inserta"],
     sortKeys: ["creado", "fecha", "empresa", "cliente", "contrato", "sucursal", "puesto", "responsable", "temas_marcados", "colaboradores", "capacitadores"],
     defaultSort: "creado",
+    form: registroInduccionGeneralForm,
     async load(db, p) {
         const rows = await queryRegistroInduccionGeneralRows(db, { creadoDesde: `${p.from}T00:00:00`, creadoHasta: `${addDays(p.to, -1)}T23:59:59` }, "created_at");
         const scope = p.scope;

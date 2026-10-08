@@ -7,6 +7,7 @@ import type { ReportParams } from "../params";
 import { ReportUnavailableError } from "../errors";
 import { loadPuestoHierarchy, matchesScope, type Hierarchy } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { solicitudVacacionesForm } from "./solicitudVacacionesForm";
 
 const txt = (v: unknown): string | null => {
     const s = String(v ?? "").trim();
@@ -191,5 +192,6 @@ export const solicitudVacaciones: GuardifyReportModule = {
     filterKeys: ["estado", "tipo_vacaciones", "division", "ejecutivo_cuenta", "usuario_inserta", "empresa", "cliente", "contrato", "sucursal", "puesto"],
     sortKeys: ["creado", "fecha_inicio", "fecha_fin", "dias", "semanas", "tipo_vacaciones", "periodo", "estado", "empleado", "cedula", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "usuario_inserta"],
     defaultSort: "fecha_inicio",
+    form: solicitudVacacionesForm,
     load: loadSolicitudVacaciones,
 };

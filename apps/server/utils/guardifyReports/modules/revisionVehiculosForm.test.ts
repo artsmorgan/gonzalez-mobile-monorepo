@@ -12,7 +12,7 @@ const raw = {
         { key: "foto_suelta", value: FIRMA }, // una imagen que no es firma no se entrega
         { key: "encabezado", kind: "heading", value: "x" },
     ]),
-    informacion_revision: JSON.stringify([{ key: "rev_llantas", label: "Llantas", value: "bueno", observation: "Desgaste leve" }, { key: "rev_foco", label: "Foco", value: "No existe" }, { kind: "heading", label: "Parte delantera" }]),
+    informacion_revision: JSON.stringify([{ key: "rev_llantas", label: "Llantas", value: "bueno", observation: "Desgaste leve" }, { key: "rev_foco", label: "Foco", value: "No existe" }, { key: "llaves", label: "Llaves", value: "Sí" }, { key: "funciona_motor", label: "¿Funciona el motor?", value: "No" }, { kind: "heading", label: "Parte delantera" }]),
     movimientos_vehiculos: JSON.stringify([{ movimiento: "Ingreso a taller", fecha: "20/04/26", hora: "09:30", realizado_por: "M. Vargas", autorizado_por: "R. Quesada" }]),
     observaciones: "Se retira para cambio de cable.", firma_responsable: "",
 };
@@ -44,8 +44,18 @@ describe("revisión de vehículos como formulario", () => {
             { clave: "rev_llantas", item: "Llantas", valor: "Bueno", observacion: "Desgaste leve" },
             { clave: "rev_foco", item: "Foco", valor: "No está", observacion: null },
         ]);
+        // Datos sueltos que el móvil guarda dentro de la revisión: son campos del papel, no ítems de la lista.
+        assert.equal(r.valores.llaves, "Sí");
+        assert.equal(r.valores.funciona_motor, "No");
+        assert.equal(r.listas.revision.some((e) => e.clave === "llaves" || e.clave === "funciona_motor"), false);
         assert.deepEqual(r.listas.movimientos[0], { movimiento: "Ingreso a taller", fecha: "20/04/26", hora: "09:30", realizado_por: "M. Vargas", autorizado_por: "R. Quesada" });
         assert.deepEqual(r.hier, { empresa: 1, cliente: 2, division: 3, contrato: 4, corpo: 5, puesto: 6 });
+    });
+    it("la firma digital del móvil (sesión y GPS en base64) no es imagen: no se entrega ni se cuenta", () => {
+        const digital = Buffer.from("sesion-abc:12345:9.9348:-84.0877:1760000000000").toString("base64").repeat(6);
+        const r = armarRegistro({ ...raw, firma_responsable: digital }, ubic, true);
+        assert.equal("firma_responsable" in r.firmas, false);
+        assert.equal(r.firmasPresentes.includes("firma_responsable"), false);
     });
     it("con firmas=1 entrega la imagen", () => {
         assert.equal(armarRegistro(raw, ubic, true).firmas.firma_oficial_corporacion, FIRMA);

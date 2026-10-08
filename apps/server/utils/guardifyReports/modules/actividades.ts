@@ -6,6 +6,7 @@ import { fmtDt } from "../mappers";
 import { addDays } from "../params";
 import { loadPuestoHierarchy, matchesScope, type Hierarchy, type ScopeItem } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { actividadesForm } from "./actividadesForm";
 
 const txt = (v: unknown): string | null => {
     const s = String(v ?? "").trim();
@@ -108,6 +109,7 @@ export const actividades: GuardifyReportModule = {
     filterKeys: ["tipo_turno", "revision_equipo", "frecuencia", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta"],
     sortKeys: ["nombre_actividad", "fecha_inicio", "fecha_fin", "frecuencia", "tipo_turno", "empresa", "cliente", "contrato", "sucursal", "puesto", "plazas", "marcadas", "ejecutivo_cuenta"],
     defaultSort: "fecha_inicio",
+    form: actividadesForm,
     async load(db, p) {
         // Límites holgados (un día de margen) para no depender de la zona horaria del servidor; el periodo exacto se aplica después.
         const acts = await queryActividadesReportRows(db, { creadoDesde: `${addDays(p.from, -1)}T00:00:00`, creadoHasta: `${p.to}T23:59:59` }, "fecha");

@@ -5,6 +5,7 @@ import { addDays, type ReportParams } from "../params";
 import { matchesScope } from "../scope";
 import { divisionPorContrato, ejecutivoPorCorpo, findByIds } from "../enrich";
 import type { GuardifyReportModule } from "../types";
+import { llavesForm } from "./llavesForm";
 
 const txt = (v: unknown): string | null => {
     const s = String(v ?? "").trim();
@@ -106,6 +107,7 @@ export const llaves: GuardifyReportModule = {
     filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "llaveros", "entregadas_por", "recibidas_por", "ejecutivo_cuenta", "creado_por"],
     sortKeys: ["creado", "numero", "lugar_abre", "copias", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "movimientos", "ultimo_movimiento", "ejecutivo_cuenta", "creado_por"],
     defaultSort: "creado",
+    form: llavesForm,
     async load(db, p) {
         // Import diferido: el módulo de consulta arrastra exceljs, que no hace falta para mapear ni para probar.
         const { queryLlavesRows } = await import("../../reports-functions/llavesReport");

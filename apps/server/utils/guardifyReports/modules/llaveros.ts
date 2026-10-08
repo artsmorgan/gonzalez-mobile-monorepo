@@ -5,6 +5,7 @@ import type { OutRow } from "../listing";
 import { addDays, type ReportParams } from "../params";
 import { matchesScope } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { llaverosForm } from "./llaverosForm";
 
 const txt = (v: unknown): string | null => {
     const s = String(v ?? "").trim();
@@ -96,6 +97,7 @@ export const llaveros: GuardifyReportModule = {
     filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "usuario_inserta"],
     sortKeys: ["creado", "numero", "nombre", "empresa", "cliente", "contrato", "sucursal", "puesto", "llaves", "movimientos", "ultimo_movimiento", "division", "ejecutivo_cuenta", "usuario_inserta"],
     defaultSort: "creado",
+    form: llaverosForm,
     async load(db, p) {
         // Import diferido: el módulo de consulta arrastra exceljs, que no hace falta para mapear ni para probar.
         const { queryLlaverosRows } = await import("../../reports-functions/llaverosReport");

@@ -5,6 +5,7 @@ import { fmtDt } from "../mappers";
 import { addDays } from "../params";
 import { matchesScope } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { actaEntregaProductosForm } from "./actaEntregaProductosForm";
 
 const txt = (v: unknown): string | null => {
     const s = String(v ?? "").trim();
@@ -73,6 +74,7 @@ export const actaEntregaProductos: GuardifyReportModule = {
     filterKeys: ["tipo_entrega", "mensual", "empresa", "cliente", "division", "contrato", "sucursal", "puesto"],
     sortKeys: ["fecha", "tipo_entrega", "nombre_entrega", "cedula_entrega", "nombre_recibe", "cedula_recibe", "empresa", "cliente", "contrato", "sucursal", "puesto", "articulos"],
     defaultSort: "fecha",
+    form: actaEntregaProductosForm,
     async load(db, p) {
         const rows = await queryActaEntregaProductos(db, { creadoDesde: `${p.from}T00:00:00`, creadoHasta: `${addDays(p.to, -1)}T23:59:59` }, "fecha");
         const scope = p.scope;

@@ -4,6 +4,7 @@ import { fmtDt } from "../mappers";
 import { addDays } from "../params";
 import { matchesScope } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { mutuosAcuerdosForm } from "./mutuosAcuerdosForm";
 
 const MAX_TEXT = 500;
 
@@ -88,6 +89,7 @@ export const mutuosAcuerdos: GuardifyReportModule = {
     filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "estado", "ausente_acepta", "reemplaza_acepta", "oficial_ausente", "oficial_reemplaza", "ejecutivo", "creado_por"],
     sortKeys: ["creado", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo", "oficial_ausente", "oficial_reemplaza", "estado", "creado_por"],
     defaultSort: "creado",
+    form: mutuosAcuerdosForm,
     async load(db, p) {
         const rows = await queryMutuosAcuerdosRows(db, { fechaReporteDesde: `${p.from} 00:00:00`, fechaReporteHasta: `${addDays(p.to, -1)} 23:59:59` }, "created_at");
         const scope = p.scope;

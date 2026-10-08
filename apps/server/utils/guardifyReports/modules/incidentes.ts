@@ -4,6 +4,7 @@ import { fmtDt } from "../mappers";
 import { addDays } from "../params";
 import { matchesScope, type ScopeItem } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { incidentesForm } from "./incidentesForm";
 
 const MAX_TEXT = 500;
 
@@ -97,6 +98,7 @@ export const incidentes: GuardifyReportModule = {
     filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "clasificacion", "estado", "ejecutivo_cuenta", "fecha_solucion", "fecha_solucion_real", "usuario_inserta"],
     sortKeys: ["creado", "fecha_incidente", "fecha_reporte", "fecha_solucion", "fecha_solucion_real", "empresa", "cliente", "contrato", "sucursal", "puesto", "clasificacion", "estado", "responsable", "aportes", "usuario_inserta"],
     defaultSort: "creado",
+    form: incidentesForm,
     async load(db, p) {
         // Import perezoso: el módulo de consulta arrastra exceljs y Prisma, que no hacen falta para mapear ni para probar.
         const { queryIncidenteRows } = await import("../../reports-functions/incidentesReport");

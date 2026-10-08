@@ -5,6 +5,7 @@ import { fmtDt } from "../mappers";
 import { buildNombre } from "../names";
 import { matchesScope } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { accionesPersonalesForm } from "./accionesPersonalesForm";
 
 const txt = (v: unknown): string | null => {
     const s = String(v ?? "").trim();
@@ -131,6 +132,7 @@ export const accionesPersonales: GuardifyReportModule = {
     filterKeys: ["tipo_accion", "estado", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "reversible", "empleado", "usuario_inserta"],
     sortKeys: ["fecha_inicio", "fecha_fin", "consecutivo", "tipo_accion", "estado", "empleado", "cedula", "empresa", "cliente", "contrato", "sucursal", "puesto", "registrada", "usuario_inserta"],
     defaultSort: "fecha_inicio",
+    form: accionesPersonalesForm,
     async load(db, p) {
         const rows: any[] = await db.c_accion_personal!.findMany({
             where: { fecha_inicio: { gte: new Date(`${p.from}T00:00:00.000Z`), lt: new Date(`${p.to}T00:00:00.000Z`) } },

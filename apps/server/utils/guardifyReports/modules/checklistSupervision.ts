@@ -4,6 +4,7 @@ import type { OutRow } from "../listing";
 import { fmtDt } from "../mappers";
 import { buildNombre } from "../names";
 import { addDays } from "../params";
+import { checklistSupervisionForm } from "./checklistSupervisionForm";
 import { matchesScope } from "../scope";
 import type { GuardifyReportModule } from "../types";
 
@@ -93,6 +94,7 @@ export const checklistSupervision: GuardifyReportModule = {
     filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "creado_por"],
     sortKeys: ["fecha", "creado", "empresa", "cliente", "contrato", "sucursal", "puesto", "empleado", "ejecutivo_cuenta", "creado_por", "secciones", "preguntas", "fotos", "articulos", "articulos_con_diferencia"],
     defaultSort: "fecha",
+    form: checklistSupervisionForm,
     async load(db, p) {
         // Rango ampliado un día por lado en la consulta (la zona horaria del servidor puede correr los límites); el recorte exacto es aquí.
         const filters = normalizeChecklistSupervisionFilters({ fechaReporteDesde: `${addDays(p.from, -1)}T00:00:00`, fechaReporteHasta: `${p.to}T23:59:59` });

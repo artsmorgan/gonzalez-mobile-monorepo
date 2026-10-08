@@ -6,6 +6,7 @@ import { buildNombre } from "../names";
 import { addDays, type ReportParams } from "../params";
 import { matchesScope } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { tiempoAlmuerzoForm } from "./tiempoAlmuerzoForm";
 
 type QueryRows = (db: ReportDataAccess, filters: { inicioDesde: string; finHasta: string }, orderKey: "inicio") => Promise<any[]>;
 
@@ -70,6 +71,7 @@ export const tiempoAlmuerzo: GuardifyReportModule = {
     filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "manual", "ejecutivo_cuenta", "usuario_inserta"],
     sortKeys: ["inicio", "fin", "empleado", "cedula", "minutos", "empresa", "cliente", "contrato", "sucursal", "puesto", "pausas", "division", "ejecutivo_cuenta", "usuario_inserta"],
     defaultSort: "inicio",
+    form: tiempoAlmuerzoForm,
     async load(db, p) {
         // Import diferido: el módulo de consulta arrastra exceljs, que no hace falta para mapear ni para probar.
         const { queryTiempoAlmuerzoRows } = await import("../../reports-functions/tiempoAlmuerzoReport");

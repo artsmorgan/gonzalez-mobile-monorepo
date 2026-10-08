@@ -5,6 +5,7 @@ import { addDays, type ReportParams } from "../params";
 import { loadPuestoHierarchy, matchesScope } from "../scope";
 import { divisionPorContrato, ejecutivoPorCorpo, findByIds } from "../enrich";
 import type { GuardifyReportModule } from "../types";
+import { manualesPuestoForm } from "./manualesPuestoForm";
 
 const txt = (v: unknown): string | null => {
     const s = String(v ?? "").trim();
@@ -97,6 +98,7 @@ export const manualesPuesto: GuardifyReportModule = {
     filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "puestos", "clasificacion", "ejecutivo_cuenta", "creado_por"],
     sortKeys: ["creado", "titulo", "clasificacion", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "creado_por", "puestos_vinculados", "empleados_vinculados", "visualizaciones", "firmados", "aprobados"],
     defaultSort: "creado",
+    form: manualesPuestoForm,
     async load(db, p) {
         // Import diferido: el módulo de consulta arrastra exceljs, que no hace falta para mapear ni para probar.
         const { queryManualesPuestoRows } = await import("../../reports-functions/manualesPuestoReport");

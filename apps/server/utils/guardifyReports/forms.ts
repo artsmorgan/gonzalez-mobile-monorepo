@@ -1,6 +1,6 @@
 import type { ReportDataAccess } from "../reportDynamicPrisma";
 import { verifyGuardifyApiKey } from "./auth";
-import { ParamError, ScopeUnsupportedError, UnsupportedFilterError } from "./errors";
+import { ParamError, ReportUnavailableError, ScopeUnsupportedError, UnsupportedFilterError } from "./errors";
 import { loadRowsCached } from "./handler";
 import { applyListing, ListingError } from "./listing";
 import { parseReportParams } from "./params";
@@ -87,6 +87,7 @@ export async function handleGuardifyForms(req: Request, modulo: string, kind: "i
         if (e instanceof UnsupportedFilterError) return json({ error: "unsupported_filter", message: e.message }, 400);
         if (e instanceof ParamError || e instanceof ListingError) return json({ error: "bad_request", message: e.message }, 400);
         if (e instanceof ScopeUnsupportedError) return json({ error: "scope_unsupported", message: e.message }, 403);
+        if (e instanceof ReportUnavailableError) return json({ error: "report_unavailable", message: e.message }, 501);
         console.error(JSON.stringify({ level: "error", msg: "guardify_form_failed", modulo, kind, error: String(e).slice(0, 300) }));
         return json({ error: "internal", message: "No se pudo armar el formulario.", detail: String(e).slice(0, 300) }, 500);
     }

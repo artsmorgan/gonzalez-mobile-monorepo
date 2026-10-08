@@ -13,7 +13,8 @@ const parseArr = (raw: unknown): any[] => {
     try { const v = JSON.parse(raw); return Array.isArray(v) ? v : []; } catch { return []; }
 };
 const txt = (v: unknown): string | null => { const s = String(v ?? "").trim(); return s ? s : null; };
-const isImage = (v: string) => v.startsWith("data:image/") || /^[A-Za-z0-9+/=\s]{200,}$/.test(v);
+/** Una imagen de verdad: data URL, o base64 que empieza como PNG o JPEG. La «firma» digital del móvil (sesión, empleado y GPS en base64) NO lo es y nunca sale. */
+const isImage = (v: string) => v.startsWith("data:image/") || /^(iVBORw0KGgo|\/9j\/)[A-Za-z0-9+/=\s]{100,}$/.test(v.trim());
 
 /** El tipo se guarda libre («Bicicleta», «Motocicleta», «Vehículo», a veces en minúsculas o sin tilde). */
 export function varianteDe(tipo: unknown): string | null {
@@ -47,14 +48,21 @@ export function armarRegistro(raw: any, ubic: FormRecord["estructura"], firmas: 
         if (isImage(v)) continue; // una imagen que no es firma nunca se entrega
         valores[key] = txt(v);
     }
-    if (String(raw.firma_responsable ?? "").trim()) sign.firma_responsable = String(raw.firma_responsable);
+    if (isImage(String(raw.firma_responsable ?? ""))) sign.firma_responsable = String(raw.firma_responsable);
     const creado = fmtDt(raw.created_at);
     valores.cliente ??= ubic.cliente;
     valores.sociedad ??= valores.corpo ?? valores.sucursal ?? ubic.sucursal;
     valores.fecha ??= creado ? creado.slice(0, 10) : null;
     valores.hora ??= creado ? creado.slice(11, 16) : null;
     valores.observaciones = txt(raw.observaciones);
-    const revision = parseArr(raw.informacion_revision).filter((e) => e && typeof e === "object" && e.kind !== "heading").map((e) => ({
+    // El móvil guarda dentro de la revisión (no en la información general) estos datos sueltos; son campos del papel, no ítems de la lista.
+    const SUELTOS = new Set(["llaves", "entregado_a", "fecha_entrega", "hora_entrega", "funciona_motor"]);
+    const items = parseArr(raw.informacion_revision).filter((e) => e && typeof e === "object" && e.kind !== "heading");
+    for (const e of items) {
+        const k = String(e.key ?? "").trim();
+        if (SUELTOS.has(k)) valores[k] = txt(e.value);
+    }
+    const revision = items.filter((e) => !SUELTOS.has(String(e.key ?? "").trim())).map((e) => ({
         clave: txt(e.key), item: txt(e.label), valor: estadoLegible(e.value), observacion: txt(e.observation),
     }));
     const movimientos = parseArr(raw.movimientos_vehiculos).filter((m) => m && typeof m === "object").map((m) => ({

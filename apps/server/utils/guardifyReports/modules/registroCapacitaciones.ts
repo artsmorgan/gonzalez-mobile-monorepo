@@ -4,6 +4,7 @@ import type { OutRow } from "../listing";
 import { addDays } from "../params";
 import { loadPuestoHierarchy, matchesScope, type ScopeItem } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { registroCapacitacionesForm } from "./registroCapacitacionesForm";
 
 const txt = (v: unknown, max = 500): string | null => {
     const s = String(v ?? "").trim();
@@ -99,6 +100,7 @@ export const registroCapacitaciones: GuardifyReportModule = {
     filterKeys: ["tipo", "resultado", "division", "responsable", "participantes", "puestos_destino", "ejecutivo_cuenta", "usuario_inserta", "empresa", "cliente", "contrato", "sucursal", "puesto"],
     sortKeys: ["fecha", "titulo", "tipo", "resultado", "responsable", "division", "ejecutivo_cuenta", "usuario_inserta", "empresa", "cliente", "contrato", "sucursal", "puesto", "empleados", "puestos"],
     defaultSort: "fecha",
+    form: registroCapacitacionesForm,
     async load(db, p) {
         // Import diferido: las consultas arrastran exceljs/archiver; así el mapeo y el filtro por alcance se pueden probar sin ellos.
         const { queryRegistroCapacitacionesRows } = await import("../../reports-functions/registroCapacitacionesReport");

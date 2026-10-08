@@ -3,6 +3,7 @@ import { ejecutivoPorCorpo, nombresEmpleado, usuarioInserta } from "../enrich";
 import type { OutRow } from "../listing";
 import { fmtDt } from "../mappers";
 import { addDays } from "../params";
+import { entregaPuestoForm } from "./entregaPuestoForm";
 import { loadPuestoHierarchy, matchesScope, type ScopeItem } from "../scope";
 import type { GuardifyReportModule } from "../types";
 
@@ -127,6 +128,7 @@ export const entregaPuesto: GuardifyReportModule = {
     filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "turno_entrega", "turno_recibe", "oficial_entrega", "oficial_recibe", "ejecutivo_cuenta", "usuario_inserta"],
     sortKeys: ["creado", "empresa", "cliente", "contrato", "sucursal", "puesto", "oficial_entrega", "oficial_recibe", "entrada_entrega", "salida_entrega", "entrada_recibe", "salida_recibe", "articulos", "articulos_con_novedad", "ejecutivo_cuenta", "usuario_inserta"],
     defaultSort: "creado",
+    form: entregaPuestoForm,
     async load(db, p) {
         // Import perezoso: el módulo de consulta arrastra exceljs y Prisma, que no hacen falta para mapear ni para probar.
         const { queryEntregaPuestoRows } = await import("../../reports-functions/entregaPuestoReport");

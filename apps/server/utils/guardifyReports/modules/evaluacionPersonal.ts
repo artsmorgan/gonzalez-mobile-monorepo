@@ -4,6 +4,7 @@ import { fmtDt } from "../mappers";
 import { addDays } from "../params";
 import { matchesScope, type ScopeItem } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { evaluacionPersonalForm } from "./evaluacionPersonalForm";
 
 const MAX_TEXT = 500;
 
@@ -123,6 +124,7 @@ export const evaluacionPersonal: GuardifyReportModule = {
     filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "tipo", "evaluador", "ejecutivo_cuenta"],
     sortKeys: ["creado", "fecha_evaluacion", "empresa", "cliente", "contrato", "sucursal", "puesto", "tipo", "empleado", "cedula", "evaluador", "promedio", "preguntas", "ejecutivo_cuenta"],
     defaultSort: "creado",
+    form: evaluacionPersonalForm,
     async load(db, p) {
         // Import perezoso: el módulo de consulta arrastra exceljs y Prisma, que no hacen falta para mapear ni para probar.
         const { queryEvaluacionEmpleadoRows } = await import("../../reports-functions/evaluacionEmpleadoReport");

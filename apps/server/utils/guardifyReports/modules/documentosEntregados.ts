@@ -5,6 +5,7 @@ import { fmtDt } from "../mappers";
 import { addDays } from "../params";
 import { matchesScope } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { documentosEntregadosForm } from "./documentosEntregadosForm";
 
 const txt = (v: unknown): string | null => {
     const s = String(v ?? "").trim();
@@ -92,6 +93,7 @@ export const documentosEntregados: GuardifyReportModule = {
     filterKeys: ["tipo_documento", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "usuario_inserta"],
     sortKeys: ["fecha", "empresa", "cliente", "contrato", "sucursal", "puesto", "tipo_documento", "oficial_entrega", "oficial_recibe", "ejecutivo_cuenta", "usuario_inserta"],
     defaultSort: "fecha",
+    form: documentosEntregadosForm,
     async load(db, p) {
         const filters = normalizeDocumentosEntregadosFilters({ creadoDesde: `${addDays(p.from, -1)}T00:00:00`, creadoHasta: `${p.to}T23:59:59` });
         const rows = await queryDocumentosEntregadosRows(db, filters, "fecha");

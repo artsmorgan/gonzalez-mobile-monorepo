@@ -2,6 +2,7 @@ import { queryCambiosUbicacionPuestoRows } from "../../reports-functions/cambios
 import type { OutRow } from "../listing";
 import { fmtDt } from "../mappers";
 import { addDays } from "../params";
+import { cambiosUbicacionPuestoForm } from "./cambiosUbicacionPuestoForm";
 import { matchesScope } from "../scope";
 import type { GuardifyReportModule } from "../types";
 
@@ -59,6 +60,7 @@ export const cambiosUbicacionPuesto: GuardifyReportModule = {
     filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "responsable", "tenia_ubicacion"],
     sortKeys: ["fecha", "empresa", "cliente", "contrato", "sucursal", "puesto", "responsable", "metros"],
     defaultSort: "fecha",
+    form: cambiosUbicacionPuestoForm,
     async load(db, p) {
         const rows = await queryCambiosUbicacionPuestoRows(db, { creadoDesde: `${addDays(p.from, -1)}T00:00:00`, creadoHasta: `${p.to}T23:59:59` }, "created_at");
         const scope = p.scope;

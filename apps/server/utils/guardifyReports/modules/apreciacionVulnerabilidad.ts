@@ -2,6 +2,7 @@ import { ejecutivoPorCorpo, findByIds, nombresEmpleado } from "../enrich";
 import { fmtDt } from "../mappers";
 import type { OutRow } from "../listing";
 import { addDays } from "../params";
+import { apreciacionVulnerabilidadForm } from "./apreciacionVulnerabilidadForm";
 import { loadPuestoHierarchy, matchesScope, type Hierarchy, type ScopeItem } from "../scope";
 import type { GuardifyReportModule } from "../types";
 
@@ -129,6 +130,7 @@ export const apreciacionVulnerabilidad: GuardifyReportModule = {
     filterKeys: ["nivel_vulnerabilidad", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "usuario_inserta"],
     sortKeys: ["fecha", "solicitante", "nivel_vulnerabilidad", "secciones", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "usuario_inserta"],
     defaultSort: "fecha",
+    form: apreciacionVulnerabilidadForm,
     async load(db, p) {
         // Importación diferida: estos módulos arrastran exceljs/axios, que las pruebas del mapeo y del alcance no necesitan cargar.
         const { queryVulnerabilidadRows } = await import("../../reports-functions/vulnerabilidadReport");

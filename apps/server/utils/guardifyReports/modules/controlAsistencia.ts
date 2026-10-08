@@ -7,6 +7,7 @@ import { ejecutivoPorCorpo } from "../enrich";
 import { buildNombre } from "../names";
 import { matchesScope } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { controlAsistenciaForm } from "./controlAsistenciaForm";
 
 const txt = (v: unknown): string | null => {
     const s = String(v ?? "").trim();
@@ -77,6 +78,7 @@ export const controlAsistencia: GuardifyReportModule = {
     filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "turno", "ejecutivo_cuenta", "creado_por"],
     sortKeys: ["fecha", "creado", "empresa", "cliente", "contrato", "sucursal", "puesto", "turno", "presentes", "total_turno", "ausentes", "reemplazos", "supervisor", "creado_por", "ejecutivo_cuenta"],
     defaultSort: "creado",
+    form: controlAsistenciaForm,
     async load(db, p) {
         const filters = normalizeControlAsistenciaFilters({ creadoDesde: `${addDays(p.from, -1)}T00:00:00`, creadoHasta: `${addDays(p.to, 45)}T23:59:59` });
         const rows = await queryControlAsistenciaRows(db, filters, "fecha");

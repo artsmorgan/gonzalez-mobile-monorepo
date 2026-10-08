@@ -5,6 +5,7 @@ import { fmtDt } from "../mappers";
 import { addDays } from "../params";
 import { matchesScope } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { productoNoConformeForm } from "./productoNoConformeForm";
 
 const MAX_TEXT = 500;
 
@@ -71,6 +72,7 @@ export const productoNoConforme: GuardifyReportModule = {
     filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "tipo_servicio", "ejecutivo_cuenta", "creado_por"],
     sortKeys: ["creado", "fecha_identificacion", "fecha_solucion", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "tipo_servicio", "responsable_cuenta", "creado_por", "ejecutivo_cuenta"],
     defaultSort: "creado",
+    form: productoNoConformeForm,
     async load(db, p) {
         const rows = await queryProductoNoConformeRows(db, { creadoDesde: `${p.from}T00:00:00`, creadoHasta: `${addDays(p.to, -1)}T23:59:59` }, "fecha_identificacion");
         const scope = p.scope;

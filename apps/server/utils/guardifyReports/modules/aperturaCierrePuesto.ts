@@ -2,6 +2,7 @@ import { ejecutivoPorCorpo, findByIds } from "../enrich";
 import { fmtDt } from "../mappers";
 import type { OutRow } from "../listing";
 import { addDays } from "../params";
+import { aperturaCierrePuestoForm } from "./aperturaCierrePuestoForm";
 import { loadPuestoHierarchy, matchesScope, type Hierarchy, type ScopeItem } from "../scope";
 import type { GuardifyReportModule } from "../types";
 
@@ -110,6 +111,7 @@ export const aperturaCierrePuesto: GuardifyReportModule = {
     filterKeys: ["tipo", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "creado_por"],
     sortKeys: ["fecha", "tipo", "creado", "creado_por", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "actividades", "inventario", "fotos", "ejecutivo_cuenta"],
     defaultSort: "fecha",
+    form: aperturaCierrePuestoForm,
     async load(db, p) {
         // Importación diferida: estos módulos arrastran exceljs/axios, que las pruebas del mapeo y del alcance no necesitan cargar.
         const { queryAperturaCierrePuestoRows } = await import("../../reports-functions/aperturaCierrePuestoReport");

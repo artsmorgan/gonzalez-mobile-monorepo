@@ -10,6 +10,7 @@ import { fmtDt } from "../mappers";
 import { addDays, type ReportParams } from "../params";
 import { matchesScope, type Nivel } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { mantenimientoArticulosForm } from "./mantenimientoArticulosForm";
 
 const MAX_TEXT = 500;
 
@@ -139,5 +140,6 @@ export const mantenimientoArticulos: GuardifyReportModule = {
         "fecha_inicio", "fecha_solucion", "fecha_fin", "proveedor", "costo_total", "actualizado", "ejecutivo_cuenta",
     ],
     defaultSort: "creado",
+    form: mantenimientoArticulosForm,
     load: (db, p) => loadMantenimientoArticulos(db, p),
 };

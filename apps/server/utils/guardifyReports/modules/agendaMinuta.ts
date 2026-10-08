@@ -4,6 +4,7 @@ import type { OutRow } from "../listing";
 import { addDays } from "../params";
 import { loadPuestoHierarchy, matchesScope, type Hierarchy, type ScopeItem } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { agendaMinutaForm } from "./agendaMinutaForm";
 
 const txt = (v: unknown): string | null => {
     const s = String(v ?? "").trim();
@@ -124,6 +125,7 @@ export const agendaMinuta: GuardifyReportModule = {
     filterKeys: ["estado", "completadas", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "creado_por"],
     sortKeys: ["fecha", "numero", "titulo", "autor", "creado_por", "creado", "estado", "completadas", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "participantes", "acuerdos", "ejecutivo_cuenta"],
     defaultSort: "creado",
+    form: agendaMinutaForm,
     async load(db, p) {
         // Importación diferida: estos módulos arrastran exceljs/docx/axios, que las pruebas del mapeo y del alcance no necesitan cargar.
         const { queryAgendaMinutaReportRows } = await import("../../reports-functions/agendaMinutaReport");

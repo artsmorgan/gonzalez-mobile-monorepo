@@ -5,6 +5,7 @@ import { fmtDt } from "../mappers";
 import { addDays } from "../params";
 import { matchesScope } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { notasVozForm } from "./notasVozForm";
 
 const MAX_TEXT = 500;
 
@@ -65,6 +66,7 @@ export const notasVoz: GuardifyReportModule = {
     filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "con_audio", "ejecutivo_cuenta"],
     sortKeys: ["creado", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "titulo", "creado_por", "ejecutivo_cuenta"],
     defaultSort: "creado",
+    form: notasVozForm,
     async load(db, p) {
         const rows = await queryNotasVozRows(db, { creadoDesde: `${p.from}T00:00:00`, creadoHasta: `${addDays(p.to, -1)}T23:59:59` }, "created_at");
         const scope = p.scope;

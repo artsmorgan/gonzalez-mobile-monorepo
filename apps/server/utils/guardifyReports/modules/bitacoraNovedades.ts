@@ -2,6 +2,7 @@ import { ejecutivoPorCorpo, findByIds, nombresEmpleado } from "../enrich";
 import { fmtDt } from "../mappers";
 import type { OutRow } from "../listing";
 import { addDays } from "../params";
+import { bitacoraNovedadesForm } from "./bitacoraNovedadesForm";
 import { loadPuestoHierarchy, matchesScope, type Hierarchy, type ScopeItem } from "../scope";
 import type { GuardifyReportModule } from "../types";
 
@@ -115,6 +116,7 @@ export const bitacoraNovedades: GuardifyReportModule = {
     filterKeys: ["categoria", "relevancia", "modificada", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "usuario_inserta"],
     sortKeys: ["creado", "actualizado", "titulo", "categoria", "relevancia", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "usuario_inserta"],
     defaultSort: "creado",
+    form: bitacoraNovedadesForm,
     async load(db, p) {
         // Importación diferida: estos módulos arrastran exceljs/axios, que las pruebas del mapeo y del alcance no necesitan cargar.
         const { queryBitacoraNovedadesRows } = await import("../../reports-functions/bitacoraNovedadesReport");

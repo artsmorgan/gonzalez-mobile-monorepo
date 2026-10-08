@@ -4,6 +4,7 @@ import type { OutRow } from "../listing";
 import { fmtDt } from "../mappers";
 import { matchesScope, NIVELES, type Nivel, type ScopeItem } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { articulosPuestoForm } from "./articulosPuestoForm";
 
 const txt = (v: unknown): string | null => {
     const s = String(v ?? "").trim();
@@ -76,6 +77,7 @@ export const articulosPuesto: GuardifyReportModule = {
     filterKeys: ["origen", "articulo", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta"],
     sortKeys: ["articulo", "origen", "cantidad", "marca", "modelo", "serie", "fecha_entrega", "movimientos", "empresa", "cliente", "contrato", "sucursal", "puesto", "ejecutivo_cuenta"],
     defaultSort: "fecha_entrega",
+    form: articulosPuestoForm,
     async load(db, p) {
         let puestos: any[];
         if (!p.scope) {

@@ -4,6 +4,7 @@ import type { OutRow } from "../listing";
 import { addDays } from "../params";
 import { matchesScope, type ScopeItem } from "../scope";
 import type { GuardifyReportModule } from "../types";
+import { solicitudesPermisoForm } from "./solicitudesPermisoForm";
 
 const txt = (v: unknown, max = 500): string | null => {
     const s = String(v ?? "").trim();
@@ -98,6 +99,7 @@ export const solicitudesPermiso: GuardifyReportModule = {
     filterKeys: ["estado", "tipo_salario", "tipo_turno", "division", "ejecutivo_cuenta", "creado_por", "creado", "empresa", "cliente", "contrato", "sucursal", "puesto"],
     sortKeys: ["creado", "empleado", "cedula", "estado", "tipo_salario", "tipo_turno", "fecha_inicio", "fecha_fin", "dias", "division", "ejecutivo_cuenta", "empresa", "cliente", "contrato", "sucursal", "puesto", "creado_por"],
     defaultSort: "creado",
+    form: solicitudesPermisoForm,
     async load(db, p) {
         // Import diferido: las consultas arrastran exceljs/archiver; así el mapeo y el filtro por alcance se pueden probar sin ellos.
         const { querySolicitudesPermisoRows } = await import("../../reports-functions/solicitudesPermisoReport");
