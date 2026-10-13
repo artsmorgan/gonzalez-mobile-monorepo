@@ -48,10 +48,11 @@ const P = { from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: n
 describe("cambios de ubicación del puesto", () => {
     it("mapea la fila sin coordenadas y con nulos", () => {
         const o = mapCambioUbicacionPuestoRow({ id: 2, created_at: new Date("2026-09-15T08:30:00Z"), empresa_nombre: "—", cliente_nombre: "Cliente 8", division_nombre: "—", contrato_nombre: "C - X", corpo_nombre: "S - Y", puesto_nombre: "77", puesto_id: 77, responsable_nombre: "99", created_by: 99, latitud_anterior: null, longitud_anterior: null, latitud_nueva: "10.0", longitud_nueva: "-84.0" });
-        assert.equal(o.fecha, "2026-09-15T08:30:00");
+        assert.equal(o.creado, "2026-09-15T08:30:00");
+        assert.equal("fecha" in o || "responsable" in o, false);
         assert.equal(o.empresa, null);
         assert.equal(o.puesto, null); // la consulta puso el id cuando no halló el nombre
-        assert.equal(o.responsable, null);
+        assert.equal(o.creado_por, null);
         assert.equal(o.tenia_ubicacion, "No");
         assert.equal(o.metros, null);
         const s = JSON.stringify(o);
@@ -62,7 +63,16 @@ describe("cambios de ubicación del puesto", () => {
         const o = mapCambioUbicacionPuestoRow({ id: 3, created_at: new Date("2026-09-10T14:00:00Z"), latitud_anterior: "9.9300", longitud_anterior: "-84.0800", latitud_nueva: "9.9390", longitud_nueva: "-84.0800", responsable_nombre: "E50 - Ana Soto", created_by: 50 });
         assert.equal(o.tenia_ubicacion, "Sí");
         assert.ok(Math.abs(Number(o.metros) - 1000) < 10, String(o.metros));
-        assert.equal(o.responsable, "E50 - Ana Soto");
+        assert.equal(o.creado_por, "E50 - Ana Soto");
+    });
+    it("lleva siempre las 11 columnas estándar; modificado y modificado_por salen vacíos (la tabla no los guarda)", () => {
+        const o = mapCambioUbicacionPuestoRow({ id: 3, created_at: new Date("2026-09-10T14:00:00Z"), empresa_nombre: "G - Gonzalez", cliente_nombre: "Cliente 7", division_nombre: "Seguridad", contrato_nombre: "C1 - Contrato A", corpo_nombre: "S1 - Central", puesto_nombre: "P1 - Entrada", puesto_id: 1, responsable_nombre: "E50 - Ana Soto", created_by: 50 });
+        assert.deepEqual(
+            ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"].map((k) => o[k]),
+            ["G - Gonzalez", "Cliente 7", "Seguridad", "C1 - Contrato A", "S1 - Central", "P1 - Entrada", 3, "2026-09-10T14:00:00", "E50 - Ana Soto", null, null],
+        );
+        const v = mapCambioUbicacionPuestoRow({ id: 4, empresa_nombre: "—", cliente_nombre: "—", division_nombre: "—", contrato_nombre: "—", corpo_nombre: "—", puesto_nombre: "9", puesto_id: 9, responsable_nombre: "5", created_by: 5 });
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "creado_por", "modificado", "modificado_por"]) assert.equal(v[k], null, k);
     });
     it("trae el periodo [from, to) con la ubicación completa y sin coordenadas", async () => {
         const rows = await cambiosUbicacionPuesto.load(db, P);

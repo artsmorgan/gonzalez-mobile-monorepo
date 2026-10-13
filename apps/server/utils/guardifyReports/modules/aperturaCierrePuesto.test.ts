@@ -49,6 +49,8 @@ describe("apertura_cierre_puesto: mapeo", () => {
         assert.equal(o.inventario, 1);
         assert.equal(o.fotos, 3);
         assert.equal(o.ejecutivo_cuenta, null);
+        assert.equal(o.modificado, null);
+        assert.equal(o.modificado_por, null);
         assert.equal((o.observaciones as string).length, 500);
         const s = JSON.stringify(o);
         for (const secret of ["AAAA", "BBBB", "a.jpg"]) assert.equal(s.includes(secret), false);
@@ -67,6 +69,16 @@ describe("apertura_cierre_puesto: mapeo", () => {
         assert.equal(o.fotos, 0);
         assert.equal(o.representante_cliente, null);
         assert.equal(o.empresa, null);
+    });
+    it("lleva siempre las 11 columnas estándar (jerarquía y auditoría)", () => {
+        const o = mapAperturaCierrePuestoRow(raw(), { modificado: "2026-09-10T08:00:00", modificado_por: "E78 - Ana Soto" });
+        assert.deepEqual(
+            ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"].map((k) => o[k]),
+            ["9 - Seguridad SA", "Cliente Uno", "Seguridad", "C-31 - Contrato", "55 - Sede", "P140 - Portón", 21, "2026-09-09T06:10:00", "E77 - Luis Mora", "2026-09-10T08:00:00", "E78 - Ana Soto"],
+        );
+        const vacia = mapAperturaCierrePuestoRow(raw({ empresa_id: 0, empresa_nombre: "0", cliente_id: 0, contrato_id: 0, corpo_id: 0, puesto_id: 0, division_id: 0, created_at: null, created_by: 0, creador_nombre: "0" }));
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "creado_por", "modificado", "modificado_por"]) assert.equal(vacia[k], null, k);
+        assert.equal(vacia.id, 21);
     });
     it("completa división y ejecutivo con los extras cuando la fila no los trae", () => {
         const o = mapAperturaCierrePuestoRow(raw({ division_id: 0, division_nombre: "0" }), { ejecutivo_cuenta: "Laura Vega", division: "Seguridad" });
@@ -123,8 +135,15 @@ describe("apertura_cierre_puesto: periodo y ejecutivo (carga en lote)", () => {
         e_estructura_sucursal: [{ id: 55, nombre: "Sede", nro_sucursal: "55", contrato_id: 31, ejecutivoCuenta_id: 5 }, { id: 56, nombre: "Norte", nro_sucursal: null, contrato_id: 31, ejecutivoCuenta_id: null }],
         e_estructura_puesto: [{ id: 140, nombre: "Portón", codigo: "P140", sucursal_id: 55 }, { id: 141, nombre: "Garita", codigo: null, sucursal_id: 56 }],
         n_ejecutivo_cuenta: [{ id: 5, nombre: "Laura Vega" }],
-        c_empleado: [{ id: 77, codigo: "E77", nombre: "Luis", primer_apellido: "Mora", segundo_apellido: null }],
+        c_empleado: [{ id: 77, codigo: "E77", nombre: "Luis", primer_apellido: "Mora", segundo_apellido: null }, { id: 78, codigo: "E78", nombre: "Ana", primer_apellido: "Soto", segundo_apellido: null }],
         c_imagenes_apertura_cierre_puesto: [],
+        c_cambios_apps_modules: [
+            { id: 10, nombre_tabla: "c_apertura_cierre_puesto", registro_id: 1, created_by: 77, created_at: new Date("2026-09-10T14:30:00Z") },
+            { id: 11, nombre_tabla: "c_apertura_cierre_puesto", registro_id: 1, created_by: 78, created_at: new Date("2026-09-11T09:00:00Z") },
+            { id: 12, nombre_tabla: "c_apertura_cierre_puesto", registro_id: 1, created_by: 77, created_at: new Date("2026-09-12T10:15:00Z") },
+            { id: 13, nombre_tabla: "c_apertura_cierre_puesto", registro_id: 2, created_by: 77, created_at: new Date("2026-10-02T10:00:00Z") }, // solo el alta: sin modificación
+            { id: 14, nombre_tabla: "c_bitacora_vehiculo_detenido", registro_id: 2, created_by: 78, created_at: new Date("2026-10-03T10:00:00Z") }, // otra tabla: no cuenta
+        ],
     };
     const calls: string[] = [];
     const db = new Proxy({}, {
@@ -132,7 +151,9 @@ describe("apertura_cierre_puesto: periodo y ejecutivo (carga en lote)", () => {
             findMany: async (args: any = {}) => {
                 calls.push(name);
                 const ids: number[] | undefined = args?.where?.id?.in;
-                return (tables[name] ?? []).filter((r) => !ids || ids.includes(r.id));
+                const regs: number[] | undefined = args?.where?.registro_id?.in;
+                const tabla: string | undefined = args?.where?.nombre_tabla;
+                return (tables[name] ?? []).filter((r) => (!ids || ids.includes(r.id)) && (!regs || regs.includes(r.registro_id)) && (!tabla || r.nombre_tabla === tabla));
             },
         }),
     }) as any;
@@ -146,6 +167,9 @@ describe("apertura_cierre_puesto: periodo y ejecutivo (carga en lote)", () => {
         assert.deepEqual([r1.fecha, r1.creado_por, r1.ejecutivo_cuenta, r1.division, r1.tipo], ["2026-09-09T06:00:00", "E77 - Luis Mora", "Laura Vega", "Seguridad", "Apertura"]);
         const r2 = rows.find((r) => r.id === 2)!;
         assert.deepEqual([r2.ejecutivo_cuenta, r2.division, r2.tipo], [null, "Seguridad", "Cierre"]);
+        assert.deepEqual([r1.modificado, r1.modificado_por], ["2026-09-12T10:15:00", "E77 - Luis Mora"]);
+        assert.deepEqual([r2.modificado, r2.modificado_por], [null, null]);
+        assert.equal(calls.filter((c) => c === "c_cambios_apps_modules").length, 1);
         assert.ok(calls.filter((c) => c === "n_ejecutivo_cuenta").length <= 1);
         assert.equal(JSON.stringify(rows).includes("AAAA"), false);
     });

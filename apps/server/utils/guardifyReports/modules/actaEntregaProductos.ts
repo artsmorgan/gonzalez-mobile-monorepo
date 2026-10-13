@@ -6,6 +6,7 @@ import { addDays } from "../params";
 import { matchesScope } from "../scope";
 import type { GuardifyReportModule } from "../types";
 import { actaEntregaProductosForm } from "./actaEntregaProductosForm";
+import { auditoriaPorHistorial, type AuditoriaHistorial } from "./auditoriaCambios";
 
 const txt = (v: unknown): string | null => {
     const s = String(v ?? "").trim();
@@ -36,9 +37,10 @@ const persona = (cedula: unknown, nombre: unknown): string | null => {
 
 /**
  * Acta de entrega de productos (`c_acta_entre_producto`). Nunca se exponen `firma_entrega` ni `firma_recibe` (imágenes).
- * `ejecutivo` = ejecutivo de cuenta de la sucursal (se carga en lote en `load`).
+ * `ejecutivo` = ejecutivo de cuenta de la sucursal (se carga en lote en `load`). `auditoria` = creado/creado_por/modificado/modificado_por del
+ * historial de cambios (la tabla no guarda `created_at`, `created_by` ni `updated_*`; ver `auditoriaPorHistorial`).
  */
-export function mapActaEntregaRow(r: any, ejecutivo: string | null = null): OutRow {
+export function mapActaEntregaRow(r: any, ejecutivo: string | null = null, auditoria: AuditoriaHistorial | null = null): OutRow {
     const items = parseDetalle(r.detalle);
     const descripcion = items.map((i) => txt(i?.descripcion)).filter(Boolean).join("; ");
     return {
@@ -61,11 +63,15 @@ export function mapActaEntregaRow(r: any, ejecutivo: string | null = null): OutR
         ejecutivo_cuenta: txt(ejecutivo),
         // Quienes intervienen, «cédula - nombre» de quien entrega y de quien recibe: el filtro «Empleado» busca por cédula o nombre en cualquiera de los dos.
         empleado: [persona(r.cedula_entrega, r.nombre_entrega), persona(r.cedula_recibe, r.nombre_recibe)].filter(Boolean).join(" · ").slice(0, 500) || null,
+        creado: auditoria?.creado ?? null,
+        creado_por: txt(auditoria?.creado_por),
+        modificado: auditoria?.modificado ?? null,
+        modificado_por: txt(auditoria?.modificado_por),
     };
 }
 
 /**
- * Acta de entrega de productos. Periodo: `fecha` (la fecha del acta). La tabla no guarda consecutivo ni quién registró el acta.
+ * Acta de entrega de productos. Periodo: `fecha` (la fecha del acta). La tabla no guarda consecutivo ni auditoría propia: `creado*` y `modificado*` salen del historial de cambios (null en actas anteriores al historial).
  * Cada fila trae empresa, cliente, división, contrato, sucursal y puesto: admite alcance. */
 export const actaEntregaProductos: GuardifyReportModule = {
     id: "acta_entrega_productos",
@@ -81,7 +87,7 @@ export const actaEntregaProductos: GuardifyReportModule = {
         const kept = !scope
             ? rows
             : rows.filter((r: any) => matchesScope({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.corpo_id, puesto: r.puesto_id }, scope));
-        const ejecutivos = await ejecutivoPorCorpo(db, kept.map((r: any) => r.corpo_id));
-        return kept.map((r: any) => mapActaEntregaRow(r, ejecutivos.get(Number(r.corpo_id)) ?? null));
+        const [ejecutivos, auditoria] = await Promise.all([ejecutivoPorCorpo(db, kept.map((r: any) => r.corpo_id)), auditoriaPorHistorial(db, "c_acta_entre_producto", kept.map((r: any) => Number(r.id)))]);
+        return kept.map((r: any) => mapActaEntregaRow(r, ejecutivos.get(Number(r.corpo_id)) ?? null, auditoria.get(Number(r.id)) ?? null));
     },
 };

@@ -1,5 +1,5 @@
 import type { ReportDataAccess } from "../../reportDynamicPrisma";
-import { ejecutivoPorCorpo, nombresEmpleado, usuarioInserta } from "../enrich";
+import { ejecutivoPorCorpo, nombresEmpleado, ubicacionTextos, usuarioInserta, type UbicacionIds, type UbicacionTextos } from "../enrich";
 import type { OutRow } from "../listing";
 import { fmtDt } from "../mappers";
 import { addDays } from "../params";
@@ -17,12 +17,6 @@ const clip = (v: unknown): string | null => {
     const s = txt(v);
     return s && s.length > MAX_TEXT ? s.slice(0, MAX_TEXT) : s;
 };
-/** El reporte rellena el nombre con el id cuando no encuentra el registro: eso no es un nombre. */
-const place = (id: unknown, name: unknown): string | null => {
-    const s = txt(name);
-    return !s || s === String(id ?? "") ? null : s;
-};
-
 /** `YYYY-MM-DD` de una columna de fecha (Date o texto ISO). */
 function dayOf(v: unknown): string | null {
     const s = fmtDt(v as any);
@@ -61,25 +55,42 @@ function parseArticulos(raw: unknown): Array<Record<string, unknown>> {
     }
 }
 
-/** Datos que no vienen en la fila y se cargan por lote: ejecutivo de cuenta de la sucursal y quien registró la entrega. */
-export type EntregaExtra = { ejecutivo?: string | null; usuario?: string | null };
+/** Datos que no vienen en la fila y se cargan por lote: textos de la ubicación («código - nombre»), ejecutivo de cuenta de la sucursal y quien registró la entrega. */
+export type EntregaExtra = { ubic?: UbicacionTextos | null; ejecutivo?: string | null; creadoPor?: string | null };
+
+/** Ids de la ubicación de una entrega: la fila solo trae cliente, corpo y puesto; empresa, contrato y división se deducen de la sucursal y del cliente. */
+export function entregaUbicacionIds(r: any): UbicacionIds {
+    const corpo = r.e_estructura_sucursal;
+    return {
+        empresa: r.empresa_id_resolved,
+        cliente: r.cliente_id,
+        division: corpo?.e_estructura_contrato?.division_id,
+        contrato: corpo?.contrato_id ?? corpo?.e_estructura_contrato?.id,
+        corpo: r.corpo_id,
+        puesto: r.puesto_id,
+    };
+}
 
 /**
  * Entrega de puesto (`e_registro_entrega_puesto`) a fila plana. Se omiten a propósito las firmas, los ids de marca y el
  * detalle de los artículos (solo se cuentan: cuántos y cuántos con novedad, es decir «Malo» o «No está»).
+ * La tabla no guarda `updated_at`/`updated_by` ni historial de cambios: `modificado` y `modificado_por` salen siempre vacíos.
  */
 export function mapEntregaPuestoRow(r: any, x: EntregaExtra = {}): OutRow {
     const arts = parseArticulos(r.articulos_puesto);
     const conNovedad = arts.filter((a) => /^(malo|no est[aá])$/i.test(String(a.estado ?? "").trim())).length;
     return {
         id: Number(r.id),
+        empresa: x.ubic?.empresa ?? null,
+        cliente: x.ubic?.cliente ?? null,
+        division: x.ubic?.division ?? null,
+        contrato: x.ubic?.contrato ?? null,
+        sucursal: x.ubic?.sucursal ?? null,
+        puesto: x.ubic?.puesto ?? null,
         creado: fmtDt(r.created_at),
-        empresa: place(r.empresa_id_resolved, r.empresa_nombre),
-        cliente: place(r.cliente_id, r.cliente_nombre),
-        division: place(r.e_estructura_sucursal?.e_estructura_contrato?.division_id, r.division_nombre),
-        contrato: txt(r.contrato_nombre),
-        sucursal: place(r.corpo_id, r.corpo_nombre),
-        puesto: place(r.puesto_id, r.puesto_nombre),
+        creado_por: txt(x.creadoPor),
+        modificado: null,
+        modificado_por: null,
         oficial_entrega: txt(r.oficial_entrega),
         entrada_entrega: joinDateTime(r.fecha_entrada_entrega, r.hora_entrada_entrega),
         salida_entrega: joinDateTime(r.fecha_salida_entrega, r.hora_salida_entrega),
@@ -92,15 +103,17 @@ export function mapEntregaPuestoRow(r: any, x: EntregaExtra = {}): OutRow {
         articulos_con_novedad: conNovedad,
         observaciones: clip(r.observaciones),
         ejecutivo_cuenta: txt(x.ejecutivo),
-        usuario_inserta: txt(x.usuario),
     };
 }
 
-/** Ejecutivo de cuenta por sucursal y nombre de quien registró (`created_by` = id de empleado), ambos por lote. */
+/** Textos de la ubicación, ejecutivo de cuenta por sucursal y nombre de quien registró (`created_by` = id de empleado), todo por lote. */
 export async function mapEntregasConExtras(db: any, rows: any[]): Promise<OutRow[]> {
-    const ejecutivos = await ejecutivoPorCorpo(db, rows.map((r) => r.corpo_id));
-    const nombres = await nombresEmpleado(db, rows.map((r) => r.created_by));
-    return rows.map((r) => mapEntregaPuestoRow(r, { ejecutivo: ejecutivos.get(Number(r.corpo_id)) ?? null, usuario: usuarioInserta(r.created_by, nombres) }));
+    const [ubic, ejecutivos, nombres] = await Promise.all([
+        ubicacionTextos(db, rows.map(entregaUbicacionIds)),
+        ejecutivoPorCorpo(db, rows.map((r) => r.corpo_id)),
+        nombresEmpleado(db, rows.map((r) => r.created_by)),
+    ]);
+    return rows.map((r) => mapEntregaPuestoRow(r, { ubic: ubic(entregaUbicacionIds(r)), ejecutivo: ejecutivos.get(Number(r.corpo_id)) ?? null, creadoPor: usuarioInserta(r.created_by, nombres) }));
 }
 
 /**
@@ -118,15 +131,15 @@ export async function filterEntregasByScope(db: ReportDataAccess, rows: any[], s
 
 /**
  * Entrega de puesto. El periodo es sobre la fecha de creación del registro (`created_at`): es la «Fecha» del Excel y el filtro
- * «Creado desde/hasta» de la app (la columna `creado`). Los filtros «de quien entrega/recibe» (fecha y hora) usan la columna de entrada
+ * «Creado desde/hasta» de la app (la columna `creado`). La jerarquía sale en «código - nombre» (`ubicacionTextos`). Los filtros «de quien entrega/recibe» (fecha y hora) usan la columna de entrada
  * de cada uno (`entrada_entrega`, `entrada_recibe`).
  */
 export const entregaPuesto: GuardifyReportModule = {
     id: "entrega_puesto",
     supportsScope: true,
-    searchKeys: ["oficial_entrega", "oficial_recibe", "puesto", "sucursal", "cliente", "observaciones"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "turno_entrega", "turno_recibe", "oficial_entrega", "oficial_recibe", "ejecutivo_cuenta", "usuario_inserta"],
-    sortKeys: ["creado", "empresa", "cliente", "contrato", "sucursal", "puesto", "oficial_entrega", "oficial_recibe", "entrada_entrega", "salida_entrega", "entrada_recibe", "salida_recibe", "articulos", "articulos_con_novedad", "ejecutivo_cuenta", "usuario_inserta"],
+    searchKeys: ["oficial_entrega", "oficial_recibe", "puesto", "sucursal", "cliente", "observaciones", "creado_por"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "turno_entrega", "turno_recibe", "oficial_entrega", "oficial_recibe", "ejecutivo_cuenta", "creado", "creado_por"],
+    sortKeys: ["creado", "creado_por", "empresa", "cliente", "contrato", "sucursal", "puesto", "oficial_entrega", "oficial_recibe", "entrada_entrega", "salida_entrega", "entrada_recibe", "salida_recibe", "articulos", "articulos_con_novedad", "ejecutivo_cuenta"],
     defaultSort: "creado",
     form: entregaPuestoForm,
     async load(db, p) {

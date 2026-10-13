@@ -69,7 +69,10 @@ export function mapIncidenteRow(r: any, x: IncidenteExtra = {}): OutRow {
         involucrados: clip(involucrados),
         novedades_libro: novedades.length,
         aportes: Array.isArray(r.c_contribucion_incidente) ? r.c_contribucion_incidente.length : 0,
-        usuario_inserta: txt(x.usuario),
+        creado_por: txt(x.usuario),
+        // `c_incidente` no guarda `updated_at`/`updated_by` ni deja historial de cambios: siempre null (brecha registrada).
+        modificado: null,
+        modificado_por: null,
     };
 }
 
@@ -95,8 +98,8 @@ export const incidentes: GuardifyReportModule = {
     id: "incidentes",
     supportsScope: true,
     searchKeys: ["responsable", "responsable_atencion", "involucrados", "descripcion", "clasificacion", "puesto", "sucursal", "contrato"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "clasificacion", "estado", "ejecutivo_cuenta", "fecha_solucion", "fecha_solucion_real", "usuario_inserta"],
-    sortKeys: ["creado", "fecha_incidente", "fecha_reporte", "fecha_solucion", "fecha_solucion_real", "empresa", "cliente", "contrato", "sucursal", "puesto", "clasificacion", "estado", "responsable", "aportes", "usuario_inserta"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "clasificacion", "estado", "ejecutivo_cuenta", "fecha_solucion", "fecha_solucion_real", "creado_por"],
+    sortKeys: ["creado", "fecha_incidente", "fecha_reporte", "fecha_solucion", "fecha_solucion_real", "empresa", "cliente", "contrato", "sucursal", "puesto", "clasificacion", "estado", "responsable", "aportes", "creado_por"],
     defaultSort: "creado",
     form: incidentesForm,
     async load(db, p) {

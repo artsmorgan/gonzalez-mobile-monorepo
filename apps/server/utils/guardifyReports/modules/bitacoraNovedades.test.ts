@@ -35,7 +35,8 @@ describe("bitacora_novedades: mapeo", () => {
         const o = mapBitacoraNovedadesRow(raw());
         assert.equal(o.id, 41);
         assert.equal(o.creado, "2026-09-10T14:30:00");
-        assert.equal(o.actualizado, "2026-09-11T08:00:00");
+        assert.equal(o.modificado, "2026-09-11T08:00:00");
+        assert.equal("actualizado" in o, false);
         assert.equal(o.titulo, "Portón dañado");
         assert.equal((o.descripcion as string).length, 500);
         assert.equal(o.categoria, "Mantenimiento");
@@ -44,7 +45,9 @@ describe("bitacora_novedades: mapeo", () => {
         assert.equal(o.sucursal, "55 - Sede");
         assert.equal(o.puesto, "P140 - Portón");
         assert.equal(o.ejecutivo_cuenta, null);
-        assert.equal(o.usuario_inserta, null);
+        assert.equal(o.creado_por, null);
+        assert.equal(o.modificado_por, null);
+        assert.equal("usuario_inserta" in o, false);
         const s = JSON.stringify(o);
         for (const secret of ["AAAA", "BBBB"]) assert.equal(s.includes(secret), false);
     });
@@ -54,7 +57,7 @@ describe("bitacora_novedades: mapeo", () => {
             cliente_id: 0, cliente_nombre: "0", division_id: 0, division_nombre: "0", contrato_id: 0, contrato_nombre: "0", corpo_id: 0, corpo_nombre: "0",
         }));
         assert.equal(o.creado, "2026-09-10T14:30:00");
-        assert.equal(o.actualizado, null);
+        assert.equal(o.modificado, null);
         assert.equal(o.descripcion, null);
         assert.equal(o.categoria, null);
         assert.equal(o.relevancia, null);
@@ -64,9 +67,18 @@ describe("bitacora_novedades: mapeo", () => {
         assert.equal(o.empresa, "9 - Seguridad SA");
     });
     it("agrega ejecutivo, creador y la división que da el puesto cuando la nota no la trae", () => {
-        const o = mapBitacoraNovedadesRow(raw({ division_id: 0, division_nombre: "0" }), { ejecutivo_cuenta: "Laura Vega", division: "Seguridad", usuario_inserta: "Luis Mora" });
-        assert.deepEqual([o.division, o.ejecutivo_cuenta, o.usuario_inserta], ["Seguridad", "Laura Vega", "Luis Mora"]);
+        const o = mapBitacoraNovedadesRow(raw({ division_id: 0, division_nombre: "0" }), { ejecutivo_cuenta: "Laura Vega", division: "Seguridad", creado_por: "Luis Mora", modificado_por: "Ana Soto" });
+        assert.deepEqual([o.division, o.ejecutivo_cuenta, o.creado_por, o.modificado_por], ["Seguridad", "Laura Vega", "Luis Mora", "Ana Soto"]);
         assert.equal(mapBitacoraNovedadesRow(raw(), { division: "Otra" }).division, "Seguridad");
+    });
+    it("lleva siempre las 11 columnas estándar (jerarquía y auditoría)", () => {
+        const o = mapBitacoraNovedadesRow(raw(), { creado_por: "Luis Mora", modificado_por: "Ana Soto" });
+        assert.deepEqual(
+            ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"].map((k) => o[k]),
+            ["9 - Seguridad SA", "Cliente Uno", "Seguridad", "C-31 - Contrato", "55 - Sede", "P140 - Portón", 41, "2026-09-10T14:30:00", "Luis Mora", "2026-09-11T08:00:00", "Ana Soto"],
+        );
+        const vacia = mapBitacoraNovedadesRow(raw({ empresa_id: 0, cliente_id: 0, division_id: 0, contrato_id: 0, corpo_id: 0, puesto_id: 0, created_at: null, updated_at: null }));
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "creado_por", "modificado", "modificado_por"]) assert.equal(vacia[k], null, k);
     });
     it("su definición declara llaves coherentes con las columnas", () => {
         const o = mapBitacoraNovedadesRow(raw());
@@ -122,6 +134,7 @@ describe("bitacora_novedades: ejecutivo y creador (carga en lote)", () => {
         c_cambios_apps_modules: [
             { id: 22, nombre_tabla: "c_puesto_notas", registro_id: 1, created_by: 78 },
             { id: 21, nombre_tabla: "c_puesto_notas", registro_id: 1, created_by: 77 },
+            { id: 24, nombre_tabla: "c_puesto_notas", registro_id: 3, created_by: 77 }, // solo el alta: sin modificación
             { id: 23, nombre_tabla: "c_boleta_apreciacion_vulnerabilidad", registro_id: 2, created_by: 78 }, // otra tabla: no cuenta
         ],
     };
@@ -143,9 +156,9 @@ describe("bitacora_novedades: ejecutivo y creador (carga en lote)", () => {
         calls.length = 0;
         const rows = await bitacoraNovedades.load(db, P);
         const by = (id: number) => rows.find((r) => r.id === id)!;
-        assert.deepEqual([by(1).ejecutivo_cuenta, by(1).usuario_inserta, by(1).division, by(1).categoria], ["Laura Vega", "Luis Mora", "Seguridad", "Mantenimiento"]);
-        assert.deepEqual([by(2).ejecutivo_cuenta, by(2).usuario_inserta, by(2).division], [null, null, "Seguridad"]);
-        assert.equal(by(3).usuario_inserta, null);
+        assert.deepEqual([by(1).ejecutivo_cuenta, by(1).creado_por, by(1).modificado_por, by(1).division, by(1).categoria], ["Laura Vega", "Luis Mora", "Ana Soto", "Seguridad", "Mantenimiento"]);
+        assert.deepEqual([by(2).ejecutivo_cuenta, by(2).creado_por, by(2).modificado_por, by(2).division], [null, null, null, "Seguridad"]);
+        assert.deepEqual([by(3).creado_por, by(3).modificado_por], ["Luis Mora", null]);
         assert.equal(calls.filter((c) => c === "c_cambios_apps_modules").length, 1);
         assert.equal(calls.filter((c) => c === "n_ejecutivo_cuenta").length, 1);
         const s = JSON.stringify(rows);

@@ -58,10 +58,41 @@ describe("encuesta de satisfacción: columnas para filtros", () => {
         const o = mapEncuestaRow(raw(), { ejecutivo: "Eva Rojas", responsableCodigo: "1934" });
         assert.equal(o.responsable, "1934 - Ana Soto");
         assert.equal(o.ejecutivo_cuenta, "Eva Rojas");
-        assert.deepEqual(Object.keys(o).slice(-2), ["observaciones", "ejecutivo_cuenta"]);
-        assert.equal(mapEncuestaRow(raw()).responsable, "Ana Soto");
+                assert.equal(mapEncuestaRow(raw()).responsable, "Ana Soto");
         assert.equal(mapEncuestaRow(raw()).ejecutivo_cuenta, null);
         assert.equal(mapEncuestaRow(raw({ responsable_nombre: "1934" }), { responsableCodigo: "1934" }).responsable, "1934");
+    });
+    it("lleva las 11 columnas estándar; creado_por, modificado y modificado_por salen del historial (null si no hay)", () => {
+        const o = mapEncuestaRow(raw());
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"]) assert.ok(k in o, k);
+        assert.deepEqual([o.empresa, o.cliente, o.division, o.contrato, o.sucursal, o.puesto], ["9 - Seguridad SA", "Cliente Uno", "Seguridad", "C-31 - Contrato", "55 - Sede", "P140 - Portón"]);
+        assert.deepEqual([o.id, o.creado, o.creado_por, o.modificado, o.modificado_por], [12, "2026-09-20T16:05:00", null, null, null]);
+        const m = mapEncuestaRow(raw(), { creadoPor: "1934 - Ana Soto", modificacion: { cuando: "2026-09-21T08:00:00", quien: "77 - Eva Rojas" } });
+        assert.deepEqual([m.creado_por, m.modificado, m.modificado_por], ["1934 - Ana Soto", "2026-09-21T08:00:00", "77 - Eva Rojas"]);
+    });
+    it("carga quién creó y quién modificó desde el historial, en lote", async () => {
+        const histor = [
+            { id: 1, nombre_tabla: "c_encuesta_cliente", registro_id: 1, created_by: 8, created_at: new Date("2026-09-20T16:05:00Z"), cambios: "[{\"prop\":\"__created__\"}]" },
+            { id: 2, nombre_tabla: "c_encuesta_cliente", registro_id: 1, created_by: 9, created_at: new Date("2026-09-21T08:00:00Z"), cambios: "[{\"prop\":\"firma_evaluado\"}]" },
+            { id: 3, nombre_tabla: "c_encuesta_cliente", registro_id: 1, created_by: 9, created_at: new Date("2026-09-22T09:00:00Z"), cambios: "[{\"prop\":\"observaciones\"}]" },
+            { id: 4, nombre_tabla: "c_encuesta_cliente", registro_id: 99, created_by: 9, created_at: new Date("2026-09-23T09:00:00Z"), cambios: "[]" },
+        ];
+        const tabla = (rows: any[]) => ({
+            findMany: async (a: any = {}) => {
+                const w = a.where ?? {};
+                return rows.filter((r) => (!w.id?.in || w.id.in.includes(r.id)) && (!w.registro_id?.in || w.registro_id.in.includes(r.registro_id))
+                    && (!w.cambios?.contains || r.cambios.includes(w.cambios.contains)) && !(w.NOT?.cambios?.contains && r.cambios.includes(w.NOT.cambios.contains)));
+            },
+        });
+        const db: any = { e_estructura_sucursal: tabla([]), n_ejecutivo_cuenta: tabla([]), c_cambios_apps_modules: tabla(histor), c_empleado: tabla([{ id: 8, codigo: "1934", nombre: "Ana", primer_apellido: "Soto" }, { id: 9, codigo: "77", nombre: "Eva", primer_apellido: "Rojas" }]) };
+        const out = await mapEncuestasConExtras(db, [raw({ id: 1 }), raw({ id: 2 })]);
+        assert.deepEqual(out.map((o) => [o.creado_por, o.modificado, o.modificado_por]), [["1934 - Ana Soto", "2026-09-22T09:00:00", "77 - Eva Rojas"], [null, null, null]]);
+    });
+    it("si el historial no se puede leer, creado_por y modificado quedan null", async () => {
+        const vacia = { findMany: async () => [] };
+        const db: any = { e_estructura_sucursal: vacia, n_ejecutivo_cuenta: vacia, c_empleado: vacia, c_cambios_apps_modules: { findMany: async () => { throw new Error("sin tabla"); } } };
+        const out = await mapEncuestasConExtras(db, [raw({ id: 1 })]);
+        assert.deepEqual([out[0]!.creado_por, out[0]!.modificado, out[0]!.modificado_por], [null, null, null]);
     });
     it("carga ejecutivos y códigos por lote, una consulta por tabla", async () => {
         const table = (rows: any[]) => ({ findMany: async (a: any) => rows.filter((r) => !a?.where?.id?.in || a.where.id.in.includes(r.id)) });
@@ -71,6 +102,7 @@ describe("encuesta de satisfacción: columnas para filtros", () => {
             e_estructura_sucursal: wrap("sucursal", [{ id: 55, ejecutivoCuenta_id: 10 }, { id: 56, ejecutivoCuenta_id: null }]),
             n_ejecutivo_cuenta: wrap("ejecutivo", [{ id: 10, nombre: "Eva Rojas" }]),
             c_empleado: wrap("empleado", [{ id: 8, codigo: "1934" }]),
+            c_cambios_apps_modules: table([]),
         };
         const out = await mapEncuestasConExtras(db, [raw({ id: 1 }), raw({ id: 2, corpo_id: 56 }), raw({ id: 3, responsable_id: 99 })]);
         assert.deepEqual(out.map((o) => o.ejecutivo_cuenta), ["Eva Rojas", null, "Eva Rojas"]);

@@ -1,6 +1,7 @@
 import { queryRegistroInduccionGeneralRows } from "../../reports-functions/registroInduccionGeneralReport";
 import { getCheckedTemaIds } from "../../reports-functions/registroInduccionGeneralTemas";
 import { ejecutivoPorCorpo, nombresEmpleado, usuarioInserta } from "../enrich";
+import { auditoriaPorHistorial } from "./auditoriaCambios";
 import { fmtDt } from "../mappers";
 import type { OutRow } from "../listing";
 import { addDays } from "../params";
@@ -81,7 +82,7 @@ function personas(raw: unknown, codigos?: Map<string, string>): { n: number; nom
 /**
  * Registro de inducción general. Se omiten `firma_responsable` y las firmas de colaboradores y capacitadores.
  * `participantes` junta a colaboradores y capacitadores; `codigos_colaboradores` son los códigos de empleado de los
- * colaboradores (por su cédula). `ejecutivo_cuenta` y `usuario_inserta` los agrega `load` por lote.
+ * colaboradores (por su cédula). `ejecutivo_cuenta`, `creado_por` (`created_by`) y `modificado`/`modificado_por` (última edición del historial `c_cambios_apps_modules`) los agrega `load` por lote.
  */
 export function mapInduccionGeneralRow(r: any, codigos?: Map<string, string>): OutRow {
     const colab = personas(r.colaboradores, codigos);
@@ -106,7 +107,9 @@ export function mapInduccionGeneralRow(r: any, codigos?: Map<string, string>): O
         participantes: clip(todos),
         codigos_colaboradores: colab.codigosTxt,
         ejecutivo_cuenta: txt(r.ejecutivo_cuenta),
-        usuario_inserta: txt(r.usuario_inserta),
+        creado_por: txt(r.creado_por),
+        modificado: fmtDt(r.modificado),
+        modificado_por: txt(r.modificado_por),
     };
 }
 
@@ -119,7 +122,7 @@ export const registroInduccionGeneral: GuardifyReportModule = {
     id: "registro_induccion_general",
     supportsScope: true,
     searchKeys: ["responsable", "nombres_colaboradores", "nombres_capacitadores", "contrato", "sucursal", "puesto", "cliente"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "participantes", "codigos_colaboradores", "nombres_colaboradores", "ejecutivo_cuenta", "usuario_inserta"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "participantes", "codigos_colaboradores", "nombres_colaboradores", "ejecutivo_cuenta", "creado_por", "modificado_por"],
     sortKeys: ["creado", "fecha", "empresa", "cliente", "contrato", "sucursal", "puesto", "responsable", "temas_marcados", "colaboradores", "capacitadores"],
     defaultSort: "creado",
     form: registroInduccionGeneralForm,
@@ -132,13 +135,14 @@ export const registroInduccionGeneral: GuardifyReportModule = {
         if (!kept.length) return [];
         // Datos para los filtros, en lote (nunca por fila).
         const cedulas = kept.flatMap((r: any) => [...parseArr(r.colaboradores), ...parseArr(r.capacitadores)].map((x: any) => txt(x?.cedula)));
-        const [ejecutivos, nombres, codigos] = await Promise.all([
+        const [ejecutivos, nombres, codigos, historial] = await Promise.all([
             ejecutivoPorCorpo(db, kept.map((r: any) => r.corpo_id)),
             nombresEmpleado(db, kept.map((r: any) => r.created_by)),
             codigosPorCedula(db, cedulas),
+            auditoriaPorHistorial(db, "c_registro_induccion_general", kept.map((r: any) => r.id)),
         ]);
         return kept.map((r: any) =>
-            mapInduccionGeneralRow({ ...r, ejecutivo_cuenta: ejecutivos.get(Number(r.corpo_id)), usuario_inserta: usuarioInserta(r.created_by, nombres) }, codigos),
+            mapInduccionGeneralRow({ ...r, ejecutivo_cuenta: ejecutivos.get(Number(r.corpo_id)), creado_por: usuarioInserta(r.created_by, nombres), modificado: historial.get(Number(r.id))?.modificado, modificado_por: historial.get(Number(r.id))?.modificado_por }, codigos),
         );
     },
 };

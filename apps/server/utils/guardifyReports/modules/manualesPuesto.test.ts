@@ -25,7 +25,9 @@ describe("manuales de trabajo: mapeo", () => {
         assert.deepEqual([o.titulo, o.clasificacion], ["Manual de rondas", "Seguridad"]);
         assert.equal((o.descripcion as string).length, 500);
         assert.deepEqual([o.empresa, o.cliente, o.division, o.contrato, o.sucursal, o.puesto], ["9 - Empresa", "Cliente", "D - División", "C1 - Contrato", "S1 - Sucursal", "P1 - Puesto"]);
-        assert.deepEqual([o.puestos_vinculados, o.empleados_vinculados, o.visualizaciones, o.firmados, o.aprobados], [2, 3, 3, 1, 1]);
+        assert.deepEqual([o.puestos_vinculados, o.empleados_enviados, o.vistos, o.firmados, o.aprobados, o.pendientes], [2, 3, 3, 1, 1, 0]);
+        // Auditoría y jerarquía estándar: el manual no guarda modificación.
+        assert.deepEqual([o.id, o.modificado, o.modificado_por], [60, null, null]);
         assert.equal(o.creado_por, "11 - Carla Soto");
     });
     it("agrega los puestos (principal y vinculados), el ejecutivo de cuenta y completa la división", () => {
@@ -42,9 +44,13 @@ describe("manuales de trabajo: mapeo", () => {
         for (const bad of ["base64", "secreto", "quiz"]) assert.equal(s.includes(bad), false, bad);
         assert.deepEqual(Object.keys(mapManualPuestoRow(raw)).filter((k) => k === "firma" || k.startsWith("firma_")), []);
     });
+    it("cuenta empleados distintos aunque tengan varias filas", () => {
+        const o = mapManualPuestoRow({ id: 2, e_empleados_manual_puesto: [{ empleado_id: 1 }, { empleado_id: 1 }, { empleado_id: 2 }], e_empleado_visualizacion_manual_puesto: [{ empleado_id: 1, firma_empleado_manual: "x" }, { empleado_id: 1, firma_empleado_manual: "x" }] });
+        assert.deepEqual([o.empleados_enviados, o.vistos, o.firmados, o.pendientes], [2, 1, 1, 1]);
+    });
     it("tolera relaciones ausentes y nulos", () => {
         const o = mapManualPuestoRow({ id: 1, created_at: null, title: null, description: null });
-        assert.deepEqual([o.creado, o.titulo, o.clasificacion, o.puestos_vinculados, o.empleados_vinculados, o.visualizaciones, o.firmados, o.aprobados], [null, null, null, 0, 0, 0, 0, 0]);
+        assert.deepEqual([o.creado, o.titulo, o.clasificacion, o.puestos_vinculados, o.empleados_enviados, o.vistos, o.firmados, o.aprobados], [null, null, null, 0, 0, 0, 0, 0]);
     });
 });
 

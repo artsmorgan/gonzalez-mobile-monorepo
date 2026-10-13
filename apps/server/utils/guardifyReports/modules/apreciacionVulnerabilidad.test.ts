@@ -47,7 +47,8 @@ describe("apreciacion_vulnerabilidad: mapeo", () => {
         assert.equal((o.observaciones as string).length, 500);
         assert.equal(o.puesto, "P140 - Portón");
         assert.equal(o.ejecutivo_cuenta, null);
-        assert.equal(o.usuario_inserta, null);
+        assert.deepEqual([o.creado, o.creado_por, o.modificado, o.modificado_por], [null, null, null, null]);
+        assert.equal("usuario_inserta" in o, false);
         const s = JSON.stringify(o);
         for (const secret of ["AAAA", "BBBB", "secreto"]) assert.equal(s.includes(secret), false);
     });
@@ -66,9 +67,18 @@ describe("apreciacion_vulnerabilidad: mapeo", () => {
         assert.equal(o.division, null);
     });
     it("agrega ejecutivo, creador y la división que da el puesto cuando la fila no la trae", () => {
-        const o = mapVulnerabilidadRow(raw({ division_id: 0, division_nombre: "0" }), { ejecutivo_cuenta: "Laura Vega", division: "Seguridad", usuario_inserta: "Luis Mora" });
-        assert.deepEqual([o.division, o.ejecutivo_cuenta, o.usuario_inserta], ["Seguridad", "Laura Vega", "Luis Mora"]);
+        const o = mapVulnerabilidadRow(raw({ division_id: 0, division_nombre: "0" }), { ejecutivo_cuenta: "Laura Vega", division: "Seguridad", creado_por: "Luis Mora" });
+        assert.deepEqual([o.division, o.ejecutivo_cuenta, o.creado_por], ["Seguridad", "Laura Vega", "Luis Mora"]);
         assert.equal(mapVulnerabilidadRow(raw(), { division: "Otra" }).division, "Seguridad");
+    });
+    it("lleva siempre las 11 columnas estándar (jerarquía y auditoría)", () => {
+        const o = mapVulnerabilidadRow(raw(), { creado: "2026-09-09T10:20:00", creado_por: "Luis Mora", modificado: "2026-09-10T08:00:00", modificado_por: "Ana Soto" });
+        assert.deepEqual(
+            ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"].map((k) => o[k]),
+            ["9 - Seguridad SA", "Cliente Uno", "Seguridad", "C-31 - Contrato", "55 - Sede", "P140 - Portón", 31, "2026-09-09T10:20:00", "Luis Mora", "2026-09-10T08:00:00", "Ana Soto"],
+        );
+        const vacia = mapVulnerabilidadRow(raw({ empresa_id: 0, cliente_id: 0, division_id: 0, contrato_id: 0, corpo_id: 0, puesto_id: 0 }));
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "creado_por", "modificado", "modificado_por"]) assert.equal(vacia[k], null, k);
     });
     it("ignora métricas que no son texto", () => {
         assert.equal(mapVulnerabilidadRow(raw({ metricas_vulnerablidad: JSON.stringify(["A", { x: 1 }, 3]) })).metricas, "A; 3");
@@ -123,10 +133,10 @@ describe("apreciacion_vulnerabilidad: ejecutivo y creador (carga en lote)", () =
         c_empleado: [{ id: 77, nombre: "Luis", primer_apellido: "Mora", segundo_apellido: null }, { id: 78, nombre: "Ana", primer_apellido: "Soto", segundo_apellido: null }],
         c_cambios_apps_modules: [
             // el primer cambio (menor id) es quien lo registró; los posteriores son ediciones
-            { id: 12, nombre_tabla: "c_boleta_apreciacion_vulnerabilidad", registro_id: 1, created_by: 78 },
-            { id: 11, nombre_tabla: "c_boleta_apreciacion_vulnerabilidad", registro_id: 1, created_by: 77 },
+            { id: 12, nombre_tabla: "c_boleta_apreciacion_vulnerabilidad", registro_id: 1, created_by: 78, created_at: new Date("2026-09-12T08:00:00Z") },
+            { id: 11, nombre_tabla: "c_boleta_apreciacion_vulnerabilidad", registro_id: 1, created_by: 77, created_at: new Date("2026-09-09T10:20:00Z") },
             { id: 13, nombre_tabla: "c_puesto_notas", registro_id: 2, created_by: 78 }, // otra tabla: no cuenta
-            { id: 14, nombre_tabla: "c_boleta_apreciacion_vulnerabilidad", registro_id: 3, created_by: 0 },
+            { id: 14, nombre_tabla: "c_boleta_apreciacion_vulnerabilidad", registro_id: 3, created_by: 0, created_at: new Date("2026-09-09T11:00:00Z") },
         ],
     };
     const calls: string[] = [];
@@ -147,9 +157,10 @@ describe("apreciacion_vulnerabilidad: ejecutivo y creador (carga en lote)", () =
         calls.length = 0;
         const rows = await apreciacionVulnerabilidad.load(db, P);
         const by = (id: number) => rows.find((r) => r.id === id)!;
-        assert.deepEqual([by(1).ejecutivo_cuenta, by(1).usuario_inserta, by(1).division], ["Laura Vega", "Luis Mora", "Seguridad"]);
-        assert.deepEqual([by(2).ejecutivo_cuenta, by(2).usuario_inserta, by(2).division], [null, null, "Seguridad"]);
-        assert.equal(by(3).usuario_inserta, null);
+        assert.deepEqual([by(1).ejecutivo_cuenta, by(1).creado_por, by(1).division], ["Laura Vega", "Luis Mora", "Seguridad"]);
+        assert.deepEqual([by(1).creado, by(1).modificado, by(1).modificado_por], ["2026-09-09T10:20:00", "2026-09-12T08:00:00", "Ana Soto"]);
+        assert.deepEqual([by(2).ejecutivo_cuenta, by(2).creado_por, by(2).division, by(2).creado, by(2).modificado], [null, null, "Seguridad", null, null]);
+        assert.deepEqual([by(3).creado_por, by(3).creado, by(3).modificado, by(3).modificado_por], [null, "2026-09-09T11:00:00", null, null]);
         assert.equal(calls.filter((c) => c === "c_cambios_apps_modules").length, 1);
         assert.equal(calls.filter((c) => c === "n_ejecutivo_cuenta").length, 1);
         const s = JSON.stringify(rows);

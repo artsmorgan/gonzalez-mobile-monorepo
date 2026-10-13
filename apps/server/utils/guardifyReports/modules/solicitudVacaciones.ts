@@ -90,14 +90,16 @@ export function mapSolicitudVacacionesRow(r: any, l: VacacionLookups = EMPTY): O
         division: l.divisiones.get(Number(h.contrato)) ?? null,
         ejecutivo_cuenta: l.ejecutivos.get(Number(h.corpo)) ?? null,
         observaciones: clip(r.observaciones),
-        usuario_inserta: usuarioInserta(r.usuario_insercion, l.usuarios),
+        creado_por: usuarioInserta(r.usuario_insercion, l.usuarios),
+        modificado: fmtDt(r.fecha_actualizacion),
+        modificado_por: usuarioInserta(r.usuario_actualizacion, l.usuarios),
     };
 }
 
 /** Solo columnas seguras: no se piden monto, usuarios/fechas de aprobación ni de reversión. */
 const COLS = {
     id: true, empleado_id: true, plaza_id: true, fecha_inicio: true, fecha_fin: true, dias: true, semanas: true, observaciones: true, consecutivo: true,
-    estado_aprobacion: true, tipo_vacaciones: true, periodo: true, fecha_insercion: true, usuario_insercion: true,
+    estado_aprobacion: true, tipo_vacaciones: true, periodo: true, fecha_insercion: true, usuario_insercion: true, fecha_actualizacion: true, usuario_actualizacion: true,
 } as const;
 
 /** `ESTADO_SOLICITADO` → «Solicitado», `DISFRUTE` → «Disfrute»: la base guarda códigos. */
@@ -167,8 +169,8 @@ export async function loadSolicitudVacaciones(db: ReportDataAccess, p: ReportPar
         findByIds<any>(d, "e_estructura_puesto", nivel("puesto"), { codigo: true, nombre: true }),
         divisionPorContrato(d, nivel("contrato")),
         ejecutivoPorCorpo(d, nivel("corpo")),
-        // Quien registró: si `usuario_insercion` es un id de empleado se busca su nombre (en lote); si es texto, se deja tal cual.
-        nombresEmpleado(d, rows.map((r) => (/^\d+$/.test(String(r.usuario_insercion ?? "").trim()) ? r.usuario_insercion : null))),
+        // Quien registró / modificó: si `usuario_insercion` o `usuario_actualizacion` es un id de empleado se busca su nombre (en lote); si es texto, se deja tal cual.
+        nombresEmpleado(d, rows.flatMap((r) => [r.usuario_insercion, r.usuario_actualizacion].map((u) => (/^\d+$/.test(String(u ?? "").trim()) ? u : null)))),
     ]);
     const lookups: VacacionLookups = { empleados, plazas, jerarquia, empresas, clientes, contratos, corpos, puestos, divisiones, ejecutivos, usuarios };
     const scope = p.scope;
@@ -181,16 +183,16 @@ export async function loadSolicitudVacaciones(db: ReportDataAccess, p: ReportPar
 }
 
 /**
- * Solicitud de vacaciones (`v_vacacion_solicitud`, tabla dinámica). Periodo: `fecha_inicio` de las vacaciones. Ubicación por la plaza
+ * Solicitud de vacaciones (`v_vacacion_solicitud`, tabla dinámica). Auditoría: `creado`/`creado_por` = `fecha_insercion`/`usuario_insercion`; `modificado`/`modificado_por` = `fecha_actualizacion`/`usuario_actualizacion`. Periodo: `fecha_inicio` de las vacaciones. Ubicación por la plaza
  * (`plaza_id` → `e_estructura_plazas.puesto_id` → puesto, sucursal, contrato, cliente, empresa y división); una solicitud sin plaza o
  * cuya plaza no tiene puesto queda sin ubicación y, por eso, no aparece cuando se pide un alcance por estructura.
  */
 export const solicitudVacaciones: GuardifyReportModule = {
     id: "solicitud_vacaciones",
     supportsScope: true,
-    searchKeys: ["empleado", "cedula", "consecutivo", "plaza", "puesto", "sucursal", "usuario_inserta"],
-    filterKeys: ["estado", "tipo_vacaciones", "division", "ejecutivo_cuenta", "usuario_inserta", "empresa", "cliente", "contrato", "sucursal", "puesto"],
-    sortKeys: ["creado", "fecha_inicio", "fecha_fin", "dias", "semanas", "tipo_vacaciones", "periodo", "estado", "empleado", "cedula", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "usuario_inserta"],
+    searchKeys: ["empleado", "cedula", "consecutivo", "plaza", "puesto", "sucursal", "creado_por", "modificado_por"],
+    filterKeys: ["estado", "tipo_vacaciones", "division", "ejecutivo_cuenta", "creado", "creado_por", "modificado", "modificado_por", "empresa", "cliente", "contrato", "sucursal", "puesto"],
+    sortKeys: ["creado", "fecha_inicio", "fecha_fin", "dias", "semanas", "tipo_vacaciones", "periodo", "estado", "empleado", "cedula", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "creado_por", "modificado", "modificado_por"],
     defaultSort: "fecha_inicio",
     form: solicitudVacacionesForm,
     load: loadSolicitudVacaciones,

@@ -77,7 +77,7 @@ export function describeAccion(r: any): string | null {
 
 /**
  * Acción de personal (`c_accion_personal`). `cedulas` = cédula por id de empleado (la consulta original no la trae);
- * `usuarios` = nombre por id de empleado, para cuando `usuario_insercion` guarda un id en vez de un usuario/correo.
+ * `usuarios` = nombre por id de empleado, para cuando `usuario_insercion`/`usuario_actualizacion` guardan un id en vez de un usuario/correo.
  */
 export function mapAccionPersonalRow(r: any, cedulas: Map<number, string | null> = new Map(), usuarios: Map<number, string> = new Map()): OutRow {
     const emp = r.c_empleado_c_accion_personal_empleado_idToc_empleado ?? null;
@@ -107,15 +107,17 @@ export function mapAccionPersonalRow(r: any, cedulas: Map<number, string | null>
         comentarios: clip(r.comentarios),
         reversible: r.reversible == null ? null : r.reversible ? "Sí" : "No",
         adjunto: txt(r.document) ? "Sí" : "No",
-        registrada: fmtDt(r.fecha_insercion),
-        usuario_inserta: usuarioInserta(r.usuario_insercion, usuarios),
+        creado: fmtDt(r.fecha_insercion),
+        creado_por: usuarioInserta(r.usuario_insercion, usuarios),
+        modificado: fmtDt(r.fecha_actualizacion),
+        modificado_por: usuarioInserta(r.usuario_actualizacion, usuarios),
         // Nunca se exponen: salarios y montos, usuarios de aprobación/reversión, ni la ruta del documento adjunto.
     };
 }
 
 const COLS = {
     id: true, empleado_id: true, reemplazo_id: true, tipoAccion_id: true, empresa_id: true, cliente_id: true, contrato_id: true, corpo_id: true, puesto_id: true, plaza_id: true, horario_id: true,
-    consecutivo: true, usuario_insercion: true, fecha_inicio: true, fecha_fin: true, fecha_insercion: true, comentarios: true, document: true, reversible: true, estado_aprobacion: true, cantidad_horas: true,
+    consecutivo: true, usuario_insercion: true, usuario_actualizacion: true, fecha_inicio: true, fecha_fin: true, fecha_insercion: true, fecha_actualizacion: true, comentarios: true, document: true, reversible: true, estado_aprobacion: true, cantidad_horas: true,
 } as const;
 const NOMBRE = { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true, cedula: true } as const;
 
@@ -123,14 +125,14 @@ const NOMBRE = { id: true, codigo: true, nombre: true, primer_apellido: true, se
  * Acciones de personal (`c_accion_personal`, tabla preexistente). Se consulta la tabla sola (el periodo se aplica por `fecha_inicio`)
  * y los nombres de empleado, tipo y estructura se cargan en lote: así no depende de las relaciones del cliente Prisma, que la app
  * regenera a partir de la base en cada arranque. Cada fila trae empresa/cliente/contrato/sucursal/puesto y la división sale del
- * contrato, así que admite alcance. Periodo: `fecha_inicio` (la «fecha» de la acción). El detalle por tipo de acción (ausencia, traslado…) no se incluye: queda solo lo de la propia fila.
+ * contrato, así que admite alcance. Periodo: `fecha_inicio` (la «fecha» de la acción). Auditoría: `creado`/`creado_por` = `fecha_insercion`/`usuario_insercion`; `modificado`/`modificado_por` = `fecha_actualizacion`/`usuario_actualizacion`. El detalle por tipo de acción (ausencia, traslado…) no se incluye: queda solo lo de la propia fila.
  */
 export const accionesPersonales: GuardifyReportModule = {
     id: "acciones_personales",
     supportsScope: true,
-    searchKeys: ["empleado", "cedula", "consecutivo", "tipo_accion", "puesto", "sucursal", "usuario_inserta"],
-    filterKeys: ["tipo_accion", "estado", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "reversible", "empleado", "usuario_inserta"],
-    sortKeys: ["fecha_inicio", "fecha_fin", "consecutivo", "tipo_accion", "estado", "empleado", "cedula", "empresa", "cliente", "contrato", "sucursal", "puesto", "registrada", "usuario_inserta"],
+    searchKeys: ["empleado", "cedula", "consecutivo", "tipo_accion", "puesto", "sucursal", "creado_por", "modificado_por"],
+    filterKeys: ["tipo_accion", "estado", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "reversible", "empleado", "creado", "creado_por", "modificado", "modificado_por"],
+    sortKeys: ["fecha_inicio", "fecha_fin", "consecutivo", "tipo_accion", "estado", "empleado", "cedula", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "creado_por", "modificado", "modificado_por"],
     defaultSort: "fecha_inicio",
     form: accionesPersonalesForm,
     async load(db, p) {
@@ -155,7 +157,8 @@ export const accionesPersonales: GuardifyReportModule = {
         ]);
         const divisiones = await batchFindManyByIds<any>(db, "n_division", [...contratos.values()].map((c) => Number(c.division_id)), { id: true, codigo: true, nombre: true });
         // Quien registró: si `usuario_insercion` es un id de empleado se busca su nombre (en lote); si es texto, se deja tal cual.
-        const usuarios = await nombresEmpleado(db, rows.map((r) => (/^\d+$/.test(String(r.usuario_insercion ?? "").trim()) ? r.usuario_insercion : null)));
+        const numerico = (v: unknown) => (/^\d+$/.test(String(v ?? "").trim()) ? v : null);
+        const usuarios = await nombresEmpleado(db, rows.flatMap((r) => [numerico(r.usuario_insercion), numerico(r.usuario_actualizacion)]));
         const scope = p.scope;
         const cedulas = new Map<number, string | null>([...empleados].map(([id, e]) => [id, e.cedula ?? null]));
         const out: OutRow[] = [];

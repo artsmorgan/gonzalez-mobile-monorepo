@@ -29,6 +29,7 @@ function fakeDb(tables: Record<string, any[]>) {
             findMany: async (args: any = {}) => {
                 const rows = tables[name] ?? [];
                 const ids = args.where?.id?.in as number[] | undefined;
+                if (name === "c_cambios_apps_modules") return rows.filter((r) => r.nombre_tabla === args.where?.nombre_tabla && (args.where?.registro_id?.in as number[]).includes(r.registro_id));
                 return ids ? rows.filter((r) => ids.includes(r.id)) : rows;
             },
         }),
@@ -66,12 +67,19 @@ describe("registro de vehículos corporativos", () => {
         assert.equal(String(o.descripcion).length, 500);
         assert.deepEqual([o.usos, o.mantenimientos], [3, 0]);
         assert.equal(o.ejecutivo_cuenta, null);
-        assert.equal(o.usuario_inserta, null);
+        assert.equal(o.creado_por, null);
+        assert.equal(o.modificado, null);
+        assert.equal(o.modificado_por, null);
+        assert.ok(!("usuario_inserta" in o));
     });
-    it("columnas para los filtros van al final: ejecutivo de cuenta y usuario que registró", () => {
-        const o = mapVehiculoCorporativoRow({ id: 1, ejecutivo_cuenta: " Marta Ruiz ", usuario_inserta: "Ana Soto" });
-        assert.deepEqual(Object.keys(o).slice(-3), ["mantenimientos", "ejecutivo_cuenta", "usuario_inserta"]);
-        assert.deepEqual([o.ejecutivo_cuenta, o.usuario_inserta], ["Marta Ruiz", "Ana Soto"]);
+    it("columnas estándar: jerarquía (6) y auditoría (id, creado, creado_por, modificado, modificado_por)", () => {
+        const o = mapVehiculoCorporativoRow({
+            id: 1, created_at: new Date("2026-09-05T10:00:00Z"), empresa_txt: "9 - Emp", cliente_txt: "Cli", division_txt: "D - Div", contrato_txt: "20 - A", corpo_txt: "1 - Suc", puesto_txt: "A - Pu1",
+            ejecutivo_cuenta: " Marta Ruiz ", creado_por: "Ana Soto", modificado_at: new Date("2026-09-07T09:30:00Z"), modificado_por: " Luis Mena ",
+        });
+        assert.deepEqual([o.empresa, o.cliente, o.division, o.contrato, o.sucursal, o.puesto], ["9 - Emp", "Cli", "D - Div", "20 - A", "1 - Suc", "A - Pu1"]);
+        assert.deepEqual([o.id, o.creado, o.creado_por, o.modificado, o.modificado_por], [1, "2026-09-05T10:00:00", "Ana Soto", "2026-09-07T09:30:00", "Luis Mena"]);
+        assert.equal(o.ejecutivo_cuenta, "Marta Ruiz");
     });
     it("las claves de búsqueda, filtro y orden existen en la fila", () => {
         const o = mapVehiculoCorporativoRow({ id: 1 });
@@ -86,14 +94,22 @@ describe("registro de vehículos corporativos", () => {
             e_estructura_contrato: [{ id: 20, nombre: "A", nro_contrato: "20" }, { id: 21, nombre: "B", nro_contrato: "21" }],
             e_estructura_sucursal: [{ id: 10, nombre: "Suc", nro_sucursal: "1", ejecutivoCuenta_id: 50 }],
             n_ejecutivo_cuenta: [{ id: 50, nombre: "Marta Ejecutiva" }],
-            c_empleado: [{ id: 7, codigo: "E7", nombre: "Ana", primer_apellido: "Soto", segundo_apellido: null }],
+            c_empleado: [{ id: 7, codigo: "E7", nombre: "Ana", primer_apellido: "Soto", segundo_apellido: null }, { id: 8, codigo: "E8", nombre: "Luis", primer_apellido: "Mena", segundo_apellido: null }],
             e_estructura_puesto: [{ id: 101, nombre: "Pu1", codigo: "A" }, { id: 102, nombre: "Pu2", codigo: "B" }],
+            // historial: el vehículo 1 se creó y se editó dos veces (vale el último); el 2 nunca se registró allí; el cambio de otra tabla con el mismo id no cuenta
+            c_cambios_apps_modules: [
+                { id: 1, nombre_tabla: "c_vehiculos_corporativos", registro_id: 1, created_by: 7, created_at: new Date("2026-09-05T10:00:00Z") },
+                { id: 3, nombre_tabla: "c_vehiculos_corporativos", registro_id: 1, created_by: 8, created_at: new Date("2026-09-09T12:00:00Z") },
+                { id: 2, nombre_tabla: "c_vehiculos_corporativos", registro_id: 1, created_by: 7, created_at: new Date("2026-09-06T08:00:00Z") },
+                { id: 4, nombre_tabla: "c_usos_vehiculos_corporativos", registro_id: 2, created_by: 8, created_at: new Date("2026-09-10T12:00:00Z") },
+            ],
         });
         const all = await registroVehiculosCorporativos.load(db, P);
         assert.deepEqual(all.map((r) => r.id).sort(), [1, 2]);
         assert.deepEqual(all.find((r) => r.id === 1)?.usos, 1);
-        // enriquecimiento por lote: ejecutivo de la sucursal y quien registró el vehículo (created_by 7)
-        assert.deepEqual(all.map((r) => [r.id, r.ejecutivo_cuenta, r.usuario_inserta]).sort(), [[1, "Marta Ejecutiva", "Ana Soto"], [2, "Marta Ejecutiva", "Ana Soto"]]);
+        // enriquecimiento por lote: ejecutivo de la sucursal, quien registró el vehículo (created_by 7) y el último cambio del historial
+        assert.deepEqual(all.map((r) => [r.id, r.ejecutivo_cuenta, r.creado_por]).sort(), [[1, "Marta Ejecutiva", "Ana Soto"], [2, "Marta Ejecutiva", "Ana Soto"]]);
+        assert.deepEqual(all.map((r) => [r.id, r.modificado, r.modificado_por]).sort(), [[1, "2026-09-09T12:00:00", "Luis Mena"], [2, null, null]]);
         const sucursal = await registroVehiculosCorporativos.load(db, { ...P, scope: [{ nivel: "corpo", id: 10 }] });
         assert.equal(sucursal.length, 2);
         const uno = await registroVehiculosCorporativos.load(db, { ...P, scope: [{ nivel: "puesto", id: 102 }] });

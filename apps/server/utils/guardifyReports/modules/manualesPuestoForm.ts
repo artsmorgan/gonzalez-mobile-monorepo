@@ -61,7 +61,7 @@ export type ManualRaw = {
     /** Empleados vinculados ya con su texto. */
     empleados: (string | null)[];
     /** Una por visualización: { empleado (texto), firma (la manual tal como se guardó), approved } y los vinculados que aún no la ven: { empleado, visto: false }. */
-    visualizaciones: { empleado: string | null; visto: boolean; firma: string | null; approved: boolean | null }[];
+    visualizaciones: { empleado: string | null; visto: boolean; firma: string | null; approved: boolean | null; /** Cuándo la vio/firmó (creación de la visualización) y la última vez que se tocó (cuando se guardó la firma manual). */ fechaVisto?: string | null; fechaFirma?: string | null }[];
     creadoPor: string | null;
     puestoPrincipal: string | null;
 };
@@ -87,7 +87,13 @@ export function armarRegistro(raw: ManualRaw, ubic: FormRecord["estructura"], fi
                 puntos: Number.isFinite(Number(q.points)) && String(q.points ?? "").trim() !== "" ? Number(q.points) : null,
                 opciones: Array.isArray(q.options) && q.options.length ? q.options.map((o: unknown) => String(o)).join(" | ") : null,
             })),
-            visualizacion: raw.visualizaciones.map((v) => ({ empleado: v.empleado, estado: !v.visto ? "No visto" : txt(v.firma) ? "Firmado" : "Visto", firma: celdaFirma(v.firma, firmas), aprobado: estadoAprobado(v) })),
+            // Nivel 2 (el detalle): una fila por empleado enviado, haya visto el manual o no.
+            visualizacion: raw.visualizaciones.map((v) => ({
+                empleado: v.empleado, estado: !v.visto ? "No visto" : txt(v.firma) ? "Firmado" : "Visto",
+                visto: v.visto ? "Sí" : "No", fecha_visto: v.visto ? v.fechaVisto ?? null : null,
+                firmado: txt(v.firma) ? "Sí" : "No", fecha_firma: txt(v.firma) ? v.fechaFirma ?? null : null,
+                firma: celdaFirma(v.firma, firmas), aprobado: estadoAprobado(v),
+            })),
         },
         firmas: firma ? { firma_responsable: firmas ? firma.imagen : null } : {},
         firmasPresentes: firma ? ["firma_responsable"] : [],
@@ -117,7 +123,7 @@ export const manualesPuestoForm: GuardifyFormModule = {
             d.e_empleados_manual_puesto.findMany({ where: { manual_puesto_id: { in: mids } } }) as Promise<any[]>,
             d.e_empleado_visualizacion_manual_puesto.findMany({
                 where: { manual_puesto_id: { in: mids } },
-                select: { id: true, manual_puesto_id: true, empleado_id: true, nombre_empleado: true, approved: true, firma_empleado_manual: true },
+                select: { id: true, manual_puesto_id: true, empleado_id: true, nombre_empleado: true, approved: true, firma_empleado_manual: true, created_at: true, updated_at: true },
             }) as Promise<any[]>,
         ]);
         const [ubic, empleados, puestos, divisiones] = await Promise.all([
@@ -140,7 +146,7 @@ export const manualesPuestoForm: GuardifyFormModule = {
                     puestos: (pPor.get(id) ?? []).map((l) => puestoTxt(puestos.get(Number(l.puesto_id)))),
                     empleados: (ePor.get(id) ?? []).map((l) => empleadoTxt(empleados.get(Number(l.empleado_id)))),
                     visualizaciones: [
-                        ...vis.map((v) => ({ empleado: empleadoTxt(empleados.get(Number(v.empleado_id))) ?? txt(v.nombre_empleado), visto: true, firma: txt(v.firma_empleado_manual), approved: v.approved ?? null })),
+                        ...vis.map((v) => ({ empleado: empleadoTxt(empleados.get(Number(v.empleado_id))) ?? txt(v.nombre_empleado), visto: true, firma: txt(v.firma_empleado_manual), approved: v.approved ?? null, fechaVisto: fmtDt(v.created_at), fechaFirma: fmtDt(v.updated_at) })),
                         // Igual que el consolidado: cada empleado vinculado que aún no tiene visualización sale como «No visto».
                         ...(ePor.get(id) ?? []).filter((l) => !vistos.has(Number(l.empleado_id))).map((l) => ({ empleado: empleadoTxt(empleados.get(Number(l.empleado_id))), visto: false, firma: null, approved: null })),
                     ],

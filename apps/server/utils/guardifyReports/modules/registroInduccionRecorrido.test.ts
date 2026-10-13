@@ -28,8 +28,13 @@ function fakeDb(tables: Record<string, any[]>) {
         get: (_t, name: string) => ({
             findMany: async (args: any = {}) => {
                 const rows = tables[name] ?? [];
-                const ids = args.where?.id?.in as number[] | undefined;
-                return ids ? rows.filter((r) => ids.includes(r.id)) : rows;
+                const w = args.where ?? {};
+                const ids = w.id?.in as number[] | undefined;
+                return rows
+                    .filter((r) => !ids || ids.includes(r.id))
+                    .filter((r) => !w.nombre_tabla || r.nombre_tabla === w.nombre_tabla)
+                    .filter((r) => !w.registro_id?.in || w.registro_id.in.includes(r.registro_id))
+                    .filter((r) => !w.cambios?.contains || String(r.cambios).includes(w.cambios.contains));
             },
         }),
     }) as any;
@@ -70,18 +75,39 @@ describe("registro de inducción y recorrido", () => {
         assert.equal(json.includes("BBBB"), false);
         assert.equal(Object.keys(o).some((k) => k.startsWith("firma")), false);
         assert.equal(o.ejecutivo_cuenta, null);
-        assert.equal(o.usuario_inserta, null);
+        assert.equal(o.creado_por, null);
+    });
+    it("columnas estándar: 6 de jerarquía + 5 de auditoría (creado = created_at, creado_por = created_by, modificado del historial)", () => {
+        const o = mapInduccionRecorridoRow({
+            ...registro(1, 20),
+            empresa_nombre: "9 - Empresa", cliente_nombre: "Cliente SA", division_nombre: "D - Div", contrato_nombre: "C-20 - Contrato", corpo_nombre: "S1 - Sucursal", puesto_nombre: "P1 - Puesto",
+            creado_por: "Ana Soto", modificado: "2026-09-11T10:00:00", modificado_por: "Luis Mora",
+        });
+        assert.equal(o.id, 1);
+        assert.equal(o.empresa, "9 - Empresa");
+        assert.equal(o.cliente, "Cliente SA");
+        assert.equal(o.division, "D - Div");
+        assert.equal(o.contrato, "C-20 - Contrato");
+        assert.equal(o.sucursal, "S1 - Sucursal");
+        assert.equal(o.puesto, "P1 - Puesto");
+        assert.equal(o.creado, "2026-09-10T09:00:00");
+        assert.equal(o.creado_por, "Ana Soto");
+        assert.equal(o.modificado, "2026-09-11T10:00:00");
+        assert.equal(o.modificado_por, "Luis Mora");
+        assert.ok(!("usuario_inserta" in o));
+        const sin = mapInduccionRecorridoRow({ id: 9, puesto_id: 0, puesto_nombre: "0" });
+        assert.equal(sin.puesto, null);
+        assert.equal(sin.modificado, null);
+        assert.equal(sin.modificado_por, null);
     });
     it("columnas para los filtros: ejecutivo, usuario que registró y participantes «código - nombre (cédula)»", () => {
         const o = mapInduccionRecorridoRow(
-            { ...registro(1, 20), ejecutivo_cuenta: " Marta Ruiz ", usuario_inserta: "Ana Soto", participantes: JSON.stringify([{ nombre_completo: "Juan Pérez", cedula: "1-111" }, { nombre_completo: "Rosa", cedula: "2-2" }, { nombre_completo: "", cedula: "3-3" }]) },
+            { ...registro(1, 20), ejecutivo_cuenta: " Marta Ruiz ", creado_por: "Ana Soto", participantes: JSON.stringify([{ nombre_completo: "Juan Pérez", cedula: "1-111" }, { nombre_completo: "Rosa", cedula: "2-2" }, { nombre_completo: "", cedula: "3-3" }]) },
             new Map([["1-111", "1934"], ["3-3", "77"]]),
         );
         assert.equal(o.ejecutivo_cuenta, "Marta Ruiz");
-        assert.equal(o.usuario_inserta, "Ana Soto");
+        assert.equal(o.creado_por, "Ana Soto");
         assert.equal(o.nombres_participantes, "1934 - Juan Pérez (1-111); Rosa (2-2); 77 - 3-3");
-        // las columnas nuevas van al final de la fila
-        assert.deepEqual(Object.keys(o).slice(-2), ["ejecutivo_cuenta", "usuario_inserta"]);
     });
     it("código de empleado por cédula: solo si es único; por bloques", async () => {
         const calls: number[] = [];
@@ -120,10 +146,18 @@ describe("registro de inducción y recorrido", () => {
             c_empleado: [{ id: 7, codigo: "E7", cedula: "1", nombre: "Ana", primer_apellido: "Soto", segundo_apellido: null }],
             e_estructura_sucursal: [{ id: 10, nombre: "Suc", nro_sucursal: "1", ejecutivoCuenta_id: 50 }],
             n_ejecutivo_cuenta: [{ id: 50, nombre: "Marta Ejecutiva" }],
+            c_cambios_apps_modules: [
+                { id: 1, nombre_tabla: "c_registro_induccion_recorrido", registro_id: 1, cambios: '[{"prop":"__created__"}]', created_by: 7, created_at: new Date("2026-09-10T09:00:00Z") },
+                { id: 2, nombre_tabla: "c_registro_induccion_recorrido", registro_id: 1, cambios: '[{"prop":"fecha"}]', created_by: 7, created_at: new Date("2026-09-11T10:00:00Z") },
+                { id: 3, nombre_tabla: "c_registro_induccion_recorrido", registro_id: 2, cambios: '[{"prop":"__created__"}]', created_by: 7, created_at: new Date("2026-09-10T09:00:00Z") },
+                { id: 4, nombre_tabla: "otra_tabla", registro_id: 2, cambios: '[{"prop":"x"}]', created_by: 7, created_at: new Date("2026-09-20T09:00:00Z") },
+            ],
         });
         const all = await registroInduccionRecorrido.load(db, P);
         // enriquecimiento por lote: ejecutivo de la sucursal, quien registró (created_by "7") y el código del participante (cédula «1»)
-        assert.deepEqual(all.map((r) => [r.id, r.ejecutivo_cuenta, r.usuario_inserta]).sort(), [[1, "Marta Ejecutiva", "Ana Soto"], [2, "Marta Ejecutiva", "Ana Soto"]]);
+        assert.deepEqual(all.map((r) => [r.id, r.ejecutivo_cuenta, r.creado_por]).sort(), [[1, "Marta Ejecutiva", "Ana Soto"], [2, "Marta Ejecutiva", "Ana Soto"]]);
+        // modificado: última edición del historial, sin contar el alta (`__created__`) ni otras tablas
+        assert.deepEqual(all.map((r) => [r.id, r.modificado, r.modificado_por]).sort(), [[1, "2026-09-11T10:00:00", "Ana Soto"], [2, null, null]]);
         assert.equal(all.find((r) => r.id === 1)?.nombres_participantes, "E7 - Ana (1)");
         assert.deepEqual(all.map((r) => r.id).sort(), [1, 2]);
         const byContrato = await registroInduccionRecorrido.load(db, { ...P, scope: [{ nivel: "contrato", id: 21 }] });

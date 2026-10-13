@@ -71,7 +71,17 @@ describe("solicitudes_permiso: mapeo", () => {
     it("la división sale del contrato (respaldo: la de la cabecera) y tipo_turno va al final", () => {
         assert.equal(mapSolicitudPermisoRow({ ...raw, division_contrato: "Seguridad" }).division, "Seguridad");
         assert.equal(mapSolicitudPermisoRow({ ...raw, division_nombre: "Limpieza", division_id: 4 }).division, "Limpieza");
-        assert.deepEqual(Object.keys(mapSolicitudPermisoRow(raw)).slice(-2), ["creado_por", "tipo_turno"]);
+        assert.deepEqual(Object.keys(mapSolicitudPermisoRow(raw)).slice(-1), ["tipo_turno"]);
+    });
+    it("entrega siempre las 11 columnas estándar; modificado y modificado_por salen null (la tabla no los guarda)", () => {
+        const o = mapSolicitudPermisoRow(raw);
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"]) assert.ok(k in o, k);
+        assert.equal(o.id, 12);
+        assert.equal(o.creado, "2026-09-20T10:05:09");
+        assert.equal(o.creado_por, "Jefa Directa");
+        assert.equal(o.modificado, null);
+        assert.equal(o.modificado_por, null);
+        assert.deepEqual([o.empresa, o.cliente, o.contrato, o.sucursal, o.puesto], ["E1 - Empresa Uno", "Cliente Cinco", "CT-2 - Contrato Dos", "S3 - Sucursal Tres", "P7 - Recepción"]);
     });
     it("no expone firmas", () => {
         const o = mapSolicitudPermisoRow(raw);

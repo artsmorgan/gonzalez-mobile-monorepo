@@ -70,6 +70,15 @@ describe("mutuos acuerdos: mapeo", () => {
         assert.ok(!JSON.stringify(o).includes("base64"));
         assert.ok(!Object.keys(o).some((k) => k.includes("firma") && k !== "firma_digital"));
     });
+    it("lleva las 11 columnas estándar; `modificado` y `modificado_por` salen null si nunca se editó", () => {
+        const o = mapMutuoAcuerdoRow(crudo());
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"]) assert.ok(k in o, k);
+        assert.deepEqual([o.empresa, o.cliente, o.division, o.contrato, o.sucursal, o.puesto], ["E1 — Empresa", "Cliente", "D3 — División", "C4 — Contrato", "S5 — Sucursal", "P6 — Puesto"]);
+        assert.deepEqual([o.id, o.creado, o.creado_por, o.modificado, o.modificado_por], [21, "2026-09-12T09:00:00", "9 — Carla Ruiz", null, null]);
+        const m = mapMutuoAcuerdoRow(crudo(), { cuando: "2026-09-13T08:00:00", quien: "101 — Ana Pérez" });
+        assert.deepEqual([m.modificado, m.modificado_por], ["2026-09-13T08:00:00", "101 — Ana Pérez"]);
+        assert.equal(mapMutuoAcuerdoRow(crudo({ puesto_id: 6, puesto_nombre: "6" })).puesto, null);
+    });
     it("tolera nulos: sin cambio de guardia, sin aceptaciones y estructura antigua en 0", () => {
         const o = mapMutuoAcuerdoRow(crudo({ cambio_guardia_id: null, ausente_acepta_txt: "", reemplaza_acepta_txt: "", ausente_acepta_at: null, estado: "", motivo: "", puesto_id: 0, puesto_nombre: "0", empresa_id: 0, empresa_nombre: "0", ejecutivo_cuenta: 0, ejecutivo_nombre: "0" }));
         assert.equal(o.cambio_guardia, null);
@@ -100,6 +109,11 @@ describe("mutuos acuerdos: carga y alcance", () => {
             { id: 9, codigo: "9", nombre: "Carla", primer_apellido: "Ruiz", segundo_apellido: null },
         ],
         n_ejecutivo_cuenta: [{ id: 8, nombre: "Marta Vega" }],
+        c_cambios_apps_modules: [
+            { id: 1, nombre_tabla: "e_mutuos_acuerdos", registro_id: 1, created_by: 101, created_at: new Date("2026-09-06T08:00:00Z") },
+            { id: 2, nombre_tabla: "e_mutuos_acuerdos", registro_id: 1, created_by: 102, created_at: new Date("2026-09-07T11:30:00Z") },
+            { id: 3, nombre_tabla: "e_mutuos_acuerdos", registro_id: 99, created_by: 9, created_at: new Date("2026-09-08T11:30:00Z") },
+        ],
     };
     it("sin alcance trae el periodo (to exclusivo), incluso filas antiguas sin estructura", async () => {
         const rows = await mutuosAcuerdos.load(fakeDb(tables), P);
@@ -108,6 +122,13 @@ describe("mutuos acuerdos: carga y alcance", () => {
         assert.equal(r1.oficial_ausente, "101 — Ana Pérez");
         assert.equal(r1.ejecutivo, "Marta Vega");
         assert.equal(r1.creado_por, "9 — Carla Ruiz");
+    });
+    it("modificado y modificado_por salen del último cambio del historial; sin cambios quedan null", async () => {
+        const rows = await mutuosAcuerdos.load(fakeDb(tables), P);
+        const r1 = rows.find((r) => r.id === 1)!;
+        const r2 = rows.find((r) => r.id === 2)!;
+        assert.deepEqual([r1.modificado, r1.modificado_por], ["2026-09-07T11:30:00", "102 — Luis Mora"]);
+        assert.deepEqual([r2.modificado, r2.modificado_por], [null, null]);
     });
     it("con alcance deja solo los nodos pedidos; las filas sin ubicación no se ven", async () => {
         const ids = async (scope: string) => (await mutuosAcuerdos.load(fakeDb(tables), { ...P, scope: parseScope(scope) })).map((r) => r.id).sort();

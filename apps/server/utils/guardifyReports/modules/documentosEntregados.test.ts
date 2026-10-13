@@ -59,10 +59,12 @@ const P = { from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: n
 
 describe("documentos entregados", () => {
     it("mapea la fila: fecha sin hora, vacíos como null, descripción recortada y sin firmas", () => {
-        const o = mapDocumentoEntregadoRow({ ...base, id: 5, fecha: new Date("2026-09-10T00:00:00Z"), empresa_nombre: "1", cliente_nombre: "Cliente 7", division_nombre: "0", contrato_nombre: "C1 - A", corpo_nombre: "S1 - B", puesto_nombre: "0", descripcion: "d".repeat(900), nombre_oficial_recibe: "  " }, "Laura Vega", "Ana Soto");
-        assert.deepEqual([o.ejecutivo_cuenta, o.usuario_inserta], ["Laura Vega", "Ana Soto"]);
-        assert.deepEqual(Object.keys(o).slice(-2), ["ejecutivo_cuenta", "usuario_inserta"]);
-        assert.deepEqual([mapDocumentoEntregadoRow({ id: 6 }).ejecutivo_cuenta, mapDocumentoEntregadoRow({ id: 6 }).usuario_inserta], [null, null]);
+        const o = mapDocumentoEntregadoRow({ ...base, id: 5, fecha: new Date("2026-09-10T00:00:00Z"), empresa_nombre: "1", cliente_nombre: "Cliente 7", division_nombre: "0", contrato_nombre: "C1 - A", corpo_nombre: "S1 - B", puesto_nombre: "0", descripcion: "d".repeat(900), nombre_oficial_recibe: "  " }, "Laura Vega", { creado: "2026-09-10T10:00:00", creado_por: "Ana Soto", modificado: "2026-09-11T08:00:00", modificado_por: "Luis Mora" });
+        assert.deepEqual([o.ejecutivo_cuenta, o.creado, o.creado_por, o.modificado, o.modificado_por], ["Laura Vega", "2026-09-10T10:00:00", "Ana Soto", "2026-09-11T08:00:00", "Luis Mora"]);
+        assert.ok(!("usuario_inserta" in o));
+        const vacio = mapDocumentoEntregadoRow({ id: 6 });
+        assert.deepEqual([vacio.ejecutivo_cuenta, vacio.creado, vacio.creado_por, vacio.modificado, vacio.modificado_por], [null, null, null, null, null]);
+        for (const k of ["id", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "creado_por", "modificado", "modificado_por"]) assert.ok(k in vacio, k);
         assert.equal(o.fecha, "2026-09-10T00:00:00");
         assert.equal(o.empresa, null); // la consulta puso el id
         assert.equal(o.division, null);
@@ -80,14 +82,17 @@ describe("documentos entregados", () => {
         assert.deepEqual([r3.empresa, r3.cliente, r3.contrato, r3.sucursal, r3.puesto, r3.tipo_documento], ["G - Gonzalez", "Cliente 7", "C1 - Contrato A", "S1 - Central", null, "Informe"]);
         assert.equal(JSON.stringify(rows).includes("base64"), false);
     });
-    it("agrega por lote el ejecutivo de la sucursal y quien registró (entrada de alta del historial)", async () => {
+    it("agrega por lote el ejecutivo de la sucursal y la auditoría del historial (alta = creado, última edición = modificado)", async () => {
         const rows = await documentosEntregados.load(db, P);
-        assert.deepEqual(rows.map((r) => [r.id, r.ejecutivo_cuenta, r.usuario_inserta]).sort(), [[2, null, "Luis Mora Paz"], [3, "Laura Vega", "Ana Soto"]]);
+        assert.deepEqual(rows.map((r) => [r.id, r.ejecutivo_cuenta, r.creado, r.creado_por, r.modificado, r.modificado_por]).sort(), [
+            [2, null, "2026-09-30T10:00:00", "Luis Mora Paz", "2026-10-02T10:00:00", "Luis Mora Paz"],
+            [3, "Laura Vega", "2026-09-10T10:00:00", "Ana Soto", null, null],
+        ]);
     });
-    it("si el historial no se puede leer, el reporte sigue sin usuario_inserta", async () => {
+    it("si el historial no se puede leer, el reporte sigue con la auditoría en null", async () => {
         const roto = new Proxy({}, { get: (_t, name: string) => name === "c_cambios_apps_modules" ? { findMany: async () => { throw new Error("falla"); } } : (db as any)[name] }) as any;
         const rows = await documentosEntregados.load(roto, P);
-        assert.deepEqual(rows.map((r) => r.usuario_inserta), [null, null]);
+        assert.deepEqual(rows.map((r) => [r.creado, r.creado_por, r.modificado, r.modificado_por]), [[null, null, null, null], [null, null, null, null]]);
         assert.equal(rows.length, 2);
     });
     it("alcance: filtra por los ids de la fila", async () => {

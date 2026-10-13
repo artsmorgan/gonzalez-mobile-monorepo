@@ -40,17 +40,21 @@ describe("tiempo_almuerzo: columnas comunes", () => {
     it("agrega empleado «código - nombre», ejecutivo de cuenta y usuario que lo registró al final de la fila, sin quitar columnas", async () => {
         const [a, b] = await loadTiempoAlmuerzo(db, params(), query);
         const base = Object.keys(mapTiempoAlmuerzoRow(raw(1)));
-        assert.deepEqual(Object.keys(a!), [...base, "ejecutivo_cuenta", "usuario_inserta"]);
+        assert.deepEqual(Object.keys(a!), [...base, "ejecutivo_cuenta", "creado", "creado_por", "modificado", "modificado_por"]);
         assert.equal(a!.empleado, "1934 - Ana Rojas");
         assert.equal(a!.cedula, "1-111");
         assert.equal(a!.division, "D1 - Seguridad");
         assert.equal(a!.ejecutivo_cuenta, "Carla Soto");
-        assert.equal(a!.usuario_inserta, "Ana Rojas");
+        assert.equal(a!.creado_por, "Ana Rojas");
+        // La tabla no guarda fecha de registro ni modificación: salen vacías (brecha).
+        assert.deepEqual([a!.creado, a!.modificado, a!.modificado_por], [null, null, null]);
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"]) assert.ok(k in a!, k);
+        assert.ok(!("usuario_inserta" in a!));
         // Sin código: solo el nombre; sin ejecutivo: null; un nombre que es solo el id se expone vacío.
         assert.equal(b!.empleado, "Beto Mora");
         assert.equal(b!.ejecutivo_cuenta, null);
         assert.equal(b!.division, null);
-        assert.equal(b!.usuario_inserta, "Beto Mora");
+        assert.equal(b!.creado_por, "Beto Mora");
     });
     it("carga por lote: una consulta por tabla sin importar cuántas filas", async () => {
         calls = {};

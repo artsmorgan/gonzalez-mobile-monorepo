@@ -30,36 +30,42 @@ function metrosEntre(lat1: unknown, lng1: unknown, lat2: unknown, lng2: unknown)
     return Math.round(2 * 6_371_000 * Math.asin(Math.min(1, Math.sqrt(h))));
 }
 
-/** Cambios en la ubicación del puesto (`c_ubicacion_puesto_registro_cambios`). Nunca expone latitud ni longitud. */
+/**
+ * Cambios en la ubicación del puesto (`c_ubicacion_puesto_registro_cambios`). Nunca expone latitud ni longitud.
+ * Cada fila es un evento que no se edita: la tabla no guarda `updated_at`/`updated_by` ni historial, así que `modificado` y
+ * `modificado_por` salen siempre vacíos.
+ */
 export function mapCambioUbicacionPuestoRow(r: any): OutRow {
     return {
         id: Number(r.id),
-        fecha: fmtDt(r.created_at),
         empresa: placeholderToNull(r.empresa_nombre),
         cliente: placeholderToNull(r.cliente_nombre),
         division: placeholderToNull(r.division_nombre),
         contrato: placeholderToNull(r.contrato_nombre),
         sucursal: placeholderToNull(r.corpo_nombre),
         puesto: placeholderToNull(r.puesto_nombre, r.puesto_id),
-        responsable: placeholderToNull(r.responsable_nombre, r.created_by),
+        creado: fmtDt(r.created_at),
+        creado_por: placeholderToNull(r.responsable_nombre, r.created_by),
+        modificado: null,
+        modificado_por: null,
         tenia_ubicacion: txt(r.latitud_anterior) && txt(r.longitud_anterior) ? "Sí" : "No",
         metros: metrosEntre(r.latitud_anterior, r.longitud_anterior, r.latitud_nueva, r.longitud_nueva),
     };
 }
 
 /**
- * Cambios en ubicación del puesto. El periodo se aplica a `fecha` (`created_at`, la «Fecha» del Excel). `responsable` (código - nombre)
- * es quien registró el cambio (`created_by`): es el «Usuario inserta». Latitud y longitud no se exponen (decisión de seguridad). La consulta ya trae la ubicación completa del puesto en la estructura
+ * Cambios en ubicación del puesto. El periodo se aplica a `creado` (`created_at`, la «Fecha» del Excel). `creado_por` (código - nombre)
+ * es quien registró el cambio (`created_by`). Latitud y longitud no se exponen (decisión de seguridad). La consulta ya trae la ubicación completa del puesto en la estructura
  * (empresa, cliente, división, contrato, sucursal), así que admite alcance por unidad.
  */
 // El rango se amplía un día por lado en la consulta (la zona horaria del servidor puede correr los límites) y se recorta exacto aquí.
 export const cambiosUbicacionPuesto: GuardifyReportModule = {
     id: "cambios_ubicacion_puesto",
     supportsScope: true,
-    searchKeys: ["puesto", "sucursal", "contrato", "cliente", "responsable"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "responsable", "tenia_ubicacion"],
-    sortKeys: ["fecha", "empresa", "cliente", "contrato", "sucursal", "puesto", "responsable", "metros"],
-    defaultSort: "fecha",
+    searchKeys: ["puesto", "sucursal", "contrato", "cliente", "creado_por"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "creado_por", "tenia_ubicacion"],
+    sortKeys: ["creado", "empresa", "cliente", "contrato", "sucursal", "puesto", "creado_por", "metros"],
+    defaultSort: "creado",
     form: cambiosUbicacionPuestoForm,
     async load(db, p) {
         const rows = await queryCambiosUbicacionPuestoRows(db, { creadoDesde: `${addDays(p.from, -1)}T00:00:00`, creadoHasta: `${p.to}T23:59:59` }, "created_at");

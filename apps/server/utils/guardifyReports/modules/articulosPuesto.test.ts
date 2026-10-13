@@ -52,6 +52,16 @@ describe("articulos_puesto: mapeo", () => {
         assert.equal(s.includes("base64"), false);
         assert.equal(s.includes("CCCC"), false);
     });
+    it("trae las 11 columnas estándar (auditoría siempre null: las tablas no la guardan)", () => {
+        const o = mapArticuloPuestoRow(puesto(), puesto().articulos[0]);
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"]) assert.ok(k in o, k);
+        assert.deepEqual([o.id, o.creado, o.creado_por, o.modificado, o.modificado_por], [11, null, null, null, null]);
+        const plan = mapArticuloPuestoRow(puesto(), puesto().articulos[1]);
+        assert.deepEqual([plan.id, plan.creado, plan.creado_por, plan.modificado, plan.modificado_por], [12, null, null, null, null]);
+        // un puesto sin algún nivel deja ese nivel en null
+        const sinDivision = mapArticuloPuestoRow(puesto({ division_txt: "" }), puesto().articulos[0]);
+        assert.equal(sinDivision.division, null);
+    });
     it("tolera nulos", () => {
         const o = mapArticuloPuestoRow({}, { registro_id: 1, origen: "Plan", cantidad: "", fecha_entrega_raw: null });
         assert.deepEqual([o.articulo, o.cantidad, o.fecha_entrega, o.puesto, o.movimientos, o.origen], [null, null, null, null, 0, "Plan"]);

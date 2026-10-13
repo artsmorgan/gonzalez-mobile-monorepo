@@ -85,6 +85,11 @@ export function mapEvaluacionPersonalRow(r: any, x: EvaluacionExtra = {}): OutRo
         preguntas,
         comentarios: clip(r.comentarios),
         ejecutivo_cuenta: txt(x.ejecutivo),
+        // `c_evaluacion_empleado` no guarda `created_by`, `updated_at` ni `updated_by` y sus rutas no dejan historial de cambios:
+        // las tres columnas estándar salen siempre null (brecha registrada). `evaluador` NO es `creado_por`: lo manda la app en el cuerpo.
+        creado_por: null,
+        modificado: null,
+        modificado_por: null,
     };
 }
 

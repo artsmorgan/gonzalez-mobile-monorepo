@@ -20,6 +20,12 @@ const realName = (v: unknown): string | null => {
 };
 const puestoLabel = (p: any): string | null => (p ? txt(`${p.codigo ? `${p.codigo} - ` : ""}${p.nombre ?? ""}`) : null);
 const count = (v: unknown, pred: (x: any) => boolean = () => true): number => (Array.isArray(v) ? v.filter(pred).length : 0);
+/** Empleados distintos de una lista de vínculos o visualizaciones (un empleado puede tener más de una fila); sin `empleado_id`, las filas. */
+const personas = (v: unknown, pred: (x: any) => boolean = () => true): number => {
+    const rows = Array.isArray(v) ? v.filter(pred) : [];
+    const ids = rows.map((x) => Number(x?.empleado_id)).filter((n) => Number.isFinite(n) && n > 0);
+    return ids.length ? new Set(ids).size : rows.length;
+};
 
 /** Datos que se resuelven en lote: ejecutivo de cuenta de la sucursal, división del contrato (si la fila no trae una) y nombre de los puestos vinculados que la consulta no hidrató. */
 export type ManualExtra = { ejecutivo?: string | null; division?: string | null; puestos?: Map<number, string> };
@@ -33,26 +39,35 @@ export function mapManualPuestoRow(r: any, extra: ManualExtra = {}): OutRow {
     const links: any[] = Array.isArray(r.e_puestos_manual_puesto) ? r.e_puestos_manual_puesto : [];
     const puestos = [txt(r.puesto_principal_txt), ...links.map((l) => puestoLabel(l?.e_estructura_puesto) ?? extra.puestos?.get(Number(l?.puesto_id)) ?? null)]
         .filter((x): x is string => !!x && !/^\d+$/.test(x));
+    const vis = r.e_empleado_visualizacion_manual_puesto;
+    const enviados = personas(r.e_empleados_manual_puesto);
+    const vistos = personas(vis);
     return {
         id: Number(r.id),
-        creado: fmtDt(r.created_at),
         titulo: short(r.title),
         descripcion: short(r.description),
         clasificacion: txt(r.classification),
+        // Nivel 1 (la lista de manuales): a cuántos empleados les llegó y qué hicieron. El detalle por empleado está en el formulario del manual.
+        empleados_enviados: enviados,
+        vistos,
+        firmados: personas(vis, (v) => !!v?.firma_empleado_manual),
+        aprobados: personas(vis, (v) => v?.approved === true),
+        pendientes: Math.max(0, enviados - vistos),
+        puestos_vinculados: count(r.e_puestos_manual_puesto),
+        puestos: short([...new Set(puestos)].join("; ")),
+        ejecutivo_cuenta: txt(extra.ejecutivo),
+        // Jerarquía (del puesto principal del manual).
         empresa: txt(r.empresa_txt),
         cliente: txt(r.cliente_txt),
         division: realName(r.division_txt) ?? txt(extra.division),
         contrato: txt(r.contrato_txt),
         sucursal: txt(r.corpo_txt),
         puesto: txt(r.puesto_principal_txt),
-        puestos_vinculados: count(r.e_puestos_manual_puesto),
-        empleados_vinculados: count(r.e_empleados_manual_puesto),
-        visualizaciones: count(r.e_empleado_visualizacion_manual_puesto),
-        firmados: count(r.e_empleado_visualizacion_manual_puesto, (v) => !!v?.firma_empleado_manual),
-        aprobados: count(r.e_empleado_visualizacion_manual_puesto, (v) => v?.approved === true),
+        // Auditoría y trazabilidad. «Enviado» = creado. El manual no guarda modificación (brecha registrada).
+        creado: fmtDt(r.created_at),
         creado_por: txt(r.created_by_nombre),
-        puestos: short([...new Set(puestos)].join("; ")),
-        ejecutivo_cuenta: txt(extra.ejecutivo),
+        modificado: null,
+        modificado_por: null,
     };
 }
 
@@ -96,7 +111,7 @@ export const manualesPuesto: GuardifyReportModule = {
     supportsScope: true,
     searchKeys: ["titulo", "descripcion", "clasificacion", "sucursal", "puesto", "puestos", "creado_por", "ejecutivo_cuenta"],
     filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "puestos", "clasificacion", "ejecutivo_cuenta", "creado_por"],
-    sortKeys: ["creado", "titulo", "clasificacion", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "creado_por", "puestos_vinculados", "empleados_vinculados", "visualizaciones", "firmados", "aprobados"],
+    sortKeys: ["creado", "titulo", "clasificacion", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "creado_por", "puestos_vinculados", "empleados_enviados", "vistos", "pendientes", "id", "firmados", "aprobados"],
     defaultSort: "creado",
     form: manualesPuestoForm,
     async load(db, p) {

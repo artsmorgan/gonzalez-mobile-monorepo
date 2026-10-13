@@ -63,13 +63,16 @@ describe("control de asistencia", () => {
         assert.equal(Object.keys(o).at(-1), "ejecutivo_cuenta");
         assert.deepEqual([o.fecha, o.creado, o.turno, o.presentes, o.total_turno, o.ausentes, o.reemplazos, o.firmas], ["2026-09-10T06:00:00", "2026-09-10T14:05:00", "Diurno", 1, 3, 2, 1, 1]);
         assert.equal(o.creado_por, "Ana Soto Rojas");
+        assert.equal(o.id, 3);
+        assert.deepEqual([o.modificado, o.modificado_por], [null, null]); // la tabla no guarda modificación
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"]) assert.ok(k in o, k);
         assert.equal(String(o.comentarios).length, 500);
         const s = JSON.stringify(o);
         for (const secreto of ["base64", "Pedro", "Rosa", "Juan", "1-1", "2-2"]) assert.equal(s.includes(secreto), false, secreto);
     });
     it("tolera nulos y colaboradores ilegibles", () => {
         const o = mapControlAsistenciaRow({ id: 9, fecha: null, created_at: null, colaboradores: "no es json", total_presentes: null, nombre_supervisor: " ", turno: "M" });
-        assert.deepEqual([o.fecha, o.empresa, o.presentes, o.ausentes, o.reemplazos, o.firmas, o.supervisor, o.creado_por, o.comentarios, o.turno], [null, null, null, 0, 0, 0, null, null, null, "M"]);
+        assert.deepEqual([o.fecha, o.empresa, o.presentes, o.ausentes, o.reemplazos, o.firmas, o.supervisor, o.creado_por, o.comentarios, o.turno, o.modificado, o.modificado_por], [null, null, null, 0, 0, 0, null, null, null, "M", null, null]);
         assert.equal(o.ejecutivo_cuenta, null);
     });
     it("trae el periodo [from, to) por la fecha del turno (no la de registro), con ubicación, creador y ejecutivo", async () => {

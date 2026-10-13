@@ -26,6 +26,12 @@ export function mapArticuloPuestoRow(puesto: any, a: any, ejecutivo: string | nu
     const origen = String(a.origen ?? "");
     return {
         id: Number(a.registro_id),
+        // Ni el plan (`e_estructura_articulo_corpo_puesto_plan`) ni lo entregado (`..._entrega`) guardan fecha/usuario de alta ni de
+        // modificación (solo `fechaEntrega`, que es la fecha del hecho): las cuatro columnas estándar salen null (brecha).
+        creado: null,
+        creado_por: null,
+        modificado: null,
+        modificado_por: null,
         articulo: txt(a.articulo_nombre),
         origen: origen === "Asignado" ? "Asignado" : "Plan",
         cantidad: a.cantidad == null || a.cantidad === "" || !Number.isFinite(Number(a.cantidad)) ? null : Number(a.cantidad),
@@ -68,14 +74,14 @@ export function buildArticulosPuestoRows(puestos: any[], from: string, to: strin
  * Artículos del puesto: plan de artículos (incluye combos) y artículos entregados, por puesto. Cada puesto trae su ubicación
  * completa, así que admite alcance. Con alcance se consulta solo por los niveles pedidos (una consulta por nivel) en vez de
  * recorrer todos los puestos. Periodo: `fecha_entrega` (los artículos del plan no tienen fecha y salen siempre). Los artículos no
- * guardan quién los registró ni estado/tipo de acción (eso es del mantenimiento), por eso no hay esas columnas.
+ * guardan quién ni cuándo los registró o modificó (las cuatro columnas de auditoría salen null) ni estado/tipo de acción (eso es del mantenimiento).
  */
 export const articulosPuesto: GuardifyReportModule = {
     id: "articulos_puesto",
     supportsScope: true,
     searchKeys: ["articulo", "marca", "modelo", "serie", "puesto", "sucursal", "combo"],
-    filterKeys: ["origen", "articulo", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta"],
-    sortKeys: ["articulo", "origen", "cantidad", "marca", "modelo", "serie", "fecha_entrega", "movimientos", "empresa", "cliente", "contrato", "sucursal", "puesto", "ejecutivo_cuenta"],
+    filterKeys: ["origen", "articulo", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "creado", "creado_por", "modificado", "modificado_por"],
+    sortKeys: ["articulo", "origen", "cantidad", "marca", "modelo", "serie", "fecha_entrega", "movimientos", "empresa", "cliente", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "creado", "creado_por", "modificado", "modificado_por"],
     defaultSort: "fecha_entrega",
     form: articulosPuestoForm,
     async load(db, p) {

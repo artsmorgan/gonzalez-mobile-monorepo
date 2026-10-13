@@ -59,6 +59,21 @@ describe("mantenimiento de artículos: mapeo", () => {
         assert.equal(mapMantenimientoArticuloRow(crudo(), " Marta Vega ").ejecutivo_cuenta, "Marta Vega");
         assert.equal(Object.keys(o).at(-1), "ejecutivo_cuenta");
     });
+    it("trae las 11 columnas estándar (jerarquía y auditoría)", () => {
+        const o = mapMantenimientoArticuloRow(crudo(), null, " Ana Soto ");
+        assert.deepEqual(
+            [o.empresa, o.cliente, o.division, o.contrato, o.sucursal, o.puesto],
+            ["E1 - Empresa", "Cliente", "D3 - División", "C4 - Contrato", "S5 - Sucursal", "P6 - Puesto"],
+        );
+        assert.deepEqual(
+            [o.id, o.creado, o.creado_por, o.modificado, o.modificado_por],
+            [31, "2026-09-17T07:30:00", null, "2026-09-21T09:00:00", "Ana Soto"],
+        );
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"]) assert.ok(k in o, k);
+        assert.ok(!("actualizado" in o));
+        const sin = mapMantenimientoArticuloRow(crudo({ updated_at: null }));
+        assert.deepEqual([sin.modificado, sin.modificado_por], [null, null]);
+    });
     it("tolera nulos y textos vacíos", () => {
         const o = mapMantenimientoArticuloRow(crudo({ fecha_solucion: null, fecha_inicio: null, fecha_fin: null, observaciones: "", marca: "", costo_mo: null, costo_total: null, kilometraje: null, reincidencia_treinta_dias_txt: "", archivos_adjuntos_count: 0, puesto_txt: "" }));
         assert.equal(o.fecha_solucion, null);
@@ -90,6 +105,12 @@ function fakeDb(tables: Record<string, any[]>, calls: string[] = []) {
 
 describe("mantenimiento de artículos: carga y alcance", () => {
     const db = fakeDb({ e_estructura_sucursal: [{ id: 5, ejecutivoCuenta_id: 8 }], n_ejecutivo_cuenta: [{ id: 8, nombre: "Marta Vega" }] });
+    const cambios = [
+        { id: 1, nombre_tabla: "c_articulo_mantenimiento", registro_id: 1, created_by: 20 },
+        { id: 3, nombre_tabla: "c_articulo_mantenimiento", registro_id: 1, created_by: 21 }, // el último cambio del mantenimiento 1
+        { id: 2, nombre_tabla: "c_articulo_mantenimiento", registro_id: 1, created_by: 20 },
+        { id: 4, nombre_tabla: "c_otra_tabla", registro_id: 2, created_by: 20 },
+    ];
     const rows = [
         crudo({ id: 1, created_at: new Date("2026-09-05T08:00:00Z") }),
         crudo({ id: 2, empresa_id: 1, contrato_id: 40, corpo_id: 50, puesto_id: 60, created_at: new Date("2026-09-30T23:59:00Z") }),
@@ -115,7 +136,26 @@ describe("mantenimiento de artículos: carga y alcance", () => {
         const out = await loadMantenimientoArticulos(fakeDb({ e_estructura_sucursal: [{ id: 5, ejecutivoCuenta_id: 8 }], n_ejecutivo_cuenta: [{ id: 8, nombre: "Marta Vega" }] }, consultas), P, query as any);
         assert.equal(out.find((r) => r.id === 1)!.ejecutivo_cuenta, "Marta Vega");
         assert.equal(out.find((r) => r.id === 2)!.ejecutivo_cuenta, null); // sucursal 50 sin ejecutivo
-        assert.deepEqual(consultas, ["e_estructura_sucursal", "n_ejecutivo_cuenta"]);
+        assert.deepEqual([...consultas].sort(), ["c_cambios_apps_modules", "e_estructura_sucursal", "n_ejecutivo_cuenta"]); // una por tabla, nunca por fila
+    });
+    it("modificado_por sale del último cambio del historial, por lote y solo de esta tabla", async () => {
+        const consultas: string[] = [];
+        const tablas = {
+            c_cambios_apps_modules: cambios.filter((c) => c.nombre_tabla === "c_articulo_mantenimiento"),
+            c_empleado: [{ id: 20, nombre: "Ana", primer_apellido: "Soto" }, { id: 21, nombre: "Beto", primer_apellido: "Mora" }],
+        };
+        const out = await loadMantenimientoArticulos(fakeDb(tablas as any, consultas), P, query as any);
+        const r1 = out.find((r) => r.id === 1)!;
+        assert.equal(r1.modificado_por, "Beto Mora");
+        assert.equal(r1.creado_por, null);
+        assert.equal(out.find((r) => r.id === 2)!.modificado_por, null);
+        assert.equal(consultas.filter((c) => c === "c_cambios_apps_modules").length, 1);
+        assert.equal(consultas.filter((c) => c === "c_empleado").length, 1);
+    });
+    it("si el historial falla, el reporte sigue (modificado_por null)", async () => {
+        const roto = new Proxy({}, { get: (_t, name: string) => ({ findMany: async () => { if (name === "c_cambios_apps_modules") throw new Error("sin tabla"); return []; } }) }) as any;
+        const out = await loadMantenimientoArticulos(roto, P, query as any);
+        assert.deepEqual(out.map((r) => r.modificado_por), [null, null]);
     });
     it("con alcance consulta por nodo, une sin repetir y filtra por ubicación", async () => {
         calls.length = 0;

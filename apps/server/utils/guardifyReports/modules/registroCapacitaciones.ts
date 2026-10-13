@@ -23,9 +23,13 @@ const nombre = (v: unknown, id: unknown): string | null => {
  * archivos adjuntos. Los participantes salen como texto («código - nombre; …», recortado) y los puestos como conteo.
  *
  * Columnas para los filtros (las agrega `load`): `division` es el nombre de la división del contrato (sin código; con la de la
- * cabecera como respaldo), `ejecutivo_cuenta` el de la sucursal, `usuario_inserta` quien registró la capacitación
+ * cabecera como respaldo), `ejecutivo_cuenta` el de la sucursal, `creado_por` quien registró la capacitación
  * (`responsable_id` guarda al usuario de la sesión que la creó) y `puestos_destino` los puestos a los que se dirige
  * («código - nombre; …», recortado).
+ *
+ * Auditoría estándar: la tabla no guarda `created_at` ni historial de cambios, así que `creado`, `modificado` y `modificado_por`
+ * salen siempre null (brecha); `creado_por` es el usuario de `responsable_id` (antes `usuario_inserta`). La fecha del hecho
+ * (`fecha`, la de la capacitación) es otra columna y se conserva.
  */
 export function mapRegistroCapacitacionRow(r: any): OutRow {
     const empleados: any[] = Array.isArray(r.empleados_cap) ? r.empleados_cap : Array.isArray(r.e_capacitacion_empleado) ? r.e_capacitacion_empleado : [];
@@ -50,8 +54,11 @@ export function mapRegistroCapacitacionRow(r: any): OutRow {
         descripcion: txt(r.descripcion),
         observaciones: txt(r.observaciones),
         ejecutivo_cuenta: txt(r.ejecutivo_cuenta_nombre),
-        usuario_inserta: txt(r.usuario_inserta_nombre),
         puestos_destino: txt(puestos.map((x) => String(x?.label ?? "").trim()).filter(Boolean).join("; ")),
+        creado: null,
+        creado_por: txt(r.creado_por_nombre),
+        modificado: null,
+        modificado_por: null,
     };
 }
 
@@ -70,7 +77,7 @@ export async function enrichCapacitaciones(db: any, rows: any[]): Promise<any[]>
         ...r,
         ejecutivo_cuenta_nombre: ejecutivos.get(Number(r.corpo_id)) ?? null,
         division_contrato: divisionesContrato.get(Number(r.contrato_id)) ?? (String(divisionesPropias.get(Number(r.division_id))?.nombre ?? "").trim() || null),
-        usuario_inserta_nombre: usuarioInserta(r.responsable_id, nombres),
+        creado_por_nombre: usuarioInserta(r.responsable_id, nombres),
     }));
 }
 
@@ -97,8 +104,8 @@ export const registroCapacitaciones: GuardifyReportModule = {
     id: "registro_capacitaciones",
     supportsScope: true,
     searchKeys: ["titulo", "responsable", "cedula_responsable", "participantes", "puestos_destino", "puesto"],
-    filterKeys: ["tipo", "resultado", "division", "responsable", "participantes", "puestos_destino", "ejecutivo_cuenta", "usuario_inserta", "empresa", "cliente", "contrato", "sucursal", "puesto"],
-    sortKeys: ["fecha", "titulo", "tipo", "resultado", "responsable", "division", "ejecutivo_cuenta", "usuario_inserta", "empresa", "cliente", "contrato", "sucursal", "puesto", "empleados", "puestos"],
+    filterKeys: ["tipo", "resultado", "division", "responsable", "participantes", "puestos_destino", "ejecutivo_cuenta", "creado_por", "empresa", "cliente", "contrato", "sucursal", "puesto"],
+    sortKeys: ["fecha", "titulo", "tipo", "resultado", "responsable", "division", "ejecutivo_cuenta", "creado_por", "empresa", "cliente", "contrato", "sucursal", "puesto", "empleados", "puestos"],
     defaultSort: "fecha",
     form: registroCapacitacionesForm,
     async load(db, p) {

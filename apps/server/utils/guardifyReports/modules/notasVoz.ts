@@ -52,6 +52,9 @@ export function mapNotaVozRow(r: any, ejecutivo?: string | null): OutRow {
         con_audio: String(r.path ?? "").trim() ? "Sí" : "No",
         creado_por: text(r.creador_nombre, 200),
         ejecutivo_cuenta: text(ejecutivo, 200),
+        // La tabla no guarda `updated_at`/`updated_by` ni historial de cambios (la nota se puede editar): brecha de auditoría.
+        modificado: null,
+        modificado_por: null,
     };
 }
 

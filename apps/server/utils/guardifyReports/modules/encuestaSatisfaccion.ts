@@ -2,6 +2,7 @@ import { ejecutivoPorCorpo, findByIds } from "../enrich";
 import type { OutRow } from "../listing";
 import { fmtDt } from "../mappers";
 import { addDays } from "../params";
+import { buildNombre } from "../names";
 import { matchesScope, type ScopeItem } from "../scope";
 import type { GuardifyReportModule } from "../types";
 import { encuestaSatisfaccionForm } from "./encuestaSatisfaccionForm";
@@ -31,8 +32,67 @@ const conCodigo = (codigo: unknown, nombre: unknown): string | null => {
     return `${c} - ${n}`;
 };
 
-/** Datos que no vienen en la fila de la encuesta y se cargan por lote: ejecutivo de cuenta de la sucursal y código del responsable. */
-export type EncuestaExtra = { ejecutivo?: string | null; responsableCodigo?: string | null };
+/** Datos que no vienen en la fila de la encuesta y se cargan por lote: ejecutivo de cuenta de la sucursal, código del responsable y datos de auditoría. */
+export type EncuestaExtra = { ejecutivo?: string | null; responsableCodigo?: string | null; creadoPor?: string | null; modificacion?: Modificacion | null };
+
+/** Última modificación de un registro: cuándo y quién («código - nombre»). */
+export type Modificacion = { cuando: string | null; quien: string | null };
+
+const TABLA = "c_encuesta_cliente";
+
+/**
+ * Historial de cambios de las encuestas (`c_cambios_apps_modules`, `nombre_tabla` = `c_encuesta_cliente`). La tabla NO guarda `created_by` ni
+ * `updated_at`, pero cada alta y cada edición dejan una entrada con el empleado que la hizo:
+ * - quien creó = `created_by` de la entrada `__created__` (las encuestas anteriores al historial no la tienen: null);
+ * - última modificación = la entrada más reciente que no sea el alta (null si nunca se editó).
+ * Dos consultas por bloque de 1000 ids sin traer `cambios` (lleva firmas) y un lote de empleados. Si el historial no se puede leer, el
+ * reporte sigue con las columnas en null.
+ */
+export async function auditoriaPorHistorial(db: any, ids: unknown[]): Promise<{ creadoPor: Map<number, string>; modificacion: Map<number, Modificacion> }> {
+    const creadoPor = new Map<number, string>();
+    const modificacion = new Map<number, Modificacion>();
+    const unicos = [...new Set(ids.map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+    if (!unicos.length) return { creadoPor, modificacion };
+    try {
+        const pedidos = new Set(unicos);
+        const alta = new Map<number, { id: number; by: number }>();
+        const ultimo = new Map<number, { id: number; by: number; at: unknown }>();
+        for (let i = 0; i < unicos.length; i += 1000) {
+            const bloque = unicos.slice(i, i + 1000);
+            const select = { id: true, registro_id: true, created_by: true, created_at: true };
+            const [altas, ediciones]: any[][] = await Promise.all([
+                db.c_cambios_apps_modules.findMany({ where: { nombre_tabla: TABLA, registro_id: { in: bloque }, cambios: { contains: "__created__" } }, select, orderBy: { id: "asc" } }),
+                db.c_cambios_apps_modules.findMany({ where: { nombre_tabla: TABLA, registro_id: { in: bloque }, NOT: { cambios: { contains: "__created__" } } }, select, orderBy: { id: "desc" } }),
+            ]);
+            for (const f of altas) {
+                const rid = Number(f.registro_id);
+                const prev = alta.get(rid);
+                if (pedidos.has(rid) && (!prev || Number(f.id) < prev.id)) alta.set(rid, { id: Number(f.id), by: Number(f.created_by) });
+            }
+            for (const f of ediciones) {
+                const rid = Number(f.registro_id);
+                const prev = ultimo.get(rid);
+                if (pedidos.has(rid) && (!prev || Number(f.id) > prev.id)) ultimo.set(rid, { id: Number(f.id), by: Number(f.created_by), at: f.created_at });
+            }
+        }
+        const emps = await findByIds<{ codigo?: string | null; nombre?: string | null; primer_apellido?: string | null; segundo_apellido?: string | null }>(
+            db, "c_empleado", [...alta.values(), ...ultimo.values()].map((u) => u.by), { codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+        );
+        const quien = (id: number): string | null => {
+            const e = emps.get(id);
+            return e ? conCodigo(e.codigo, buildNombre(e)) : null;
+        };
+        for (const [rid, a] of alta) {
+            const q = quien(a.by);
+            if (q) creadoPor.set(rid, q);
+        }
+        for (const [rid, u] of ultimo) modificacion.set(rid, { cuando: fmtDt(u.at as any), quien: quien(u.by) });
+    } catch (e) {
+        console.warn("[guardifyReports] encuesta_satisfaccion: historial de cambios no disponible; creado_por, modificado y modificado_por quedan vacíos", (e as Error)?.message);
+        return { creadoPor: new Map(), modificacion: new Map() };
+    }
+    return { creadoPor, modificacion };
+}
 
 /** En la app, `apply` ausente significa que la pregunta aplica. */
 function applies(raw: unknown): boolean {
@@ -103,17 +163,28 @@ export function mapEncuestaRow(r: any, x: EncuestaExtra = {}): OutRow {
         conoce_quejas: conoceQuejas,
         observaciones: clip(r.observaciones),
         ejecutivo_cuenta: txt(x.ejecutivo),
+        creado_por: txt(x.creadoPor),
+        modificado: x.modificacion?.cuando ?? null,
+        modificado_por: x.modificacion?.quien ?? null,
     };
 }
 
 /**
  * Datos por lote (sin consultas por fila): ejecutivo de cuenta de cada sucursal (`ejecutivoPorCorpo`) y código de cada responsable
- * (`c_empleado.codigo`, para mostrar «código - nombre»). Devuelve cada fila ya mapeada.
+ * (`c_empleado.codigo`, para mostrar «código - nombre») y quién creó / modificó cada encuesta (historial de cambios). Devuelve cada fila ya mapeada.
  */
 export async function mapEncuestasConExtras(db: any, rows: any[]): Promise<OutRow[]> {
     const ejecutivos = await ejecutivoPorCorpo(db, rows.map((r) => r.corpo_id));
     const responsables = await findByIds<{ codigo?: string | null }>(db, "c_empleado", rows.map((r) => r.responsable_id), { codigo: true });
-    return rows.map((r) => mapEncuestaRow(r, { ejecutivo: ejecutivos.get(Number(r.corpo_id)) ?? null, responsableCodigo: txt(responsables.get(Number(r.responsable_id))?.codigo) }));
+    const auditoria = await auditoriaPorHistorial(db, rows.map((r) => r.id));
+    return rows.map((r) =>
+        mapEncuestaRow(r, {
+            ejecutivo: ejecutivos.get(Number(r.corpo_id)) ?? null,
+            responsableCodigo: txt(responsables.get(Number(r.responsable_id))?.codigo),
+            creadoPor: auditoria.creadoPor.get(Number(r.id)) ?? null,
+            modificacion: auditoria.modificacion.get(Number(r.id)) ?? null,
+        }),
+    );
 }
 
 /** Cada encuesta guarda los ids de empresa/cliente/división/contrato/corpo/puesto: se filtra directo por el alcance. */
@@ -129,9 +200,9 @@ export function filterEncuestasByScope(rows: any[], scope: ScopeItem[] | null): 
 export const encuestaSatisfaccion: GuardifyReportModule = {
     id: "encuesta_satisfaccion",
     supportsScope: true,
-    searchKeys: ["evaluado", "responsable", "cedula_responsable", "cliente", "sucursal", "puesto", "observaciones"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "conoce_quejas", "responsable", "ejecutivo_cuenta"],
-    sortKeys: ["creado", "fecha", "empresa", "cliente", "contrato", "sucursal", "puesto", "responsable", "evaluado", "promedio", "ejecutivo_cuenta"],
+    searchKeys: ["evaluado", "responsable", "cedula_responsable", "cliente", "sucursal", "puesto", "observaciones", "creado_por", "modificado_por"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "conoce_quejas", "responsable", "ejecutivo_cuenta", "creado_por", "modificado_por"],
+    sortKeys: ["creado", "fecha", "empresa", "cliente", "contrato", "sucursal", "puesto", "responsable", "evaluado", "promedio", "ejecutivo_cuenta", "creado_por", "modificado", "modificado_por"],
     defaultSort: "creado",
     form: encuestaSatisfaccionForm,
     async load(db, p) {

@@ -21,7 +21,7 @@ const placeholderToNull = (value: unknown, id: unknown): string | null => {
  * las columnas comunes de filtro agregadas en lote (sin consultas por fila):
  * - `empleado` pasa a «código - nombre» (así `contains` encuentra por código o por nombre);
  * - `ejecutivo_cuenta`: el de la sucursal de la fila;
- * - `usuario_inserta`: quien registró el almuerzo. La tabla no guarda un usuario aparte: el registro lo crea el propio empleado
+ * - `creado_por`: quien registró el almuerzo. La tabla no guarda un usuario aparte: el registro lo crea el propio empleado
  *   desde la app (`empleadoId`), así que es su nombre.
  */
 export async function loadTiempoAlmuerzo(db: ReportDataAccess, p: ReportParams, query: QueryRows): Promise<OutRow[]> {
@@ -58,7 +58,11 @@ export async function loadTiempoAlmuerzo(db: ReportDataAccess, p: ReportParams, 
             o[col] = placeholderToNull(r[nameKey], r[idKey]);
         }
         o.ejecutivo_cuenta = ejecutivos.get(Number(r.corpo_id)) ?? null;
-        o.usuario_inserta = usuarioInserta(r.empleadoId, nombres);
+        // Auditoría: la tabla no guarda fecha de registro ni modificación (brecha); quien lo crea es el propio empleado.
+        o.creado = null;
+        o.creado_por = usuarioInserta(r.empleadoId, nombres);
+        o.modificado = null;
+        o.modificado_por = null;
         return o;
     });
 }
@@ -68,8 +72,8 @@ export const tiempoAlmuerzo: GuardifyReportModule = {
     id: "tiempo_almuerzo",
     supportsScope: true,
     searchKeys: ["empleado", "cedula", "puesto", "sucursal"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "manual", "ejecutivo_cuenta", "usuario_inserta"],
-    sortKeys: ["inicio", "fin", "empleado", "cedula", "minutos", "empresa", "cliente", "contrato", "sucursal", "puesto", "pausas", "division", "ejecutivo_cuenta", "usuario_inserta"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "manual", "ejecutivo_cuenta", "creado", "creado_por", "modificado", "modificado_por"],
+    sortKeys: ["inicio", "fin", "empleado", "cedula", "minutos", "empresa", "cliente", "contrato", "sucursal", "puesto", "pausas", "division", "ejecutivo_cuenta", "creado", "creado_por", "modificado", "modificado_por"],
     defaultSort: "inicio",
     form: tiempoAlmuerzoForm,
     async load(db, p) {

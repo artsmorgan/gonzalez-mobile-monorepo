@@ -1,5 +1,5 @@
 import { parseInformacionRevision, queryRevisionVehiculosRows } from "../../reports-functions/revisionVehiculosReport";
-import { ejecutivoPorCorpo, findByIds, nombresEmpleado, usuarioInserta } from "../enrich";
+import { ejecutivoPorCorpo, findByIds, nombresEmpleado, ubicacionTextos, usuarioInserta, type UbicacionTextos } from "../enrich";
 import { fmtDt } from "../mappers";
 import type { OutRow } from "../listing";
 import { addDays } from "../params";
@@ -17,14 +17,6 @@ const clip = (v: unknown, max = 500): string | null => {
     const s = txt(v);
     if (s === null) return null;
     return s.length > max ? `${s.slice(0, max - 1)}…` : s;
-};
-
-/** Nombre de la estructura; la consulta original devuelve el id como texto si no encontró el nombre: eso no es un nombre. */
-const place = (name: unknown, id: unknown): string | null => {
-    const s = txt(name);
-    if (s === null || s === "0") return null;
-    if (id != null && s === String(id)) return null;
-    return s;
 };
 
 function parseArr(raw: unknown): any[] {
@@ -66,18 +58,43 @@ function countFotos(...lists: any[][]): number {
 }
 
 /**
+ * Último cambio de cada registro en el historial (`c_cambios_apps_modules`): cuándo y quién (id de empleado). Una consulta por bloque
+ * de 1000 registros; si la base no tiene el historial, ningún registro tiene cambio.
+ */
+async function ultimosCambios(db: any, tabla: string, ids: unknown[]): Promise<Map<number, { id: number; at: string; by: number }>> {
+    const all = [...new Set(ids.map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+    const out = new Map<number, { id: number; at: string; by: number }>();
+    try {
+        for (let i = 0; i < all.length; i += 1000) {
+            const rows = await db.c_cambios_apps_modules.findMany({ where: { nombre_tabla: tabla, registro_id: { in: all.slice(i, i + 1000) } }, select: { id: true, registro_id: true, created_by: true, created_at: true } });
+            for (const c of rows) {
+                const at = fmtDt(c.created_at);
+                if (!at) continue;
+                const prev = out.get(Number(c.registro_id));
+                if (!prev || at > prev.at || (at === prev.at && Number(c.id) > prev.id)) out.set(Number(c.registro_id), { id: Number(c.id), at, by: Number(c.created_by) });
+            }
+        }
+    } catch {
+        /* sin historial */
+    }
+    return out;
+}
+
+/**
  * Revisión de vehículos (`c_bitacora_vehiculo_detenido`). Se omiten fotos, firmas (`firma_responsable` y las de los
  * oficiales) y los nombres de archivo; de las fotos queda el conteo.
  *
  * Columnas para los filtros: `modelo`, `titulo_propiedad`, `rtv` y `marchamo` salen de la «información general» de la
  * revisión y, si ahí no están, del vehículo corporativo vinculado (`veh_*`, que agrega `load`); `vin` solo de la
  * información general; `corporativo` es «Sí» si la revisión está vinculada a un vehículo corporativo; `uso_vehiculo`
- * («conductor - fecha») es el uso vinculado (`uso_txt`); `ejecutivo_cuenta` y `usuario_inserta` también los agrega `load`.
+ * («conductor - fecha») es el uso vinculado (`uso_txt`); `ejecutivo_cuenta`, `creado_por` (quien hizo la revisión),
+ * `modificado`/`modificado_por` (último cambio del historial `c_cambios_apps_modules`) y la ubicación («código - nombre», `ubicacion`) también los agrega `load`.
  */
 export function mapRevisionVehiculoRow(r: any): OutRow {
     const general = parseArr(r.informacion_general);
     const revision = parseInformacionRevision(r.informacion_revision);
     const vehiculo = r.vehiculo_id ? txt(r.vehiculo_txt) : null;
+    const ubic: Partial<UbicacionTextos> = r.ubicacion ?? {};
     return {
         id: Number(r.id),
         creado: fmtDt(r.created_at),
@@ -88,12 +105,12 @@ export function mapRevisionVehiculoRow(r: any): OutRow {
         color: infoValue(general, "color"),
         kilometraje: infoValue(general, "km"),
         combustible: infoValue(general, "combustible"),
-        empresa: place(r.empresa_txt, r.empresa_id),
-        cliente: place(r.cliente_txt, r.cliente_id),
-        division: place(r.division_txt, r.division_id),
-        contrato: place(r.contrato_txt, r.contrato_id),
-        sucursal: place(r.corpo_txt, r.sucursal_id),
-        puesto: place(r.puesto_txt, r.puesto_id),
+        empresa: ubic.empresa ?? null,
+        cliente: ubic.cliente ?? null,
+        division: ubic.division ?? null,
+        contrato: ubic.contrato ?? null,
+        sucursal: ubic.sucursal ?? null,
+        puesto: ubic.puesto ?? null,
         observaciones: clip(r.observaciones),
         puntos_revisados: revision.filter((it: any) => it && typeof it === "object" && it.kind !== "heading" && it.kind !== "signature").length,
         movimientos: Number(r.movimientos_count) || 0,
@@ -106,7 +123,9 @@ export function mapRevisionVehiculoRow(r: any): OutRow {
         rtv: yesNo(infoValue(general, "rtv")) ?? yesNo(r.veh_rtv),
         marchamo: yesNo(infoValue(general, "marchamo")) ?? yesNo(r.veh_marchamo),
         ejecutivo_cuenta: txt(r.ejecutivo_cuenta),
-        usuario_inserta: txt(r.usuario_inserta),
+        creado_por: txt(r.creado_por),
+        modificado: fmtDt(r.modificado_at),
+        modificado_por: txt(r.modificado_por),
     };
 }
 
@@ -140,8 +159,8 @@ export const revisionVehiculos: GuardifyReportModule = {
     id: "revision_vehiculos",
     supportsScope: true,
     searchKeys: ["vehiculo", "placa", "marca", "contrato", "sucursal", "puesto", "cliente", "observaciones"],
-    filterKeys: ["tipo", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "vehiculo", "uso_vehiculo", "marca", "modelo", "vin", "corporativo", "titulo_propiedad", "rtv", "marchamo", "ejecutivo_cuenta", "usuario_inserta"],
-    sortKeys: ["creado", "tipo", "vehiculo", "placa", "marca", "empresa", "cliente", "contrato", "sucursal", "puesto", "puntos_revisados", "movimientos", "fotos"],
+    filterKeys: ["tipo", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "vehiculo", "uso_vehiculo", "marca", "modelo", "vin", "corporativo", "titulo_propiedad", "rtv", "marchamo", "ejecutivo_cuenta", "creado_por", "modificado", "modificado_por"],
+    sortKeys: ["creado", "tipo", "vehiculo", "placa", "marca", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "puntos_revisados", "movimientos", "fotos", "creado_por", "modificado", "modificado_por"],
     defaultSort: "creado",
     form: revisionVehiculosForm,
     async load(db, p) {
@@ -154,18 +173,24 @@ export const revisionVehiculos: GuardifyReportModule = {
         // Datos para los filtros, en lote (nunca por fila).
         const vehiculos = await findByIds<any>(db, "c_vehiculos_corporativos", kept.map((r) => r.vehiculo_id), { marca: true, modelo: true, titulo_propiedad: true, rtv: true, marchamo: true });
         const usos = await usoPorRevision(db, kept.map((r) => r.id));
-        const [ejecutivos, nombres] = await Promise.all([
+        const cambios = await ultimosCambios(db, "c_bitacora_vehiculo_detenido", kept.map((r) => r.id));
+        const ubicOf = (r: any) => ({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.sucursal_id, puesto: r.puesto_id });
+        const [ejecutivos, nombres, ubic] = await Promise.all([
             ejecutivoPorCorpo(db, kept.map((r) => r.sucursal_id)),
-            nombresEmpleado(db, kept.map((r) => r.created_by)),
+            nombresEmpleado(db, [...kept.map((r) => r.created_by), ...[...cambios.values()].map((c) => c.by)]),
+            ubicacionTextos(db, kept.map(ubicOf)),
         ]);
         return kept.map((r) => {
             const v = vehiculos.get(Number(r.vehiculo_id));
+            const c = cambios.get(Number(r.id));
             return mapRevisionVehiculoRow({
                 ...r,
                 veh_marca: v?.marca, veh_modelo: v?.modelo, veh_titulo_propiedad: v?.titulo_propiedad, veh_rtv: v?.rtv, veh_marchamo: v?.marchamo,
                 uso_txt: usos.get(Number(r.id)),
                 ejecutivo_cuenta: ejecutivos.get(Number(r.sucursal_id)),
-                usuario_inserta: usuarioInserta(r.created_by, nombres),
+                creado_por: usuarioInserta(r.created_by, nombres),
+                modificado_at: c?.at, modificado_por: c ? usuarioInserta(c.by, nombres) : null,
+                ubicacion: ubic(ubicOf(r)),
             });
         });
     },

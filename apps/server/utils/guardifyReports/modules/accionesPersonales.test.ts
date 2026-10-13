@@ -35,6 +35,8 @@ const raw = (o: Record<string, any> = {}) => ({
     salario: 999999,
     salario_base_mensual: 888888,
     usuario_insercion: "jefe@x.test",
+    fecha_actualizacion: new Date("2026-09-11T08:00:00Z"),
+    usuario_actualizacion: "edita@x.test",
     empresa_id: 1, cliente_id: 5, contrato_id: 20, corpo_id: 30, puesto_id: 40,
     c_empleado_c_accion_personal_empleado_idToc_empleado: { id: 3, nombre: "Ana", primer_apellido: "Soto", segundo_apellido: null, codigo: "E1" },
     c_empleado_c_accion_personal_reemplazo_idToc_empleado: null,
@@ -56,11 +58,13 @@ describe("acciones_personales: mapeo", () => {
         const o = mapAccionPersonalRow(raw(), new Map([[3, "1-111-111"]]));
         assert.equal(o.fecha_inicio, "2026-09-10T00:00:00");
         assert.equal(o.fecha_fin, null);
-        assert.equal(o.registrada, "2026-09-09T14:30:15");
+        assert.equal(o.creado, "2026-09-09T14:30:15");
+        assert.equal(o.modificado, "2026-09-11T08:00:00");
+        assert.equal(o.modificado_por, "edita@x.test");
         assert.equal(o.tipo_accion, "AUS — Ausencia");
         assert.equal(o.empleado, "E1 - Ana Soto");
         assert.equal(o.cedula, "1-111-111");
-        assert.equal(o.usuario_inserta, "jefe@x.test");
+        assert.equal(o.creado_por, "jefe@x.test");
         assert.equal(o.estado, "Aprobada");
         assert.deepEqual([o.empresa, o.cliente, o.division, o.contrato, o.sucursal, o.puesto], ["G - Gonzalez SA", "Cliente 5", "N - Norte", "C-20 - Contrato 20", "S1 - Sede", "P40 - Recepción"]);
         assert.equal((o.comentarios as string).length, 500);
@@ -78,19 +82,28 @@ describe("acciones_personales: mapeo", () => {
         assert.equal(o.adjunto, "No");
         assert.equal(o.detalle, null);
         assert.equal(o.puesto, null);
-        assert.equal(o.usuario_inserta, null);
+        assert.equal(o.creado, null);
+        assert.equal(o.creado_por, null);
+        assert.equal(o.modificado, null);
+        assert.equal(o.modificado_por, null);
+    });
+    it("entrega siempre las 11 columnas estándar y ninguna clave vieja", () => {
+        const o = mapAccionPersonalRow(raw(), new Map(), new Map());
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"]) assert.ok(k in o, k);
+        for (const k of ["registrada", "usuario_inserta"]) assert.ok(!(k in o), k);
     });
     it("empleado sin código se muestra solo con el nombre; usuario inserta numérico se resuelve con el mapa", () => {
         const sinCodigo = mapAccionPersonalRow(raw({ c_empleado_c_accion_personal_empleado_idToc_empleado: { id: 3, nombre: "Ana", primer_apellido: "Soto", codigo: "" } }));
         assert.equal(sinCodigo.empleado, "Ana Soto");
-        assert.equal(mapAccionPersonalRow(raw({ usuario_insercion: "12" }), new Map(), new Map([[12, "Luis Mora"]])).usuario_inserta, "Luis Mora");
-        assert.equal(mapAccionPersonalRow(raw({ usuario_insercion: "99" }), new Map(), new Map()).usuario_inserta, null);
+        assert.equal(mapAccionPersonalRow(raw({ usuario_insercion: "12" }), new Map(), new Map([[12, "Luis Mora"]])).creado_por, "Luis Mora");
+        assert.equal(mapAccionPersonalRow(raw({ usuario_insercion: "99" }), new Map(), new Map()).creado_por, null);
+        assert.equal(mapAccionPersonalRow(raw({ usuario_actualizacion: "12" }), new Map(), new Map([[12, "Luis Mora"]])).modificado_por, "Luis Mora");
     });
 });
 
 describe("acciones_personales: periodo y alcance", () => {
     const rows = [
-        { id: 1, empleado_id: 3, usuario_insercion: "jefe@x.test", fecha_inicio: new Date("2026-09-10T00:00:00Z"), empresa_id: 1, cliente_id: 5, contrato_id: 20, corpo_id: 30, puesto_id: 40, tipoAccion_id: 2 },
+        { id: 1, empleado_id: 3, usuario_insercion: "jefe@x.test", usuario_actualizacion: "4", fecha_actualizacion: new Date("2026-09-12T09:00:00Z"), fecha_inicio: new Date("2026-09-10T00:00:00Z"), empresa_id: 1, cliente_id: 5, contrato_id: 20, corpo_id: 30, puesto_id: 40, tipoAccion_id: 2 },
         { id: 2, empleado_id: 3, usuario_insercion: "4", fecha_inicio: new Date("2026-10-01T00:00:00Z"), empresa_id: 1, cliente_id: 5, contrato_id: 21, corpo_id: 31, puesto_id: 41, tipoAccion_id: 2 }, // to exclusivo
         { id: 3, empleado_id: 4, usuario_insercion: "4", fecha_inicio: new Date("2026-09-01T00:00:00Z"), empresa_id: 1, cliente_id: 5, contrato_id: 21, corpo_id: 31, puesto_id: 41, tipoAccion_id: 2 },
     ];
@@ -117,8 +130,11 @@ describe("acciones_personales: periodo y alcance", () => {
         const uno = out.find((r) => r.id === 1)!;
         assert.equal(uno.cedula, "1-111-111");
         assert.equal(uno.empleado, "E1 - Ana Soto");
-        assert.equal(uno.usuario_inserta, "jefe@x.test"); // texto: tal cual
-        assert.equal(out.find((r) => r.id === 3)!.usuario_inserta, "Luis Mora"); // id de empleado: su nombre, en lote
+        assert.equal(uno.creado_por, "jefe@x.test"); // texto: tal cual
+        assert.equal(uno.modificado_por, "Luis Mora"); // id de empleado en usuario_actualizacion
+        assert.equal(uno.modificado, "2026-09-12T09:00:00");
+        assert.equal(out.find((r) => r.id === 3)!.modificado, null);
+        assert.equal(out.find((r) => r.id === 3)!.creado_por, "Luis Mora"); // id de empleado: su nombre, en lote
         assert.equal(uno.tipo_accion, "AUS — Ausencia");
         assert.equal(uno.contrato, "C-20 - Contrato 20");
         assert.equal(uno.division, "S - Sur");

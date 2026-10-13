@@ -25,12 +25,18 @@ describe("llaveros: mapeo", () => {
         assert.deepEqual([o.ultimo_movimiento, o.ultima_entrega, o.ultima_recibe], ["2026-09-12T09:00:00", "Zoe", "Ana"]);
         assert.equal((o.observaciones as string).length, 500);
         assert.equal(o.creado_por, "Carla Soto");
-        assert.deepEqual([o.division, o.ejecutivo_cuenta, o.usuario_inserta], ["División", null, "Carla Soto"]);
+        assert.deepEqual([o.division, o.ejecutivo_cuenta, o.modificado, o.modificado_por], ["División", null, null, null]);
+        assert.ok(!("usuario_inserta" in o)); // era el mismo dato que creado_por
     });
-    it("pone ejecutivo de cuenta y usuario que lo registró al final de la fila", () => {
-        const o = mapLlaveroRow(raw, { nombre: "Carla", primer_apellido: "Soto" }, " Ana Rojas ");
-        assert.deepEqual(Object.keys(o).slice(-3), ["creado_por", "ejecutivo_cuenta", "usuario_inserta"]);
+    it("columnas estándar: jerarquía (6) y auditoría (id, creado, creado_por, modificado, modificado_por)", () => {
+        const o = mapLlaveroRow(raw, { nombre: "Carla", primer_apellido: "Soto" }, " Ana Rojas ", { at: new Date("2026-09-12T10:00:00Z"), por: " Luis Mena " });
+        assert.deepEqual([o.empresa, o.cliente, o.division, o.contrato, o.sucursal, o.puesto], ["9 - Empresa", "Cliente", "División", "C1 - Contrato", "S1 - Sucursal", "P1 - Puesto"]);
+        assert.deepEqual([o.id, o.creado, o.creado_por, o.modificado, o.modificado_por], [7, "2026-09-10T15:30:00", "Carla Soto", "2026-09-12T10:00:00", "Luis Mena"]);
         assert.equal(o.ejecutivo_cuenta, "Ana Rojas");
+        assert.deepEqual(Object.keys(o).slice(-4), ["creado_por", "modificado", "modificado_por", "ejecutivo_cuenta"]);
+        // la consulta rellena con el id cuando no encuentra el nivel: eso es «sin dato»
+        const sin = mapLlaveroRow({ ...raw, empresa_nombre: "1", cliente_nombre: "2", division_nombre: "3", contrato_nombre: "4", corpo_nombre: "5", puesto_nombre: "6" });
+        assert.deepEqual([sin.empresa, sin.cliente, sin.division, sin.contrato, sin.sucursal, sin.puesto], [null, null, null, null, null, null]);
     });
     it("nunca expone firmas ni teléfonos", () => {
         const s = JSON.stringify(mapLlaveroRow(raw));
@@ -38,7 +44,7 @@ describe("llaveros: mapeo", () => {
     });
     it("tolera nulos y llaveros sin llaves ni movimientos", () => {
         const o = mapLlaveroRow({ id: 1, created_at: null, numero_llavero: "", nombre_llavero: null, observaciones: null });
-        assert.deepEqual([o.creado, o.numero, o.nombre, o.llaves, o.numeros_llaves, o.movimientos, o.ultimo_movimiento, o.ultima_entrega, o.observaciones, o.creado_por, o.ejecutivo_cuenta, o.usuario_inserta], [null, null, null, 0, null, 0, null, null, null, null, null, null]);
+        assert.deepEqual([o.creado, o.numero, o.nombre, o.llaves, o.numeros_llaves, o.movimientos, o.ultimo_movimiento, o.ultima_entrega, o.observaciones, o.creado_por, o.ejecutivo_cuenta, o.modificado, o.modificado_por], [null, null, null, 0, null, 0, null, null, null, null, null, null, null]);
     });
     it("combina fecha y hora del movimiento (también como texto) y elige el último", () => {
         assert.equal(movimientoDt({ fecha: "2026-09-11T00:00:00.000Z", hora: "1970-01-01T23:59:01.000Z" }), "2026-09-11T23:59:01");
@@ -55,7 +61,13 @@ describe("llaveros: carga y alcance", () => {
     const query = async (_db: any, filters: any, orderKey: string) => { seen = { filters, orderKey }; return data; };
     const table = (rows: any[]) => ({ findMany: async (a: any) => rows.filter((r) => !a?.where?.id?.in || a.where.id.in.includes(r.id)) });
     const db = {
-        c_empleado: { findMany: async () => [{ id: 11, nombre: "Carla", primer_apellido: "Soto", segundo_apellido: null }] },
+        c_empleado: { findMany: async (a: any) => [{ id: 11, nombre: "Carla", primer_apellido: "Soto", segundo_apellido: null }, { id: 12, nombre: "Luis", primer_apellido: "Mena", segundo_apellido: null }].filter((e) => a.where.id.in.includes(e.id)) },
+        // historial: el llavero 2 se creó y se editó (vale el último); el 1 no tiene cambios; un cambio de otra tabla con el mismo registro no cuenta
+        c_cambios_apps_modules: { findMany: async (a: any) => [
+            { id: 1, nombre_tabla: "e_llavero", registro_id: 2, created_by: 11, created_at: new Date("2026-09-10T15:30:00Z") },
+            { id: 2, nombre_tabla: "e_llavero", registro_id: 2, created_by: 12, created_at: new Date("2026-09-12T10:00:00Z") },
+            { id: 3, nombre_tabla: "e_movimiento_llavero", registro_id: 1, created_by: 12, created_at: new Date("2026-09-13T10:00:00Z") },
+        ].filter((c) => c.nombre_tabla === a.where.nombre_tabla && a.where.registro_id.in.includes(c.registro_id)) },
         e_estructura_sucursal: table([{ id: 5, ejecutivoCuenta_id: 10 }]),
         n_ejecutivo_cuenta: table([{ id: 10, nombre: "Ana Rojas" }]),
     } as any;
@@ -69,7 +81,9 @@ describe("llaveros: carga y alcance", () => {
         const one = await loadLlaveros(db, params({ scope: "contrato:9" }), query);
         assert.deepEqual(one.map((r) => r.id), [2]);
         assert.equal(one[0]!.creado_por, "Carla Soto");
-        assert.equal(one[0]!.usuario_inserta, "Carla Soto");
+        assert.deepEqual([one[0]!.modificado, one[0]!.modificado_por], ["2026-09-12T10:00:00", "Luis Mena"]);
+        const todos = await loadLlaveros(db, params(), query);
+        assert.deepEqual([todos[0]!.modificado, todos[0]!.modificado_por], [null, null]);
         assert.equal(one[0]!.ejecutivo_cuenta, "Ana Rojas");
         assert.equal((await loadLlaveros(db, params({ scope: "contrato:4,puesto:6" }), query)).length, 2);
         assert.equal((await loadLlaveros(db, params({ scope: "empresa:77" }), query)).length, 0);

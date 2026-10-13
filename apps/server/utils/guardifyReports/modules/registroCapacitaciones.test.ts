@@ -44,17 +44,31 @@ describe("registro_capacitaciones: mapeo", () => {
         assert.equal((o.descripcion as string).length, 500);
         assert.equal(o.observaciones, null);
     });
-    it("columnas para filtros al final: ejecutivo_cuenta, usuario_inserta, puestos_destino y la división del contrato", () => {
-        const o = mapRegistroCapacitacionRow({ ...raw, division_contrato: "Seguridad", ejecutivo_cuenta_nombre: "Rosa Vega", usuario_inserta_nombre: "Marta Rojas" });
+    it("columnas para filtros: ejecutivo_cuenta, puestos_destino y la división del contrato", () => {
+        const o = mapRegistroCapacitacionRow({ ...raw, division_contrato: "Seguridad", ejecutivo_cuenta_nombre: "Rosa Vega", creado_por_nombre: "Marta Rojas" });
         assert.equal(o.division, "Seguridad");
         assert.equal(o.ejecutivo_cuenta, "Rosa Vega");
-        assert.equal(o.usuario_inserta, "Marta Rojas");
         assert.equal(o.puestos_destino, "P70 - Recepción");
-        assert.deepEqual(Object.keys(o).slice(-4), ["observaciones", "ejecutivo_cuenta", "usuario_inserta", "puestos_destino"]);
         const sin = mapRegistroCapacitacionRow({ ...raw, puestos_cap: [] });
         assert.equal(sin.puestos_destino, null);
         assert.equal(sin.ejecutivo_cuenta, null);
-        assert.equal(sin.usuario_inserta, null);
+        assert.equal(sin.creado_por, null);
+    });
+    it("columnas estándar: 6 de jerarquía + 5 de auditoría (creado, modificado y modificado_por siempre null: la tabla no los guarda)", () => {
+        const o = mapRegistroCapacitacionRow({ ...raw, division_contrato: "Seguridad", creado_por_nombre: "Marta Rojas" });
+        assert.equal(o.id, 5);
+        assert.equal(o.empresa, "E1 - Empresa Uno");
+        assert.equal(o.cliente, "Cliente Cinco");
+        assert.equal(o.division, "Seguridad");
+        assert.equal(o.contrato, "CT-2 - Contrato Dos");
+        assert.equal(o.sucursal, "Sucursal Tres");
+        assert.equal(o.puesto, null);
+        assert.equal(o.creado, null);
+        assert.equal(o.creado_por, "Marta Rojas");
+        assert.equal(o.modificado, null);
+        assert.equal(o.modificado_por, null);
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"]) assert.ok(k in o, k);
+        assert.ok(!("usuario_inserta" in o));
     });
     it("no expone la firma ni el archivo", () => {
         const s = JSON.stringify(mapRegistroCapacitacionRow(raw));
@@ -92,10 +106,10 @@ describe("registro_capacitaciones: enriquecimiento por lote", () => {
         assert.equal(calls, 6); // sucursal, ejecutivo, contrato, división (contrato), empleado y división (cabecera): una consulta cada uno
         assert.equal(out[0].ejecutivo_cuenta, "Rosa Vega");
         assert.equal(out[0].division, "Seguridad");
-        assert.equal(out[1].usuario_inserta, "Marta Rojas");
+        assert.equal(out[1].creado_por, "Marta Rojas");
         assert.equal(out[2].division, "Limpieza"); // sin contrato: la división de la cabecera, sin código
         assert.equal(out[2].ejecutivo_cuenta, null);
-        assert.equal(out[2].usuario_inserta, null);
+        assert.equal(out[2].creado_por, null);
         assert.equal(out[3].division, null);
     });
 });

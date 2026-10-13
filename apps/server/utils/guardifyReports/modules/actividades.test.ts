@@ -29,12 +29,24 @@ const tables: Record<string, any[]> = {
     e_estructura_empresa: [{ id: 1, nombre: "Gonzalez", codigo: "G" }],
     e_estructura_cliente: [{ id: 5, nombre: "Cliente 5" }, { id: 6, nombre: "Cliente 6" }],
     n_division: [{ id: 9, nombre: "Norte", codigo: null }],
+    c_empleado: [{ id: 50, nombre: "Ana", primer_apellido: "Soto", segundo_apellido: null }, { id: 51, nombre: "Beto", primer_apellido: "Mora", segundo_apellido: null }],
+    c_cambios_apps_modules: [
+        { id: 1, nombre_tabla: "e_actividades", registro_id: 1, created_by: 50, created_at: new Date("2026-09-01T10:00:00Z"), cambios: '[{"prop":"__created__"}]' },
+        { id: 2, nombre_tabla: "e_actividades", registro_id: 1, created_by: 51, created_at: new Date("2026-09-03T11:30:00Z"), cambios: '[{"prop":"nombre_actividad"}]' },
+        { id: 3, nombre_tabla: "e_actividades", registro_id: 3, created_by: 51, created_at: new Date("2026-09-04T08:00:00Z"), cambios: '[{"prop":"fecha_fin"}]' }, // sin alta (anterior al historial)
+        { id: 4, nombre_tabla: "otra_tabla", registro_id: 1, created_by: 51, created_at: new Date("2026-09-09T08:00:00Z"), cambios: '[{"prop":"__created__"}]' },
+    ],
 };
 const db = new Proxy({}, {
     get: (_t, name: string) => ({
         findMany: async (args: any = {}) => {
             const ids: number[] | undefined = args.where?.id?.in;
-            return (tables[name] ?? []).filter((r) => !ids || ids.includes(r.id));
+            const w = args.where ?? {};
+            return (tables[name] ?? []).filter((r) =>
+                (!ids || ids.includes(r.id)) &&
+                (!w.nombre_tabla || r.nombre_tabla === w.nombre_tabla) &&
+                (!w.registro_id?.in || w.registro_id.in.includes(r.registro_id)) &&
+                (!w.cambios?.contains || String(r.cambios).includes(w.cambios.contains)));
         },
     }),
 }) as any;
@@ -79,6 +91,16 @@ describe("actividades: mapeo", () => {
         assert.deepEqual([o.plazas, o.marcadas], [2, 1]);
         assert.equal(JSON.stringify(o).includes('"nombre":"x"'), false);
     });
+    it("trae las 11 columnas estándar", () => {
+        const n = { empresa: new Map([[1, "G - Gonzalez"]]), cliente: new Map([[5, "Cliente 5"]]), division: new Map([[9, "Norte"]]), contrato: new Map([[20, "C-20 - Contrato"]]), corpo: new Map([[30, "S1 - Sede"]]) };
+        const a = act();
+        const aud = { creado: "2026-09-01T10:00:00", creado_por: "Ana Soto", modificado: "2026-09-03T11:30:00", modificado_por: "Beto Mora" };
+        const o = mapActividadPuestoRow(a, a.e_actividades_puesto[0], { puesto: 40, corpo: 30, contrato: 20, cliente: 5, empresa: 1, division: 9 }, n, new Map(), aud);
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"]) assert.ok(k in o, k);
+        assert.deepEqual([o.id, o.creado, o.creado_por, o.modificado, o.modificado_por], [100, "2026-09-01T10:00:00", "Ana Soto", "2026-09-03T11:30:00", "Beto Mora"]);
+        const sin = mapActividadPuestoRow(a, a.e_actividades_puesto[0], undefined, n);
+        assert.deepEqual([sin.creado, sin.creado_por, sin.modificado, sin.modificado_por], [null, null, null, null]);
+    });
     it("una actividad sin puestos sale sin ubicación y con nulos", () => {
         const o = mapActividadPuestoRow(act({ tipo_turno: null, descripcion_actividad: null, e_actividades_puesto: [] }), null, undefined, { empresa: new Map(), cliente: new Map(), division: new Map(), contrato: new Map(), corpo: new Map() });
         assert.equal(o.id, 1);
@@ -97,6 +119,15 @@ describe("actividades: periodo y alcance", () => {
         assert.deepEqual([r41.cliente, r41.division, r41.contrato, r41.sucursal], ["Cliente 6", null, "Otro", "Otra"]);
         assert.equal(r40.ejecutivo_cuenta, "Rosa Vega"); // ejecutivo de la sucursal, en lote
         assert.equal(r41.ejecutivo_cuenta, null);
+    });
+    it("auditoría: alta y última modificación del historial (por lote), null si no hay", async () => {
+        const out = await buildActividadesRows(db, acts, "2026-09-01", "2026-10-01", null);
+        const r40 = out.find((r) => r.id === 100)!;
+        assert.deepEqual([r40.creado, r40.creado_por, r40.modificado, r40.modificado_por], ["2026-09-01T10:00:00", "Ana Soto", "2026-09-03T11:30:00", "Beto Mora"]);
+        const r101 = out.find((r) => r.id === 101)!; // misma actividad, otro puesto: mismo historial
+        assert.deepEqual([r101.creado_por, r101.modificado_por], ["Ana Soto", "Beto Mora"]);
+        const sinAlta = out.find((r) => r.id === 3)!; // actividad 3: solo un cambio posterior, sin alta
+        assert.deepEqual([sinAlta.creado, sinAlta.creado_por, sinAlta.modificado, sinAlta.modificado_por], [null, null, "2026-09-04T08:00:00", "Beto Mora"]);
     });
     it("con alcance: solo los puestos dentro; las actividades sin puestos quedan fuera; vacío no ve nada", async () => {
         const one = (nivel: any, id: number) => buildActividadesRows(db, acts, "2026-09-01", "2026-10-01", [{ nivel, id }]);

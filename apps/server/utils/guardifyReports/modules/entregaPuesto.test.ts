@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { entregaPuesto, filterEntregasByScope, mapEntregaPuestoRow, mapEntregasConExtras } from "./entregaPuesto";
+import { entregaPuesto, entregaUbicacionIds, filterEntregasByScope, mapEntregaPuestoRow, mapEntregasConExtras } from "./entregaPuesto";
 
 const raw = (o: Record<string, unknown> = {}) => ({
     id: 3, created_at: new Date("2026-09-22T06:10:00Z"),
     cliente_id: 4, corpo_id: 55, puesto_id: 140, empresa_id_resolved: 9,
-    empresa_nombre: "9 — Seguridad SA", cliente_nombre: "Cliente Uno", division_nombre: "Seguridad", contrato_nombre: "C-31 — Contrato", corpo_nombre: "55 — Sede", puesto_nombre: "P140 — Portón",
     e_estructura_sucursal: { contrato_id: 31, e_estructura_contrato: { division_id: 2 } },
     oficial_entrega: "Ana Soto", fecha_entrada_entrega: new Date("2026-09-21T00:00:00Z"), hora_entrada_entrega: new Date("1970-01-01T18:00:00Z"),
     fecha_salida_entrega: new Date("2026-09-22T00:00:00Z"), hora_salida_entrega: new Date("1970-01-01T06:00:00Z"), turno_entrega: "N",
@@ -29,8 +28,6 @@ describe("entrega de puesto: mapeo", () => {
         assert.equal(o.turno_recibe, "Diurno");
         assert.equal(o.articulos, 3);
         assert.equal(o.articulos_con_novedad, 2);
-        assert.equal(o.division, "Seguridad");
-        assert.equal(o.sucursal, "55 — Sede");
         assert.equal((o.observaciones as string).length, 500);
     });
     it("no expone firmas, ids de marca ni el detalle de los artículos", () => {
@@ -40,7 +37,7 @@ describe("entrega de puesto: mapeo", () => {
         assert.deepEqual(Object.keys(o).filter((k) => k.includes("marca") || k.includes("firma")), []);
     });
     it("campos opcionales vacíos, artículos rotos y ubicaciones sin resolver dan nulos", () => {
-        const o = mapEntregaPuestoRow(raw({ oficial_entrega: null, fecha_entrada_entrega: null, hora_entrada_entrega: null, fecha_salida_entrega: new Date("2026-09-22T00:00:00Z"), hora_salida_entrega: null, turno_entrega: null, articulos_puesto: "{roto", observaciones: "", empresa_id_resolved: 0, empresa_nombre: "", e_estructura_sucursal: null, division_nombre: "" }));
+        const o = mapEntregaPuestoRow(raw({ oficial_entrega: null, fecha_entrada_entrega: null, hora_entrada_entrega: null, fecha_salida_entrega: new Date("2026-09-22T00:00:00Z"), hora_salida_entrega: null, turno_entrega: null, articulos_puesto: "{roto", observaciones: "", empresa_id_resolved: 0, e_estructura_sucursal: null }));
         assert.equal(o.oficial_entrega, null);
         assert.equal(o.entrada_entrega, null);
         assert.equal(o.salida_entrega, "2026-09-22T00:00:00"); // hay fecha pero no hora
@@ -50,6 +47,7 @@ describe("entrega de puesto: mapeo", () => {
         assert.equal(o.observaciones, null);
         assert.equal(o.empresa, null);
         assert.equal(o.division, null);
+        assert.deepEqual(entregaUbicacionIds(raw({ empresa_id_resolved: 0, e_estructura_sucursal: null })), { empresa: 0, cliente: 4, division: undefined, contrato: undefined, corpo: 55, puesto: 140 });
     });
     it("el módulo declara columnas de búsqueda, filtro y orden que existen en la fila", () => {
         const cols = Object.keys(mapEntregaPuestoRow(raw()));
@@ -58,23 +56,44 @@ describe("entrega de puesto: mapeo", () => {
 });
 
 describe("entrega de puesto: columnas para filtros", () => {
-    it("trae ejecutivo de cuenta y usuario que registró al final de la fila", () => {
-        const o = mapEntregaPuestoRow(raw(), { ejecutivo: "Eva Rojas", usuario: "Luis Mora" });
+    it("trae ejecutivo de cuenta y quien lo creó al final de la fila", () => {
+        const o = mapEntregaPuestoRow(raw(), { ejecutivo: "Eva Rojas", creadoPor: "Luis Mora" });
         assert.equal(o.ejecutivo_cuenta, "Eva Rojas");
-        assert.equal(o.usuario_inserta, "Luis Mora");
-        assert.deepEqual(Object.keys(o).slice(-3), ["observaciones", "ejecutivo_cuenta", "usuario_inserta"]);
-        assert.equal(mapEntregaPuestoRow(raw()).usuario_inserta, null);
+        assert.equal(o.creado_por, "Luis Mora");
+        assert.equal(Object.keys(o).at(-1), "ejecutivo_cuenta");
+        assert.equal("usuario_inserta" in o, false);
+        assert.equal(mapEntregaPuestoRow(raw()).creado_por, null);
     });
-    it("carga ejecutivos y nombres de quien registró por lote", async () => {
-        const table = (rows: any[]) => ({ findMany: async (a: any) => rows.filter((r) => !a?.where?.id?.in || a.where.id.in.includes(r.id)) });
+    it("lleva siempre las 11 columnas estándar; modificado y modificado_por salen vacíos (la tabla no los guarda)", () => {
+        const ubic = { empresa: "9 - Seguridad SA", cliente: "Cliente Uno", division: "Seguridad", contrato: "C-31 - Contrato", sucursal: "55 - Sede", puesto: "P140 - Portón" };
+        const o = mapEntregaPuestoRow(raw(), { ubic, creadoPor: "Luis Mora" });
+        assert.deepEqual(
+            ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"].map((k) => o[k]),
+            ["9 - Seguridad SA", "Cliente Uno", "Seguridad", "C-31 - Contrato", "55 - Sede", "P140 - Portón", 3, "2026-09-22T06:10:00", "Luis Mora", null, null],
+        );
+        const v = mapEntregaPuestoRow(raw({ created_at: null }));
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "creado_por", "modificado", "modificado_por"]) assert.equal(v[k], null, k);
+    });
+    it("carga ubicación («código - nombre»), ejecutivos y nombres de quien registró por lote", async () => {
+        const calls: string[] = [];
+        const table = (name: string, rows: any[]) => ({ findMany: async (a: any) => { calls.push(name); return rows.filter((r) => !a?.where?.id?.in || a.where.id.in.includes(r.id)); } });
         const db: any = {
-            e_estructura_sucursal: table([{ id: 55, ejecutivoCuenta_id: 10 }]),
-            n_ejecutivo_cuenta: table([{ id: 10, nombre: "Eva Rojas" }]),
-            c_empleado: table([{ id: 7, nombre: "Luis", primer_apellido: "Mora", segundo_apellido: null }]),
+            e_estructura_empresa: table("e_estructura_empresa", [{ id: 9, codigo: "9", nombre: "Seguridad SA" }]),
+            e_estructura_cliente: table("e_estructura_cliente", [{ id: 4, nombre: "Cliente Uno" }]),
+            n_division: table("n_division", [{ id: 2, nombre: "Seguridad" }]),
+            e_estructura_contrato: table("e_estructura_contrato", [{ id: 31, nro_contrato: "C-31", nombre: "Contrato" }]),
+            e_estructura_sucursal: table("e_estructura_sucursal", [{ id: 55, nro_sucursal: "55", nombre: "Sede", ejecutivoCuenta_id: 10 }]),
+            e_estructura_puesto: table("e_estructura_puesto", [{ id: 140, codigo: "P140", nombre: "Portón" }]),
+            n_ejecutivo_cuenta: table("n_ejecutivo_cuenta", [{ id: 10, nombre: "Eva Rojas" }]),
+            c_empleado: table("c_empleado", [{ id: 7, nombre: "Luis", primer_apellido: "Mora", segundo_apellido: null }]),
         };
-        const out = await mapEntregasConExtras(db, [raw({ id: 1 }), raw({ id: 2, corpo_id: 56, created_by: 99 })]);
+        const out = await mapEntregasConExtras(db, [raw({ id: 1 }), raw({ id: 2, corpo_id: 56, created_by: 99, e_estructura_sucursal: { contrato_id: 99, e_estructura_contrato: { division_id: 2 } } })]);
         assert.deepEqual(out.map((o) => o.ejecutivo_cuenta), ["Eva Rojas", null]);
-        assert.deepEqual(out.map((o) => o.usuario_inserta), ["Luis Mora", null]);
+        assert.deepEqual(out.map((o) => o.creado_por), ["Luis Mora", null]);
+        assert.deepEqual(["empresa", "cliente", "division", "contrato", "sucursal", "puesto"].map((k) => out[0]![k]), ["9 - Seguridad SA", "Cliente Uno", "Seguridad", "C-31 - Contrato", "55 - Sede", "P140 - Portón"]);
+        assert.deepEqual(["contrato", "sucursal", "division"].map((k) => out[1]![k]), [null, null, "Seguridad"]);
+        assert.equal(calls.filter((c) => c === "e_estructura_empresa").length, 1);
+        assert.equal(calls.filter((c) => c === "n_ejecutivo_cuenta").length, 1);
     });
     it("las columnas de fecha y hora de quien entrega y recibe son fecha-hora (para los filtros de rango)", () => {
         const o = mapEntregaPuestoRow(raw());

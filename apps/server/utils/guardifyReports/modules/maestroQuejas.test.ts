@@ -30,6 +30,17 @@ describe("maestro de quejas: mapeo", () => {
         const sin = mapMaestroQuejaRow({ ...raw, division_nombre: "0" }, { division: "Seguridad" });
         assert.deepEqual([sin.division, mapMaestroQuejaRow(raw).ejecutivo_cuenta], ["Seguridad", null]);
     });
+    it("lleva las 11 columnas estándar; `modificado` y `modificado_por` salen null si la queja nunca se editó", () => {
+        const o = mapMaestroQuejaRow(raw);
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"]) assert.ok(k in o, k);
+        assert.deepEqual([o.id, o.creado, o.creado_por, o.modificado, o.modificado_por], [40, "2026-09-15T10:00:00", "11 - Carla Soto", null, null]);
+        const m = mapMaestroQuejaRow(raw, { modificacion: { cuando: "2026-09-16T08:00:00", quien: "12 - Luis Mora" } });
+        assert.deepEqual([m.modificado, m.modificado_por], ["2026-09-16T08:00:00", "12 - Luis Mora"]);
+    });
+    it("un nivel sin resolver (id 0 o nombre igual al id) queda null", () => {
+        const o = mapMaestroQuejaRow({ ...raw, empresa_id: 0, empresa_nombre: "0", puesto_id: 6, puesto_nombre: "6" });
+        assert.deepEqual([o.empresa, o.puesto], [null, null]);
+    });
     it("nunca expone la firma", () => {
         const s = JSON.stringify(mapMaestroQuejaRow(raw));
         assert.equal(s.includes("base64"), false);
@@ -46,13 +57,20 @@ describe("maestro de quejas: carga y alcance", () => {
     let seen: any;
     const query = async (_db: any, filters: any, orderKey: string) => { seen = { filters, orderKey }; return data; };
     const tables: Record<string, any[]> = {
+        c_cambios_apps_modules: [
+            { id: 1, nombre_tabla: "c_maestro_quejas", registro_id: 1, created_by: 11, created_at: new Date("2026-09-16T08:00:00Z"), cambios: "[{\"prop\":\"__created__\"}]" },
+            { id: 2, nombre_tabla: "c_maestro_quejas", registro_id: 1, created_by: 12, created_at: new Date("2026-09-17T09:30:00Z"), cambios: "[{\"prop\":\"estado\"}]" },
+            { id: 3, nombre_tabla: "c_maestro_quejas", registro_id: 1, created_by: 11, created_at: new Date("2026-09-18T10:00:00Z"), cambios: "[{\"prop\":\"motivo_queja\"}]" },
+            { id: 4, nombre_tabla: "c_otra_tabla", registro_id: 2, created_by: 12, created_at: new Date("2026-09-19T10:00:00Z"), cambios: "[]" },
+        ],
+        c_empleado: [{ id: 11, codigo: "E11", nombre: "Carla", primer_apellido: "Soto", segundo_apellido: null }],
         e_estructura_sucursal: [{ id: 5, ejecutivoCuenta_id: 70 }],
         n_ejecutivo_cuenta: [{ id: 70, nombre: "Luis Mora" }],
         e_estructura_contrato: [{ id: 4, division_id: 30 }, { id: 9, division_id: 30 }],
         n_division: [{ id: 30, nombre: "Seguridad" }],
     };
     const calls: string[] = [];
-    const fakeDb = new Proxy({}, { get: (_t, name: string) => ({ findMany: async (a: any) => { calls.push(name); const ids = a?.where?.id?.in ?? []; return (tables[name] ?? []).filter((x) => ids.includes(x.id)); } }) }) as any;
+    const fakeDb = new Proxy({}, { get: (_t, name: string) => ({ findMany: async (a: any) => { calls.push(name); const w = a?.where ?? {}; const ids = w.id?.in; const regs = w.registro_id?.in; return (tables[name] ?? []).filter((x) => (!ids || ids.includes(x.id)) && (!regs || regs.includes(x.registro_id)) && (!w.nombre_tabla || x.nombre_tabla === w.nombre_tabla) && !(w.NOT?.cambios?.contains && String(x.cambios ?? "").includes(w.NOT.cambios.contains))); } }) }) as any;
     const params = (extra: Record<string, string> = {}) => parseReportParams(new URLSearchParams({ from: "2026-09-01", to: "2026-10-01", ...extra }));
     it("pide el periodo [from, to) con límite inclusivo al último día", async () => {
         await loadMaestroQuejas(fakeDb, params(), query);
@@ -68,7 +86,17 @@ describe("maestro de quejas: carga y alcance", () => {
         calls.length = 0;
         const rows = await loadMaestroQuejas(fakeDb, params(), async () => [{ ...raw, id: 1 }, { ...raw, id: 2, corpo_id: 99, division_nombre: "0" }, { ...raw, id: 3, division_nombre: "0" }]);
         assert.deepEqual(rows.map((r) => [r.ejecutivo_cuenta, r.division]), [["Luis Mora", "División"], [null, "Seguridad"], ["Luis Mora", "Seguridad"]]);
-        assert.deepEqual(calls.sort(), ["e_estructura_contrato", "e_estructura_sucursal", "n_division", "n_ejecutivo_cuenta"]);
+        assert.deepEqual([...new Set(calls)].sort(), ["c_cambios_apps_modules", "c_empleado", "e_estructura_contrato", "e_estructura_sucursal", "n_division", "n_ejecutivo_cuenta"]);
+        assert.equal(calls.filter((c) => c === "c_cambios_apps_modules").length, 1);
+    });
+    it("modificado y modificado_por salen del último cambio que no es el alta; sin cambios quedan null", async () => {
+        const rows = await loadMaestroQuejas(fakeDb, params(), async () => [{ ...raw, id: 1 }, { ...raw, id: 2 }]);
+        assert.deepEqual(rows.map((r) => [r.modificado, r.modificado_por]), [["2026-09-18T10:00:00", "E11 - Carla Soto"], [null, null]]);
+    });
+    it("si el historial no se puede leer, el reporte sigue con las columnas en null", async () => {
+        const roto = new Proxy(fakeDb, { get: (t, name: string) => (name === "c_cambios_apps_modules" ? { findMany: async () => { throw new Error("sin tabla"); } } : t[name]) });
+        const rows = await loadMaestroQuejas(roto, params(), async () => [{ ...raw, id: 1 }]);
+        assert.deepEqual([rows[0]!.modificado, rows[0]!.modificado_por], [null, null]);
     });
     it("declara alcance y sus claves existen en la fila", () => {
         assert.equal(maestroQuejas.supportsScope, true);

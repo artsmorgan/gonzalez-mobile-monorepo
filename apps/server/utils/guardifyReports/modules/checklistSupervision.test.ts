@@ -47,13 +47,21 @@ const tables: Record<string, any[]> = {
     e_estructura_sucursal: [{ id: 10, nombre: "Central", nro_sucursal: "S1" }, { id: 11, nombre: "Norte", nro_sucursal: null }],
     e_estructura_puesto: [{ id: 1, nombre: "Entrada", codigo: "P1" }, { id: 2, nombre: "Garita", codigo: null }],
     n_ejecutivo_cuenta: [{ id: 5, nombre: "Laura Vega" }],
-    c_empleado: [{ id: 50, nombre: "Ana", primer_apellido: "Soto", segundo_apellido: null }],
+    c_empleado: [{ id: 50, nombre: "Ana", primer_apellido: "Soto", segundo_apellido: null }, { id: 51, nombre: "Luis", primer_apellido: "Mora", segundo_apellido: null }],
+    c_cambios_apps_modules: [
+        { id: 30, nombre_tabla: "c_checklist_supervision", registro_id: 3, created_by: 50, created_at: new Date("2026-09-10T09:40:00Z") },
+        { id: 31, nombre_tabla: "c_checklist_supervision", registro_id: 3, created_by: 51, created_at: new Date("2026-09-11T07:05:00Z") },
+        { id: 32, nombre_tabla: "c_checklist_supervision", registro_id: 2, created_by: 50, created_at: new Date("2026-09-30T09:40:00Z") }, // solo el alta
+        { id: 33, nombre_tabla: "c_apertura_cierre_puesto", registro_id: 2, created_by: 51, created_at: new Date("2026-10-02T09:40:00Z") }, // otra tabla: no cuenta
+    ],
 };
 const db = new Proxy({}, {
     get: (_t, name: string) => ({
         findMany: async (args: any = {}) => {
             const ids: number[] | undefined = args?.where?.id?.in;
-            return (tables[name] ?? []).filter((r) => !ids || ids.includes(r.id));
+            const regs: number[] | undefined = args?.where?.registro_id?.in;
+            const tabla: string | undefined = args?.where?.nombre_tabla;
+            return (tables[name] ?? []).filter((r) => (!ids || ids.includes(r.id)) && (!regs || regs.includes(r.registro_id)) && (!tabla || r.nombre_tabla === tabla));
         },
     }),
 }) as any;
@@ -61,11 +69,22 @@ const P = { from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: n
 
 describe("checklist de supervisión", () => {
     it("mapea solo conteos de la evaluación y los artículos; nunca respuestas, fotos ni firmas", () => {
-        const o = mapChecklistSupervisionRow({ ...base, id: 3, fecha: new Date("2026-09-10T08:00:00Z"), created_at: new Date("2026-09-10T09:40:00Z"), empresa_nombre: "G - Gonzalez", cliente_nombre: "Cliente 7", division_nombre: "Seguridad", contrato_nombre: "C1 - A", corpo_nombre: "S1 - B", puesto_nombre: "P1 - Entrada", empleado_display: "E9 - Pedro Mora", ejecutivo_cuenta_nombre: "Laura Vega", hora_inicio_txt: "08:00", hora_fin_txt: "09:30" }, { nombre: "Ana", primer_apellido: "Soto" });
+        const o = mapChecklistSupervisionRow({ ...base, id: 3, fecha: new Date("2026-09-10T08:00:00Z"), created_at: new Date("2026-09-10T09:40:00Z"), empresa_nombre: "G - Gonzalez", cliente_nombre: "Cliente 7", division_nombre: "Seguridad", contrato_nombre: "C1 - A", corpo_nombre: "S1 - B", puesto_nombre: "P1 - Entrada", empleado_display: "E9 - Pedro Mora", ejecutivo_cuenta_nombre: "Laura Vega", hora_inicio_txt: "08:00", hora_fin_txt: "09:30" }, { nombre: "Ana", primer_apellido: "Soto" }, { modificado: "2026-09-11T07:05:00", modificado_por: "Luis Mora" });
+        assert.deepEqual([o.modificado, o.modificado_por], ["2026-09-11T07:05:00", "Luis Mora"]);
         assert.deepEqual([o.secciones, o.preguntas, o.fotos, o.articulos, o.articulos_con_diferencia], [2, 3, 3, 3, 1]);
         assert.deepEqual([o.empleado, o.ejecutivo_cuenta, o.hora_inicio, o.hora_fin, o.creado_por, o.fecha, o.creado], ["E9 - Pedro Mora", "Laura Vega", "08:00", "09:30", "Ana Soto", "2026-09-10T08:00:00", "2026-09-10T09:40:00"]);
         const s = JSON.stringify(o);
         for (const secreto of ["base64", "TEXTO-LIBRE-SECRETO", "a.jpg", "SSSS", "RRRR"]) assert.equal(s.includes(secreto), false, secreto);
+    });
+    it("lleva siempre las 11 columnas estándar (jerarquía y auditoría)", () => {
+        const full = { ...base, id: 3, fecha: new Date("2026-09-10T08:00:00Z"), created_at: new Date("2026-09-10T09:40:00Z"), empresa_nombre: "G - Gonzalez", cliente_nombre: "Cliente 7", division_nombre: "Seguridad", contrato_nombre: "C1 - A", corpo_nombre: "S1 - B", puesto_nombre: "P1 - Entrada" };
+        const o = mapChecklistSupervisionRow(full, { nombre: "Ana", primer_apellido: "Soto" }, { modificado: "2026-09-11T07:05:00", modificado_por: "Luis Mora" });
+        assert.deepEqual(
+            ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"].map((k) => o[k]),
+            ["G - Gonzalez", "Cliente 7", "Seguridad", "C1 - A", "S1 - B", "P1 - Entrada", 3, "2026-09-10T09:40:00", "Ana Soto", "2026-09-11T07:05:00", "Luis Mora"],
+        );
+        const v = mapChecklistSupervisionRow({ id: 9 });
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "creado_por", "modificado", "modificado_por"]) assert.equal(v[k], null, k);
     });
     it("tolera nulos, JSON ilegible y horas como Date", () => {
         const o = mapChecklistSupervisionRow({ id: 9, fecha: null, created_at: null, evaluacion: "no es json", articulos_puesto: null, hora_inicio: new Date("1970-01-01T07:05:00Z"), hora_fin: null, empresa_nombre: "0", empresa_id: 0 });
@@ -78,6 +97,7 @@ describe("checklist de supervisión", () => {
         assert.deepEqual([r3.empresa, r3.contrato, r3.sucursal, r3.puesto, r3.ejecutivo_cuenta, r3.creado_por, r3.empleado], ["G - Gonzalez", "C1 - Contrato A", "S1 - Central", "P1 - Entrada", "Laura Vega", "Ana Soto", "E9 - Pedro Mora"]);
         const r2 = rows.find((r) => r.id === 2)!;
         assert.deepEqual([r2.empleado, r2.ejecutivo_cuenta, r2.secciones, r2.articulos], [null, null, 0, 0]);
+        assert.deepEqual([r3.modificado, r3.modificado_por, r2.modificado, r2.modificado_por], ["2026-09-11T07:05:00", "Luis Mora", null, null]);
         assert.equal(JSON.stringify(rows).includes("base64"), false);
     });
     it("alcance: filtra por los ids de la fila", async () => {

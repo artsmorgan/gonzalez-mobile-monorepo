@@ -32,32 +32,47 @@ function parseArray(raw: unknown): any[] {
     }
 }
 
-/** Quién registró cada fila: el empleado del PRIMER cambio guardado de esa tabla y registro (`__created__`), como lo muestra la app. Un solo bloque de consultas por 1000 filas. */
-async function creadoresPorCambio(db: any, tabla: string, ids: unknown[]): Promise<Map<number, number>> {
+/**
+ * Historial de cada registro en `c_cambios_apps_modules` (una sola consulta por bloque de 1000 ids, solo id, registro, fecha y autor):
+ * la primera fila es el alta (`__created__`) y la última, si hay más de una, es la última modificación.
+ */
+type Historial = { creadoAt: unknown; creadoBy: number | null; modAt: unknown; modBy: number | null };
+async function historialPorRegistro(db: any, tabla: string, ids: unknown[]): Promise<Map<number, Historial>> {
     const all = [...new Set(ids.map(Number).filter((n) => Number.isFinite(n) && n > 0))];
-    const first = new Map<number, { id: number; by: number }>();
+    const first = new Map<number, any>();
+    const last = new Map<number, any>();
     for (let i = 0; i < all.length; i += 1000) {
         const cambios = await db.c_cambios_apps_modules.findMany({
             where: { nombre_tabla: tabla, registro_id: { in: all.slice(i, i + 1000) } },
-            select: { id: true, registro_id: true, created_by: true },
+            select: { id: true, registro_id: true, created_at: true, created_by: true },
             orderBy: { id: "asc" },
         });
         for (const c of cambios) {
-            const prev = first.get(Number(c.registro_id));
-            if (!prev || Number(c.id) < prev.id) first.set(Number(c.registro_id), { id: Number(c.id), by: Number(c.created_by) });
+            const k = Number(c.registro_id);
+            const f = first.get(k);
+            if (!f || Number(c.id) < Number(f.id)) first.set(k, c);
+            const l = last.get(k);
+            if (!l || Number(c.id) > Number(l.id)) last.set(k, c);
         }
     }
-    return new Map([...first].filter(([, v]) => v.by > 0).map(([k, v]) => [k, v.by]));
+    const by = (c: any): number | null => (Number(c?.created_by) > 0 ? Number(c.created_by) : null);
+    const out = new Map<number, Historial>();
+    for (const [k, f] of first) {
+        const l = last.get(k);
+        const modificado = !!l && Number(l.id) !== Number(f.id);
+        out.set(k, { creadoAt: f.created_at ?? null, creadoBy: by(f), modAt: modificado ? l.created_at ?? null : null, modBy: modificado ? by(l) : null });
+    }
+    return out;
 }
 
 /** Datos que no vienen en la fila de la consulta y se cargan en lote (ver `loadExtras`). */
-export type VulnerabilidadExtras = { ejecutivo_cuenta?: string | null; division?: string | null; usuario_inserta?: string | null };
+export type VulnerabilidadExtras = { ejecutivo_cuenta?: string | null; division?: string | null; creado?: string | null; creado_por?: string | null; modificado?: string | null; modificado_por?: string | null };
 
 /**
  * Fila de `queryVulnerabilidadRows` (ya con nombres de estructura) → fila plana.
  * Nunca se exponen las firmas, el `enlace` ni las fotos; de la boleta solo se informa el nivel de vulnerabilidad,
  * cuántas secciones tiene y sus métricas.
- * `extras`: ejecutivo de cuenta de la sucursal, división (si el registro antiguo no la trae) y quién lo registró.
+ * `extras`: ejecutivo de cuenta de la sucursal, división (si el registro antiguo no la trae) y la auditoría (alta y última modificación: fecha y quién), que la tabla no guarda y sale de su historial de cambios.
  */
 export function mapVulnerabilidadRow(r: any, extras: VulnerabilidadExtras = {}): OutRow {
     const secciones = parseArray(r.boleta);
@@ -69,6 +84,10 @@ export function mapVulnerabilidadRow(r: any, extras: VulnerabilidadExtras = {}):
     return {
         id: Number(r.id),
         fecha: fmtDt(r.fecha),
+        creado: extras.creado ?? null,
+        creado_por: extras.creado_por ?? null,
+        modificado: extras.modificado ?? null,
+        modificado_por: extras.modificado_por ?? null,
         solicitante: txt(r.nombre_solicitante),
         nivel_vulnerabilidad: txt(pct?.vulnerabilityLevel),
         secciones: secciones.filter((s) => s?.key !== "porcentaje_vulnerabilidad").length,
@@ -81,7 +100,6 @@ export function mapVulnerabilidadRow(r: any, extras: VulnerabilidadExtras = {}):
         sucursal: nameOrNull(r.corpo_nombre, r.corpo_id),
         puesto: nameOrNull(r.puesto_nombre, r.puesto_id),
         ejecutivo_cuenta: extras.ejecutivo_cuenta ?? null,
-        usuario_inserta: extras.usuario_inserta ?? null,
     };
 }
 
@@ -104,31 +122,37 @@ export async function filterRowsByScope(db: any, rows: any[], scope: ScopeItem[]
     return rows.filter((r) => matchesScope(rowHierarchy(r, hier.get(Number(r.puesto_id))), scope));
 }
 
-/** Ejecutivo de cuenta (por la sucursal), división de los registros antiguos sin división (por el puesto) y quién registró cada boleta, en lote. */
+/** Ejecutivo de cuenta (por la sucursal), división de los registros antiguos sin división (por el puesto) y la auditoría (alta y última modificación) de cada boleta, en lote. */
 async function loadExtras(db: any, items: Array<{ r: any; h: Hierarchy }>): Promise<VulnerabilidadExtras[]> {
-    const [ejecutivos, divisiones, creadores] = await Promise.all([
+    const [ejecutivos, divisiones, historial] = await Promise.all([
         ejecutivoPorCorpo(db, items.map((x) => x.h.corpo)),
         findByIds<{ nombre: string | null }>(db, "n_division", items.filter((x) => !nameOrNull(x.r.division_nombre, x.r.division_id)).map((x) => x.h.division), { nombre: true }),
-        creadoresPorCambio(db, "c_boleta_apreciacion_vulnerabilidad", items.map((x) => x.r.id)),
+        historialPorRegistro(db, "c_boleta_apreciacion_vulnerabilidad", items.map((x) => x.r.id)),
     ]);
-    const nombres = await nombresEmpleado(db, [...creadores.values()]);
-    return items.map(({ r, h }) => ({
-        ejecutivo_cuenta: ejecutivos.get(Number(h.corpo)) ?? null,
-        division: txt(divisiones.get(Number(h.division))?.nombre),
-        usuario_inserta: nombres.get(creadores.get(Number(r.id)) ?? 0) ?? null,
-    }));
+    const nombres = await nombresEmpleado(db, [...historial.values()].flatMap((x) => [x.creadoBy, x.modBy]));
+    return items.map(({ r, h }) => {
+        const hist = historial.get(Number(r.id));
+        return {
+            ejecutivo_cuenta: ejecutivos.get(Number(h.corpo)) ?? null,
+            division: txt(divisiones.get(Number(h.division))?.nombre),
+            creado: fmtDt(hist?.creadoAt as any),
+            creado_por: nombres.get(hist?.creadoBy ?? 0) ?? null,
+            modificado: fmtDt(hist?.modAt as any),
+            modificado_por: nombres.get(hist?.modBy ?? 0) ?? null,
+        };
+    });
 }
 
 /**
  * Apreciación de vulnerabilidad (`c_boleta_apreciacion_vulnerabilidad`). Periodo por `fecha` de la boleta (la «Fecha» del Excel), como el filtro de la app.
- * La tabla no guarda quién la registró: «Usuario que lo registró» sale del primer cambio guardado (`c_cambios_apps_modules`, `__created__`), como lo muestra la app.
+ * La tabla no guarda `created_at`/`created_by` ni `updated_at`/`updated_by`: `creado`/`creado_por` salen del primer cambio guardado (`c_cambios_apps_modules`, `__created__`) y `modificado`/`modificado_por` del último, como lo muestra la app. `fecha` es la de la boleta.
  */
 export const apreciacionVulnerabilidad: GuardifyReportModule = {
     id: "apreciacion_vulnerabilidad",
     supportsScope: true,
-    searchKeys: ["solicitante", "puesto", "sucursal", "contrato", "cliente"],
-    filterKeys: ["nivel_vulnerabilidad", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "usuario_inserta"],
-    sortKeys: ["fecha", "solicitante", "nivel_vulnerabilidad", "secciones", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "usuario_inserta"],
+    searchKeys: ["solicitante", "puesto", "sucursal", "contrato", "cliente", "creado_por", "modificado_por"],
+    filterKeys: ["nivel_vulnerabilidad", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "creado", "creado_por", "modificado", "modificado_por"],
+    sortKeys: ["fecha", "creado", "creado_por", "modificado", "modificado_por", "solicitante", "nivel_vulnerabilidad", "secciones", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta"],
     defaultSort: "fecha",
     form: apreciacionVulnerabilidadForm,
     async load(db, p) {

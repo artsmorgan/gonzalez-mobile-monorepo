@@ -49,12 +49,19 @@ describe("incidentes: mapeo", () => {
 });
 
 describe("incidentes: columnas para filtros", () => {
-    it("trae quien registró al final de la fila; el ejecutivo de cuenta es el del propio incidente", () => {
+    it("trae quien registró (`creado_por`); el ejecutivo de cuenta es el del propio incidente", () => {
         const o = mapIncidenteRow(raw(), { usuario: "Luis Mora" });
-        assert.equal(o.usuario_inserta, "Luis Mora");
+        assert.equal(o.creado_por, "Luis Mora");
+        assert.equal("usuario_inserta" in o, false);
         assert.equal(o.ejecutivo_cuenta, "Eva");
-        assert.equal(Object.keys(o).at(-1), "usuario_inserta");
-        assert.equal(mapIncidenteRow(raw()).usuario_inserta, null);
+        assert.equal(mapIncidenteRow(raw()).creado_por, null);
+    });
+    it("lleva las 11 columnas estándar; `modificado` y `modificado_por` salen null (la tabla no los guarda)", () => {
+        const o = mapIncidenteRow(raw(), { usuario: "Luis Mora" });
+        const std = ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"];
+        for (const k of std) assert.ok(k in o, k);
+        assert.deepEqual([o.empresa, o.cliente, o.division, o.contrato, o.sucursal, o.puesto], ["9 - Seguridad SA", "Cliente Uno", "Seguridad", "C-31 - Contrato", "55 - Sede", "P140 - Portón"]);
+        assert.deepEqual([o.id, o.creado, o.creado_por, o.modificado, o.modificado_por], [7, "2026-09-10T14:30:00", "Luis Mora", null, null]);
     });
     it("usa la división del contrato solo cuando el incidente no la guardó", () => {
         assert.equal(mapIncidenteRow(raw({ division_id: 0, division_nombre: "0" }), { divisionContrato: "Aseo" }).division, "Aseo");
@@ -74,7 +81,7 @@ describe("incidentes: columnas para filtros", () => {
             n_division: table([{ id: 20, nombre: "Aseo" }]),
         };
         const out = await mapIncidentesConExtras(db, [raw({ id: 1 }), raw({ id: 2, division_id: 0, division_nombre: "0", created_by: 99 })]);
-        assert.deepEqual(out.map((o) => o.usuario_inserta), ["Luis Mora", null]);
+        assert.deepEqual(out.map((o) => o.creado_por), ["Luis Mora", null]);
         assert.deepEqual(out.map((o) => o.division), ["Seguridad", "Aseo"]);
     });
 });

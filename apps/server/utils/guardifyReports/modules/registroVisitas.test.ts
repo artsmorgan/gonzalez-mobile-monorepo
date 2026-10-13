@@ -16,13 +16,10 @@ const raw = {
     responsable_id: 20,
     c_empleado: { id: 20, codigo: "E-20", nombre: "Ana", primer_apellido: "Mora", segundo_apellido: "Solís" },
     empresa_id: 1, cliente_id: 5, division_id: 0, contrato_id: 2, corpo_id: 3, puesto_id: 7, puesto_salida_id: null,
-    empresa_nombre: "Empresa Uno",
-    division_nombre: "",
-    contrato_nombre: "CT-2 - Contrato Dos",
+    created_at: new Date("2026-09-10T08:20:00Z"),
+    updated_at: new Date("2026-09-10T09:00:00Z"),
     puesto_salida_nombre: "",
-    e_estructura_cliente: { id: 5, nombre: "Cliente Cinco" },
-    e_estructura_sucursal: { id: 3, nombre: "Sucursal Tres" },
-    e_estructura_puesto: { id: 7, nombre: "Recepción" },
+    ubicacion: { empresa: "1 - Empresa Uno", cliente: "Cliente Cinco", division: null, contrato: "CT-2 - Contrato Dos", sucursal: "S3 - Sucursal Tres", puesto: "P7 - Recepción" },
     e_activo_visitante: [{ id: 1 }, { id: 2 }],
     observaciones: "x".repeat(600),
     foto_cedula: "cedula.jpg",
@@ -39,11 +36,11 @@ describe("registro_visitas: mapeo", () => {
         assert.equal(o.funcionario, "No");
         assert.equal(o.depto_visita, "Contabilidad");
         assert.equal(o.autoriza_salida, null);
-        assert.equal(o.empresa, "Empresa Uno");
+        assert.equal(o.empresa, "1 - Empresa Uno");
         assert.equal(o.division, null);
         assert.equal(o.contrato, "CT-2 - Contrato Dos");
-        assert.equal(o.sucursal, "Sucursal Tres");
-        assert.equal(o.puesto, "Recepción");
+        assert.equal(o.sucursal, "S3 - Sucursal Tres");
+        assert.equal(o.puesto, "P7 - Recepción");
         assert.equal(o.puesto_salida, null);
         assert.equal(o.activos, 2);
         assert.equal((o.observaciones as string).length, 500);
@@ -53,15 +50,24 @@ describe("registro_visitas: mapeo", () => {
         assert.equal(mapRegistroVisitaRow({ ...raw, c_empleado: { ...raw.c_empleado, codigo: "" } }).responsable, "Ana Mora Solís");
         assert.equal(mapRegistroVisitaRow({ ...raw, c_empleado: undefined }).responsable, "Ana Mora Solís");
     });
-    it("columnas para filtros al final: ejecutivo_cuenta, usuario_inserta y la división del contrato", () => {
-        const o = mapRegistroVisitaRow({ ...raw, division_contrato: " Seguridad ", ejecutivo_cuenta_nombre: "Rosa Vega", usuario_inserta_nombre: "Ana Mora Solís" });
+    it("columnas para filtros al final: ejecutivo_cuenta, la división del contrato y las de auditoría", () => {
+        const o = mapRegistroVisitaRow({ ...raw, division_contrato: " Seguridad ", ejecutivo_cuenta_nombre: "Rosa Vega", creado_por_nombre: "Ana Mora Solís", modificado_por_nombre: "Luis Mena" });
         assert.equal(o.division, "Seguridad");
         assert.equal(o.ejecutivo_cuenta, "Rosa Vega");
-        assert.equal(o.usuario_inserta, "Ana Mora Solís");
-        assert.deepEqual(Object.keys(o).slice(-3), ["observaciones", "ejecutivo_cuenta", "usuario_inserta"]);
+        assert.deepEqual(Object.keys(o).slice(-4), ["ejecutivo_cuenta", "creado_por", "modificado", "modificado_por"]);
         const sin = mapRegistroVisitaRow(raw);
         assert.equal(sin.ejecutivo_cuenta, null);
-        assert.equal(sin.usuario_inserta, null);
+        assert.equal(sin.creado_por, null);
+        assert.equal(sin.modificado_por, null);
+        assert.ok(!("usuario_inserta" in sin));
+    });
+    it("columnas estándar: jerarquía (6) y auditoría (id, creado, creado_por, modificado, modificado_por)", () => {
+        const o = mapRegistroVisitaRow({ ...raw, creado_por_nombre: "Ana Mora Solís", modificado_por_nombre: "Luis Mena" });
+        assert.deepEqual([o.empresa, o.cliente, o.division, o.contrato, o.sucursal, o.puesto], ["1 - Empresa Uno", "Cliente Cinco", null, "CT-2 - Contrato Dos", "S3 - Sucursal Tres", "P7 - Recepción"]);
+        assert.deepEqual([o.id, o.creado, o.creado_por, o.modificado, o.modificado_por], [41, "2026-09-10T08:20:00", "Ana Mora Solís", "2026-09-10T09:00:00", "Luis Mena"]);
+        assert.equal(o.entrada, "2026-09-10T08:15:30"); // la fecha del hecho es otra columna
+        const vacia = mapRegistroVisitaRow({ id: 1 });
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "creado_por", "modificado", "modificado_por"]) assert.equal(vacia[k], null, k);
     });
     it("nunca expone foto de la cédula ni firma", () => {
         const o = mapRegistroVisitaRow(raw);
@@ -69,7 +75,7 @@ describe("registro_visitas: mapeo", () => {
         assert.deepEqual(Object.keys(o).filter((k) => /foto|firma/.test(k)), []);
     });
     it("el id de la estructura que la consulta usa de relleno cuenta como sin dato", () => {
-        const o = mapRegistroVisitaRow({ ...raw, empresa_nombre: "0", empresa_id: 0, e_estructura_puesto: null, e_activo_visitante: undefined });
+        const o = mapRegistroVisitaRow({ ...raw, ubicacion: { empresa: null, puesto: null }, e_activo_visitante: undefined });
         assert.equal(o.empresa, null);
         assert.equal(o.puesto, null);
         assert.equal(o.activos, 0);
@@ -84,22 +90,32 @@ describe("registro_visitas: enriquecimiento por lote", () => {
     let calls = 0;
     const table = (rows: any[]) => ({ findMany: async (a: any) => { calls++; return rows.filter((r) => a.where.id.in.includes(r.id)); } });
     const db: any = {
-        e_estructura_sucursal: table([{ id: 3, ejecutivoCuenta_id: 10 }]),
+        e_estructura_empresa: table([{ id: 1, codigo: "9", nombre: "Emp" }]),
+        e_estructura_cliente: table([{ id: 5, nombre: "Cli" }]),
+        e_estructura_sucursal: table([{ id: 3, ejecutivoCuenta_id: 10, nro_sucursal: "S3", nombre: "Suc" }]),
+        e_estructura_puesto: table([{ id: 7, codigo: "P7", nombre: "Recepción" }]),
         n_ejecutivo_cuenta: table([{ id: 10, nombre: "Rosa Vega" }]),
-        e_estructura_contrato: table([{ id: 2, division_id: 20 }]),
+        e_estructura_contrato: table([{ id: 2, division_id: 20, nro_contrato: "CT-2", nombre: "Dos" }]),
         n_division: table([{ id: 20, nombre: "Seguridad" }]),
-        c_empleado: table([{ id: 20, nombre: "Ana", primer_apellido: "Mora", segundo_apellido: "Solís" }]),
+        c_empleado: table([{ id: 20, nombre: "Ana", primer_apellido: "Mora", segundo_apellido: "Solís" }, { id: 21, nombre: "Luis", primer_apellido: "Mena", segundo_apellido: null }]),
+        c_cambios_apps_modules: { findMany: async (a: any) => { calls++; return [
+            { id: 1, nombre_tabla: "e_registro_personas", registro_id: 41, created_by: 20, created_at: new Date("2026-09-10T08:20:00Z") },
+            { id: 2, nombre_tabla: "e_registro_personas", registro_id: 41, created_by: 21, created_at: new Date("2026-09-10T09:00:00Z") },
+        ].filter((c) => c.nombre_tabla === a.where.nombre_tabla && a.where.registro_id.in.includes(c.registro_id)); } },
     };
-    it("trae ejecutivo, división y usuario en lote (no por fila) y los mapea", async () => {
+    it("trae ubicación, ejecutivo, división, creador y último cambio en lote (no por fila) y los mapea", async () => {
         const rows = [raw, { ...raw, id: 42 }, { ...raw, id: 43, corpo_id: 0, contrato_id: 0, responsable_id: 0 }];
-        const out = (await enrichVisitas(db, rows)).map(mapRegistroVisitaRow);
-        assert.equal(calls, 5); // sucursal, ejecutivo, contrato, división y empleado: una consulta cada uno, no una por fila
+        const out = (await enrichVisitas(db, rows.map(({ ubicacion, ...r }) => r))).map(mapRegistroVisitaRow);
+        assert.equal(calls, 11); // cambios (1), ejecutivo (2), división (2), empleado (1) y ubicación (5: la división vale 0 y no se consulta): una consulta por tabla, no por fila
         assert.equal(out[0].ejecutivo_cuenta, "Rosa Vega");
         assert.equal(out[0].division, "Seguridad");
-        assert.equal(out[1].usuario_inserta, "Ana Mora Solís");
+        assert.deepEqual([out[0].empresa, out[0].cliente, out[0].contrato, out[0].sucursal, out[0].puesto], ["9 - Emp", "Cli", "CT-2 - Dos", "S3 - Suc", "P7 - Recepción"]);
+        assert.deepEqual([out[0].creado_por, out[0].modificado_por], ["Ana Mora Solís", "Luis Mena"]);
+        assert.equal(out[1].creado_por, "Ana Mora Solís");
+        assert.deepEqual([out[1].modificado, out[1].modificado_por], ["2026-09-10T09:00:00", null]); // `modificado` es `updated_at` del registro; el cambio del historial es solo del 41
         assert.equal(out[2].ejecutivo_cuenta, null);
-        assert.equal(out[2].division, null);
-        assert.equal(out[2].usuario_inserta, null);
+        assert.equal(out[2].creado_por, null);
+        assert.equal(out[2].sucursal, null);
     });
 });
 

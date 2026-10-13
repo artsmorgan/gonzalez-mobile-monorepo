@@ -27,6 +27,14 @@ describe("llaves: mapeo", () => {
         assert.equal((o.observaciones as string).length, 500);
         assert.equal(o.creado_por, "Carla Soto Ruiz");
     });
+    it("columnas estándar: jerarquía (6) y auditoría (id, creado, creado_por, modificado, modificado_por)", () => {
+        const o = mapLlaveRow(raw, { nombre: "Carla", primer_apellido: "Soto" }, { modificado: "2026-09-12T10:00:00", modificadoPor: " Luis Mora " });
+        assert.deepEqual([o.id, o.creado, o.creado_por, o.modificado, o.modificado_por], [21, "2026-09-10T15:30:00", "Carla Soto", "2026-09-12T10:00:00", "Luis Mora"]);
+        // la consulta rellena con el id cuando no encuentra el nivel: eso es «sin dato»
+        const sin = mapLlaveRow({ ...raw, empresa_nombre: "1", cliente_nombre: "2", division_nombre: "3", contrato_nombre: "4", corpo_nombre: "5", puesto_nombre: "6" });
+        assert.deepEqual([sin.empresa, sin.cliente, sin.division, sin.contrato, sin.sucursal, sin.puesto, sin.modificado, sin.modificado_por], [null, null, null, null, null, null, null, null]);
+        assert.ok(!("usuario_inserta" in o));
+    });
     it("agrega ejecutivo de cuenta y las personas de todos los movimientos", () => {
         const o = mapLlaveRow(raw, undefined, { ejecutivo: "Luis Mora", division: "Otra" });
         assert.equal(o.ejecutivo_cuenta, "Luis Mora");
@@ -44,7 +52,7 @@ describe("llaves: mapeo", () => {
     });
     it("tolera nulos", () => {
         const o = mapLlaveRow({ id: 1, created_at: null, numero_llave: null, lugar_abre: "", cantidad_copias: null, observaciones: null });
-        assert.deepEqual([o.creado, o.numero, o.lugar_abre, o.copias, o.llaveros, o.movimientos, o.ultimo_movimiento, o.ultima_recibe, o.creado_por], [null, null, null, null, null, 0, null, null, null]);
+        assert.deepEqual([o.creado, o.numero, o.lugar_abre, o.copias, o.llaveros, o.movimientos, o.ultimo_movimiento, o.ultima_recibe, o.creado_por, o.modificado, o.modificado_por], [null, null, null, null, null, 0, null, null, null, null, null]);
     });
 });
 
@@ -54,14 +62,22 @@ describe("llaves: carga y alcance", () => {
     let seen: any;
     const query = async (_db: any, filters: any, orderKey: string) => { seen = { filters, orderKey }; return data; };
     const tables: Record<string, any[]> = {
-        c_empleado: [{ id: 11, nombre: "Carla", primer_apellido: "Soto", segundo_apellido: null }],
+        c_empleado: [{ id: 11, nombre: "Carla", primer_apellido: "Soto", segundo_apellido: null }, { id: 12, nombre: "Luis", primer_apellido: "Mena", segundo_apellido: null }],
+        // historial: la llave 1 se creó y se editó (vale el último); la 3 no tiene cambios; un cambio de otra tabla con el mismo registro no cuenta
+        c_cambios_apps_modules: [
+            { id: 1, nombre_tabla: "e_llave", registro_id: 1, created_by: 11, created_at: new Date("2026-09-10T15:30:00Z") },
+            { id: 2, nombre_tabla: "e_llave", registro_id: 1, created_by: 12, created_at: new Date("2026-09-12T10:00:00Z") },
+            { id: 3, nombre_tabla: "e_movimiento_llave", registro_id: 2, created_by: 12, created_at: new Date("2026-09-13T10:00:00Z") },
+        ],
         e_estructura_sucursal: [{ id: 5, ejecutivoCuenta_id: 70 }, { id: 8, ejecutivoCuenta_id: null }],
         n_ejecutivo_cuenta: [{ id: 70, nombre: "Luis Mora" }],
         e_estructura_contrato: [{ id: 4, division_id: 30 }],
         n_division: [{ id: 30, nombre: "Seguridad" }],
     };
     const calls: string[] = [];
-    const db = new Proxy({}, { get: (_t, name: string) => ({ findMany: async (a: any) => { calls.push(name); const ids = a?.where?.id?.in ?? []; return (tables[name] ?? []).filter((x) => ids.includes(x.id)); } }) }) as any;
+    const db = new Proxy({}, { get: (_t, name: string) => ({ findMany: async (a: any) => { calls.push(name);
+        if (name === "c_cambios_apps_modules") return tables[name]!.filter((x) => x.nombre_tabla === a.where.nombre_tabla && a.where.registro_id.in.includes(x.registro_id));
+        const ids = a?.where?.id?.in ?? []; return (tables[name] ?? []).filter((x) => ids.includes(x.id)); } }) }) as any;
     const params = (extra: Record<string, string> = {}) => parseReportParams(new URLSearchParams({ from: "2026-09-01", to: "2026-10-01", ...extra }));
     it("pide el periodo [from, to) con límite inclusivo al último día", async () => {
         await loadLlaves(db, params(), query);
@@ -77,7 +93,8 @@ describe("llaves: carga y alcance", () => {
         calls.length = 0;
         const rows = await loadLlaves(db, params(), async () => [mk(1, 5), { ...mk(2, 8), division_nombre: "0" }, { ...mk(3, 5), division_nombre: "0" }]);
         assert.deepEqual(rows.map((r) => [r.ejecutivo_cuenta, r.creado_por, r.division]), [["Luis Mora", "Carla Soto", "División"], [null, "Carla Soto", "Seguridad"], ["Luis Mora", "Carla Soto", "Seguridad"]]);
-        assert.deepEqual(calls.sort(), ["c_empleado", "e_estructura_contrato", "e_estructura_sucursal", "n_division", "n_ejecutivo_cuenta"]);
+        assert.deepEqual(calls.sort(), ["c_cambios_apps_modules", "c_empleado", "e_estructura_contrato", "e_estructura_sucursal", "n_division", "n_ejecutivo_cuenta"]);
+        assert.deepEqual(rows.map((r) => [r.modificado, r.modificado_por]), [["2026-09-12T10:00:00", "Luis Mena"], [null, null], [null, null]]);
     });
     it("declara alcance y sus claves existen en la fila", () => {
         assert.equal(llaves.supportsScope, true);

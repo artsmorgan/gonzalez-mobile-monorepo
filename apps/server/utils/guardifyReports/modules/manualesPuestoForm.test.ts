@@ -42,9 +42,20 @@ describe("manuales de trabajo como formulario", () => {
             { numero: "2", enunciado: "¿Qué equipo se usa para químicos?", tipo: "Selección múltiple", puntos: 10, opciones: "Guantes | Mascarilla | Sandalias" },
         ]);
         assert.deepEqual(r.listas.visualizacion, [
-            { empleado: "E1 Ana Mora Soto", estado: "Firmado", firma: "Firmada", aprobado: "Aprobado" }, { empleado: "E3 Eva Soto", estado: "Visto", firma: null, aprobado: "Reprobado" }, { empleado: "E2 Luis Vega Díaz", estado: "No visto", firma: null, aprobado: "Pendiente" },
+            { empleado: "E1 Ana Mora Soto", estado: "Firmado", visto: "Sí", fecha_visto: null, firmado: "Sí", fecha_firma: null, firma: "Firmada", aprobado: "Aprobado" }, { empleado: "E3 Eva Soto", estado: "Visto", visto: "Sí", fecha_visto: null, firmado: "No", fecha_firma: null, firma: null, aprobado: "Reprobado" }, { empleado: "E2 Luis Vega Díaz", estado: "No visto", visto: "No", fecha_visto: null, firmado: "No", fecha_firma: null, firma: null, aprobado: "Pendiente" },
         ]);
         assert.deepEqual(r.hier, { empresa: 9, cliente: 2, division: 0, contrato: 4, corpo: 5, puesto: 6 });
+    });
+    it("el detalle por empleado dice si lo vio y lo firmó y cuándo; el que no lo ha visto sale sin fechas", () => {
+        const r = armarRegistro(rawArmado({ visualizaciones: [
+            { empleado: "E1", visto: true, firma: SAMPLE_PNG, approved: true, fechaVisto: "2026-04-01T08:00:00", fechaFirma: "2026-04-01T08:05:00" },
+            { empleado: "E2", visto: true, firma: null, approved: null, fechaVisto: "2026-04-02T09:00:00", fechaFirma: "2026-04-02T09:00:00" },
+            { empleado: "E3", visto: false, firma: null, approved: null },
+        ] }), ubic, true);
+        const f = r.listas.visualizacion!;
+        assert.deepEqual([f[0]!.visto, f[0]!.fecha_visto, f[0]!.firmado, f[0]!.fecha_firma, f[0]!.firma], ["Sí", "2026-04-01T08:00:00", "Sí", "2026-04-01T08:05:00", SAMPLE_PNG]);
+        assert.deepEqual([f[1]!.visto, f[1]!.firmado, f[1]!.fecha_firma, f[1]!.firma], ["Sí", "No", null, null]); // vio pero no firmó: no hay fecha de firma
+        assert.deepEqual([f[2]!.visto, f[2]!.fecha_visto, f[2]!.firmado], ["No", null, "No"]);
     });
     it("no entrega las respuestas correctas ni las de los empleados", () => {
         const s = JSON.stringify(armarRegistro(rawArmado(), ubic, true));
@@ -89,7 +100,7 @@ describe("manuales de trabajo como formulario", () => {
         assert.deepEqual(m8.listas.puestos, [{ puesto: "P1 - Misceláneo" }, { puesto: "P70 - Recepción" }]);
         assert.deepEqual(m8.listas.empleados, [{ empleado: "E1 Ana Mora Soto" }, { empleado: "E2 Luis Vega" }]);
         assert.deepEqual(m8.listas.visualizacion, [
-            { empleado: "E1 Ana Mora Soto", estado: "Firmado", firma: "Firmada", aprobado: "Aprobado" }, { empleado: "E2 Luis Vega", estado: "No visto", firma: null, aprobado: "Pendiente" },
+            { empleado: "E1 Ana Mora Soto", estado: "Firmado", visto: "Sí", fecha_visto: null, firmado: "Sí", fecha_firma: null, firma: "Firmada", aprobado: "Aprobado" }, { empleado: "E2 Luis Vega", estado: "No visto", visto: "No", fecha_visto: null, firmado: "No", fecha_firma: null, firma: null, aprobado: "Pendiente" },
         ]);
         assert.equal(m8.valores.creado_por, "A1 - Marta Rojas");
         assert.equal(out[0]!.listas.visualizacion.length, 0); // las visualizaciones son del manual 8
@@ -129,7 +140,7 @@ describe("manuales de trabajo como formulario", () => {
             { id: "q3", title: "Seleccione el producto para vidrios", type: "list", points: 5, options: ["Multiuso", "Limpiavidrios"], answer: "Limpiavidrios" },
         ] };
         // Los tres renglones con firma manual para que la celda de firma nunca quede vacía en la muestra.
-        const visualizaciones = rawArmado().visualizaciones.map((v) => ({ ...v, firma: SAMPLE_PNG }));
+        const visualizaciones = rawArmado().visualizaciones.map((v, i) => ({ ...v, visto: true, firma: SAMPLE_PNG, fechaVisto: `2026-04-0${i + 1}T08:00:00`, fechaFirma: `2026-04-0${i + 1}T08:05:00` }));
         const completo = armarRegistro(rawArmado({ manual: manual({ quiz: JSON.stringify(quizCompleto) }), puestos: ["P1 - Misceláneo", "P2 - Jardinero", "P3 - Bodega"], visualizaciones }), { ...ubic, division: "Aseo" }, true);
         writeFormSample("manuales-de-trabajo", [completo]);
         assert.equal(completo.listas.visualizacion.length, 3);

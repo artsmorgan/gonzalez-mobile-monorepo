@@ -44,11 +44,18 @@ describe("notas de voz: mapeo", () => {
         assert.equal(o.creado_por, "123 Ana Pérez");
         assert.equal(o.ejecutivo_cuenta, null);
         assert.equal(mapNotaVozRow(crudo(), "Marta Vega").ejecutivo_cuenta, "Marta Vega");
-        assert.equal(Object.keys(o).at(-1), "ejecutivo_cuenta");
         assert.equal(mapNotaVozRow(crudo({ descripcion: `iVBORw0KGgo${"Ab3".repeat(500)}` })).descripcion, null);
         const json = JSON.stringify(o);
         assert.ok(!json.includes("voice-notes") && !json.includes("base64") && !json.includes("m4a"));
         assert.ok(!("path" in o) && !("firma_responsable" in o));
+    });
+    it("columnas estándar: 6 de jerarquía + 5 de auditoría (modificado y modificado_por siempre null: la tabla no los guarda)", () => {
+        const o = mapNotaVozRow(crudo());
+        assert.deepEqual(
+            [o.id, o.empresa, o.cliente, o.division, o.contrato, o.sucursal, o.puesto, o.creado, o.creado_por, o.modificado, o.modificado_por],
+            [7, "E1 - Empresa", "Cliente", "D3 - División", "C4 - Contrato", "S5 - Sucursal", "P6 - Puesto", "2026-09-15T10:30:00", "123 Ana Pérez", null, null],
+        );
+        for (const k of ["modificado", "modificado_por"]) assert.ok(k in o, k);
     });
     it("tolera nulos: puesto sin asignar, sin audio ni textos", () => {
         const o = mapNotaVozRow(crudo({ puesto_id: null, puesto_nombre: "—", division_id: 0, division_nombre: "0", path: "", titulo: null, descripcion: "", transcripcion: undefined }));

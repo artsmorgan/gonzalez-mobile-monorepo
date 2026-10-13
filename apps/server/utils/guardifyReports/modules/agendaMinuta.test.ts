@@ -40,6 +40,8 @@ describe("agenda_minuta: mapeo", () => {
         assert.equal(o.fecha, "2026-09-09T00:00:00");
         assert.equal(o.creado, "2026-09-10T14:30:00");
         assert.equal(o.creado_por, "Luis Mora");
+        assert.deepEqual([o.modificado, o.modificado_por], [null, null]); // la tabla no guarda modificación
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"]) assert.ok(k in o, k);
         assert.equal(o.estado, "Completado");
         assert.equal(o.completadas, "Sí");
         assert.equal(o.ejecutivo_cuenta, null);

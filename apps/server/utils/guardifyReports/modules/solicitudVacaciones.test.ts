@@ -6,7 +6,7 @@ import { loadSolicitudVacaciones, mapSolicitudVacacionesRow, solicitudVacaciones
 const raw = (id: number, over: Record<string, unknown> = {}) => ({
     id, empleado_id: 7, plaza_id: 100, fecha_inicio: new Date("2026-09-14T00:00:00Z"), fecha_fin: new Date("2026-09-25T00:00:00Z"), dias: 10, semanas: 2,
     observaciones: "x".repeat(900), consecutivo: "VAC-1", estado_aprobacion: "Aprobada", tipo_vacaciones: "DIS", periodo: "2025-2026",
-    fecha_insercion: new Date("2026-09-01T15:30:00Z"), usuario_insercion: "11",
+    fecha_insercion: new Date("2026-09-01T15:30:00Z"), usuario_insercion: "11", fecha_actualizacion: new Date("2026-09-03T10:00:00Z"), usuario_actualizacion: "8",
     // Campos que nunca deben salir:
     monto: 123456.78, usuario_aprueba_ec: "jefe1", usuario_aprueba_ge: "gerente1", fecha_aprobado_ec: new Date("2026-09-02T00:00:00Z"), usuario_reversion: "rev", motivo_reversion: "m", observaciones_rechazo: "r", ...over,
 });
@@ -16,7 +16,7 @@ let calls: Record<string, any[]> = {};
 const spy = (name: string, rows: any[]) => ({ findMany: async (a: any) => { (calls[name] ??= []).push(a); return table(rows).findMany(a); } });
 const solicitudes = [
     raw(1),
-    raw(2, { empleado_id: 8, plaza_id: 200, usuario_insercion: "jperez", dias: 5, semanas: 1, tipo_vacaciones: null, estado_aprobacion: null, observaciones: null, fecha_fin: null, fecha_insercion: null }),
+    raw(2, { empleado_id: 8, plaza_id: 200, usuario_insercion: "jperez", dias: 5, semanas: 1, tipo_vacaciones: null, estado_aprobacion: null, observaciones: null, fecha_fin: null, fecha_insercion: null, fecha_actualizacion: null, usuario_actualizacion: null }),
     raw(3, { plaza_id: null }), // sin plaza: sin ubicación
     raw(4, { plaza_id: 300 }), // plaza sin puesto
 ];
@@ -51,19 +51,22 @@ describe("solicitud_vacaciones: carga", () => {
         const rows = await loadSolicitudVacaciones(mkdb(), params());
         assert.equal(rows.length, 4);
         const o = rows.find((r) => r.id === 1)!;
-        assert.deepEqual(Object.keys(o), ["id", "creado", "consecutivo", "fecha_inicio", "fecha_fin", "dias", "semanas", "tipo_vacaciones", "periodo", "estado", "empleado", "cedula", "plaza", "puesto", "sucursal", "contrato", "cliente", "empresa", "division", "ejecutivo_cuenta", "observaciones", "usuario_inserta"]);
+        assert.deepEqual(Object.keys(o), ["id", "creado", "consecutivo", "fecha_inicio", "fecha_fin", "dias", "semanas", "tipo_vacaciones", "periodo", "estado", "empleado", "cedula", "plaza", "puesto", "sucursal", "contrato", "cliente", "empresa", "division", "ejecutivo_cuenta", "observaciones", "creado_por", "modificado", "modificado_por"]);
         assert.deepEqual([o.creado, o.consecutivo, o.fecha_inicio, o.fecha_fin, o.dias, o.semanas], ["2026-09-01T15:30:00", "VAC-1", "2026-09-14T00:00:00", "2026-09-25T00:00:00", 10, 2]);
         assert.deepEqual([o.tipo_vacaciones, o.periodo, o.estado], ["Dis", "2025-2026", "Aprobada"]);
         assert.deepEqual([o.empleado, o.cedula], ["1934 - Ana Rojas Mora", "1-111"]);
         assert.deepEqual([o.plaza, o.puesto, o.sucursal, o.contrato, o.cliente, o.empresa], ["254-P1 - Oficial", "P1 - Puesto", "S1 - Sucursal", "C1 - Contrato", "Cliente", "9 - Empresa"]);
         assert.deepEqual([o.division, o.ejecutivo_cuenta], ["Seguridad", "Luis Mora"]);
         assert.equal((o.observaciones as string).length, 500);
-        assert.equal(o.usuario_inserta, "Carla Vega"); // id de empleado → nombre
+        assert.equal(o.creado_por, "Carla Vega"); // id de empleado → nombre
+        assert.deepEqual([o.modificado, o.modificado_por], ["2026-09-03T10:00:00", "Beto Soto"]);
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"]) assert.ok(k in o, k);
+        assert.ok(!("usuario_inserta" in o));
     });
     it("tolera nulos: sin código solo el nombre, usuario de texto tal cual, sin ejecutivo ni división", async () => {
         const o = (await loadSolicitudVacaciones(mkdb(), params())).find((r) => r.id === 2)!;
         assert.deepEqual([o.empleado, o.plaza, o.puesto, o.sucursal], ["Beto Soto", "Relevo", "Puesto 2", "Sucursal 2"]);
-        assert.deepEqual([o.fecha_fin, o.creado, o.tipo_vacaciones, o.estado, o.observaciones, o.division, o.ejecutivo_cuenta, o.usuario_inserta], [null, null, null, null, null, null, null, "jperez"]);
+        assert.deepEqual([o.fecha_fin, o.creado, o.tipo_vacaciones, o.estado, o.observaciones, o.division, o.ejecutivo_cuenta, o.creado_por, o.modificado, o.modificado_por], [null, null, null, null, null, null, null, "jperez", null, null]);
     });
     it("una solicitud sin plaza (o con plaza sin puesto) sale sin ubicación", async () => {
         const rows = await loadSolicitudVacaciones(mkdb(), params());
@@ -105,7 +108,7 @@ describe("solicitud_vacaciones: alcance", () => {
     });
     it("mapea sin datos de apoyo sin fallar", () => {
         const o = mapSolicitudVacacionesRow({ id: 9, fecha_inicio: "2026-09-14", dias: null, semanas: 0 });
-        assert.deepEqual([o.id, o.fecha_inicio, o.dias, o.semanas, o.empleado, o.puesto, o.usuario_inserta], [9, "2026-09-14T00:00:00", null, 0, null, null, null]);
+        assert.deepEqual([o.id, o.fecha_inicio, o.dias, o.semanas, o.empleado, o.puesto, o.creado_por, o.modificado, o.modificado_por], [9, "2026-09-14T00:00:00", null, 0, null, null, null, null, null]);
     });
 });
 

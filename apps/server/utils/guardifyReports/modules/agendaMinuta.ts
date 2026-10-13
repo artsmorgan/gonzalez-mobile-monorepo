@@ -65,6 +65,9 @@ export function mapAgendaMinutaRow(r: any, creadores: Map<number, string> = new 
         autor: txt(r.autor),
         creado_por: usuarioInserta(r.created_by, creadores),
         creado: fmtDt(r.created_at),
+        // La tabla no guarda modificación (sin `updated_at` ni `updated_by`): se entrega vacío (brecha de auditoría).
+        modificado: null,
+        modificado_por: null,
         hora_inicio: txt(r.hora_inicio_txt),
         hora_fin: txt(r.hora_fin_txt),
         estado: r.estado ? "Completado" : "Pendiente",
@@ -122,8 +125,8 @@ export const agendaMinuta: GuardifyReportModule = {
     id: "agenda_minuta",
     supportsScope: true,
     searchKeys: ["titulo", "autor", "creado_por", "puesto", "sucursal", "contrato"],
-    filterKeys: ["estado", "completadas", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "creado_por"],
-    sortKeys: ["fecha", "numero", "titulo", "autor", "creado_por", "creado", "estado", "completadas", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "participantes", "acuerdos", "ejecutivo_cuenta"],
+    filterKeys: ["estado", "completadas", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "creado", "creado_por", "modificado", "modificado_por"],
+    sortKeys: ["fecha", "numero", "titulo", "autor", "creado_por", "creado", "modificado", "modificado_por", "estado", "completadas", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "participantes", "acuerdos", "ejecutivo_cuenta"],
     defaultSort: "creado",
     form: agendaMinutaForm,
     async load(db, p) {

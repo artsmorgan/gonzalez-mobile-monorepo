@@ -41,7 +41,7 @@ const estadoLabel = (v: unknown): string | null => {
  *
  * Para los filtros: `empleado` sale como «código - nombre», `estado` con mayúscula inicial, `division` es la del contrato (con la de la
  * cabecera como respaldo), `ejecutivo_cuenta` el propio de la solicitud, `tipo_turno` los tipos de turno distintos de la solicitud
- * («Diurno; Nocturno») y quien la registró es `creado_por` (`created_by` guarda al usuario de la sesión que la creó).
+ * («Diurno; Nocturno») quien la registró es `creado_por` (`created_by` guarda al usuario de la sesión que la creó) y `modificado`/`modificado_por` salen siempre vacíos (la tabla no los guarda).
  */
 export function mapSolicitudPermisoRow(r: any): OutRow {
     const turnos = Array.isArray(r.turnos_list) ? r.turnos_list.length : 0;
@@ -67,6 +67,9 @@ export function mapSolicitudPermisoRow(r: any): OutRow {
         motivo: txt(r.motivo_txt ?? r.motivo),
         observaciones: txt(r.observaciones_txt ?? r.observaciones),
         creado_por: nombre(r.creado_por_nombre, r.created_by),
+        // La tabla no guarda modificación (sin `updated_at` ni `updated_by`): se entrega vacío (brecha de auditoría).
+        modificado: null,
+        modificado_por: null,
         tipo_turno: txt([...new Set((Array.isArray(r.turnos_list) ? r.turnos_list : []).map((t: any) => tipoTurnoLabel(t?.tipo_turno)).filter(Boolean))].sort().join("; ")),
     };
 }
@@ -96,8 +99,8 @@ export const solicitudesPermiso: GuardifyReportModule = {
     id: "solicitudes_permiso",
     supportsScope: true,
     searchKeys: ["empleado", "cedula", "codigo", "motivo", "puesto"],
-    filterKeys: ["estado", "tipo_salario", "tipo_turno", "division", "ejecutivo_cuenta", "creado_por", "creado", "empresa", "cliente", "contrato", "sucursal", "puesto"],
-    sortKeys: ["creado", "empleado", "cedula", "estado", "tipo_salario", "tipo_turno", "fecha_inicio", "fecha_fin", "dias", "division", "ejecutivo_cuenta", "empresa", "cliente", "contrato", "sucursal", "puesto", "creado_por"],
+    filterKeys: ["estado", "tipo_salario", "tipo_turno", "division", "ejecutivo_cuenta", "creado_por", "creado", "modificado", "modificado_por", "empresa", "cliente", "contrato", "sucursal", "puesto"],
+    sortKeys: ["creado", "empleado", "cedula", "estado", "tipo_salario", "tipo_turno", "fecha_inicio", "fecha_fin", "dias", "division", "ejecutivo_cuenta", "empresa", "cliente", "contrato", "sucursal", "puesto", "creado_por", "modificado", "modificado_por"],
     defaultSort: "creado",
     form: solicitudesPermisoForm,
     async load(db, p) {

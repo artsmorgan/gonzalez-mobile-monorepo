@@ -4,7 +4,7 @@ import {
     type MantenimientoArticulosModuleFilters,
 } from "../../reports-functions/mantenimientoArticulosReport";
 import type { ReportDataAccess } from "../../reportDynamicPrisma";
-import { ejecutivoPorCorpo } from "../enrich";
+import { ejecutivoPorCorpo, nombresEmpleado, usuarioInserta } from "../enrich";
 import type { OutRow } from "../listing";
 import { fmtDt } from "../mappers";
 import { addDays, type ReportParams } from "../params";
@@ -34,12 +34,15 @@ const num = (v: unknown): number | null => (v == null || v === "" || !Number.isF
 /**
  * Fila de `queryMantenimientoArticulosRows` → fila plana. Se omiten ids internos de plan/asignación, el formulario de
  * mantenimiento de armas (texto estructurado largo) y el contenido de los archivos adjuntos (solo se cuenta cuántos hay).
- * `ejecutivo`: ejecutivo de cuenta de la sucursal (se carga por lote en `load`).
+ * `ejecutivo`: ejecutivo de cuenta de la sucursal (se carga por lote en `load`). `modificadoPor`: quien hizo el último cambio
+ * registrado (historial `c_cambios_apps_modules`, se carga por lote en `load`). La tabla no guarda quién creó el mantenimiento
+ * (el alta no deja entrada en el historial), por eso `creado_por` sale siempre null.
  */
-export function mapMantenimientoArticuloRow(r: MantenimientoArticuloReportRow, ejecutivo?: string | null): OutRow {
+export function mapMantenimientoArticuloRow(r: MantenimientoArticuloReportRow, ejecutivo?: string | null, modificadoPor?: string | null): OutRow {
     return {
         id: Number(r.id),
         creado: fmtDt(r.created_at),
+        creado_por: null,
         empresa: text(r.empresa_txt, 200),
         cliente: text(r.cliente_txt, 200),
         division: text(r.division_txt, 200),
@@ -80,9 +83,46 @@ export function mapMantenimientoArticuloRow(r: MantenimientoArticuloReportRow, e
         reincidencia_30_dias: r.reincidencia_treinta_dias_txt === "Sí" || r.reincidencia_treinta_dias_txt === "No" ? r.reincidencia_treinta_dias_txt : null,
         tipo_mantenimiento_reincidencia: text(r.tipo_mant_art_reincid, 200),
         adjuntos: num(r.archivos_adjuntos_count) ?? 0,
-        actualizado: fmtDt(r.updated_at),
+        modificado: fmtDt(r.updated_at),
+        modificado_por: text(modificadoPor, 200),
         ejecutivo_cuenta: text(ejecutivo, 200),
     };
+}
+
+const TABLA = "c_articulo_mantenimiento";
+
+/**
+ * Quién hizo el último cambio de cada mantenimiento: el empleado de la última entrada de `c_cambios_apps_modules` de esta tabla y
+ * registro. Una consulta por bloque de 1000 ids (sin traer el contenido de `cambios`, que puede incluir archivos) + un lote de empleados.
+ * Si el historial no se puede leer, el reporte sigue sin la columna.
+ */
+export async function modificadoresPorCambio(db: any, ids: unknown[]): Promise<Map<number, string>> {
+    const out = new Map<number, string>();
+    const unicos = [...new Set(ids.map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+    if (!unicos.length) return out;
+    try {
+        const ultimo = new Map<number, { id: number; by: unknown }>();
+        for (let i = 0; i < unicos.length; i += 1000) {
+            const filas = await db.c_cambios_apps_modules.findMany({
+                where: { nombre_tabla: TABLA, registro_id: { in: unicos.slice(i, i + 1000) } },
+                select: { id: true, registro_id: true, created_by: true },
+                orderBy: { id: "asc" },
+            });
+            for (const f of filas) {
+                const prev = ultimo.get(Number(f.registro_id));
+                if (!prev || Number(f.id) > prev.id) ultimo.set(Number(f.registro_id), { id: Number(f.id), by: f.created_by });
+            }
+        }
+        const nombres = await nombresEmpleado(db, [...ultimo.values()].map((u) => u.by));
+        for (const [registro, u] of ultimo) {
+            const nombre = usuarioInserta(u.by, nombres);
+            if (nombre) out.set(registro, nombre);
+        }
+    } catch (e) {
+        console.warn("[guardifyReports] mantenimiento_articulos: no se pudo leer el historial de cambios", (e as Error)?.message);
+        return new Map();
+    }
+    return out;
 }
 
 const FILTRO_POR_NIVEL: Record<Nivel, "empresaIds" | "clienteIds" | "divisionIds" | "contratoIds" | "corpoIds" | "puestoIds"> = {
@@ -120,8 +160,11 @@ export async function loadMantenimientoArticulos(db: ReportDataAccess, p: Report
         const d = fmtDt(r.created_at)?.slice(0, 10);
         return !!d && d >= p.from && d < p.to;
     });
-    const ejecutivos = await ejecutivoPorCorpo(db as any, enPeriodo.map((r) => r.corpo_id));
-    return enPeriodo.map((r) => mapMantenimientoArticuloRow(r, ejecutivos.get(Number(r.corpo_id)) ?? null));
+    const [ejecutivos, modificadores] = await Promise.all([
+        ejecutivoPorCorpo(db as any, enPeriodo.map((r) => r.corpo_id)),
+        modificadoresPorCambio(db, enPeriodo.map((r) => r.id)),
+    ]);
+    return enPeriodo.map((r) => mapMantenimientoArticuloRow(r, ejecutivos.get(Number(r.corpo_id)) ?? null, modificadores.get(Number(r.id)) ?? null));
 }
 
 /**
@@ -133,11 +176,11 @@ export async function loadMantenimientoArticulos(db: ReportDataAccess, p: Report
 export const mantenimientoArticulos: GuardifyReportModule = {
     id: "mantenimiento_articulos",
     supportsScope: true,
-    searchKeys: ["articulo", "puesto", "sucursal", "contrato", "proveedor", "marca", "modelo", "serie_placa", "observaciones", "detalle"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "origen", "estado", "accion", "categoria", "reincidencia_30_dias", "ejecutivo_cuenta"],
+    searchKeys: ["articulo", "puesto", "sucursal", "contrato", "proveedor", "marca", "modelo", "serie_placa", "observaciones", "detalle", "modificado_por"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "origen", "estado", "accion", "categoria", "reincidencia_30_dias", "ejecutivo_cuenta", "creado_por", "modificado_por"],
     sortKeys: [
         "creado", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "articulo", "estado", "accion",
-        "fecha_inicio", "fecha_solucion", "fecha_fin", "proveedor", "costo_total", "actualizado", "ejecutivo_cuenta",
+        "fecha_inicio", "fecha_solucion", "fecha_fin", "proveedor", "costo_total", "creado_por", "modificado", "modificado_por", "ejecutivo_cuenta",
     ],
     defaultSort: "creado",
     form: mantenimientoArticulosForm,

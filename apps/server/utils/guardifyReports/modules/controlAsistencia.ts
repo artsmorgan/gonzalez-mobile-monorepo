@@ -60,6 +60,9 @@ export function mapControlAsistenciaRow(r: any, creador?: any, ejecutivo?: strin
         firmas,
         supervisor: txt(r.nombre_supervisor),
         creado_por: creador ? txt(buildNombre(creador)) : null,
+        // La tabla no guarda modificación (sin `updated_at` ni `updated_by`): se entrega vacío (brecha de auditoría).
+        modificado: null,
+        modificado_por: null,
         comentarios: short(r.comentarios),
         ejecutivo_cuenta: txt(ejecutivo),
     };
@@ -75,8 +78,8 @@ export const controlAsistencia: GuardifyReportModule = {
     id: "control_asistencia",
     supportsScope: true,
     searchKeys: ["puesto", "sucursal", "contrato", "cliente", "supervisor", "creado_por", "comentarios"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "turno", "ejecutivo_cuenta", "creado_por"],
-    sortKeys: ["fecha", "creado", "empresa", "cliente", "contrato", "sucursal", "puesto", "turno", "presentes", "total_turno", "ausentes", "reemplazos", "supervisor", "creado_por", "ejecutivo_cuenta"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "turno", "ejecutivo_cuenta", "creado", "creado_por", "modificado", "modificado_por"],
+    sortKeys: ["fecha", "creado", "empresa", "cliente", "contrato", "sucursal", "puesto", "turno", "presentes", "total_turno", "ausentes", "reemplazos", "supervisor", "creado_por", "modificado", "modificado_por", "ejecutivo_cuenta"],
     defaultSort: "creado",
     form: controlAsistenciaForm,
     async load(db, p) {

@@ -64,6 +64,16 @@ describe("acta_entrega_productos: mapeo", () => {
         assert.equal(mapActaEntregaRow(raw({ cedula_recibe: "" }), "  Rosa Vega ").empleado, "1-111 - Ana Soto · Beto Mora");
         assert.equal(mapActaEntregaRow(raw(), "  Rosa Vega ").ejecutivo_cuenta, "Rosa Vega");
     });
+    it("columnas estándar: 6 de jerarquía + 5 de auditoría (la auditoría viene del historial; sin historial, null)", () => {
+        const o = mapActaEntregaRow(raw(), null, { creado: "2026-09-15T10:00:00", creado_por: "Ana Soto", modificado: "2026-09-16T09:00:00", modificado_por: "Luis Mora" });
+        assert.deepEqual(
+            [o.id, o.empresa, o.cliente, o.division, o.contrato, o.sucursal, o.puesto, o.creado, o.creado_por, o.modificado, o.modificado_por],
+            [4, "G - Gonzalez", "Cliente 5", "Norte", "C-20 - Contrato", "S1 - Sede", "P40 - Recepción", "2026-09-15T10:00:00", "Ana Soto", "2026-09-16T09:00:00", "Luis Mora"],
+        );
+        const sin = mapActaEntregaRow(raw({ puesto_nombre: "0", puesto_id: 0 }));
+        assert.equal(sin.puesto, null);
+        for (const k of ["creado", "creado_por", "modificado", "modificado_por"]) assert.ok(k in sin && sin[k] === null, k);
+    });
     it("recorta la descripción a 500 caracteres", () => {
         const o = mapActaEntregaRow(raw({ detalle: JSON.stringify([{ descripcion: "x".repeat(900) }]) }));
         assert.equal((o.descripcion as string).length, 500);
@@ -76,8 +86,25 @@ describe("acta_entrega_productos: alcance", () => {
         c_acta_entre_producto: rows,
         e_estructura_sucursal: [{ id: 30, ejecutivoCuenta_id: 7 }, { id: 31, ejecutivoCuenta_id: null }],
         n_ejecutivo_cuenta: [{ id: 7, nombre: "Rosa Vega" }],
+        c_empleado: [{ id: 50, nombre: "Ana", primer_apellido: "Soto", segundo_apellido: null }, { id: 51, nombre: "Luis", primer_apellido: "Mora", segundo_apellido: null }],
+        c_cambios_apps_modules: [
+            { id: 1, nombre_tabla: "c_acta_entre_producto", registro_id: 1, cambios: '[{"prop":"__created__"}]', created_by: 50, created_at: new Date("2026-09-15T10:00:00Z") },
+            { id: 2, nombre_tabla: "c_acta_entre_producto", registro_id: 1, cambios: '[{"prop":"observaciones"}]', created_by: 51, created_at: new Date("2026-09-16T09:00:00Z") },
+            { id: 3, nombre_tabla: "otra_tabla", registro_id: 2, cambios: '[{"prop":"__created__"}]', created_by: 51, created_at: new Date("2026-09-17T09:00:00Z") },
+        ],
     };
-    const db = new Proxy({}, { get: (_t, name: string) => ({ findMany: async (a: any = {}) => (tables[name] ?? []).filter((r) => !a.where?.id?.in || a.where.id.in.includes(r.id)) }) }) as any;
+    const db = new Proxy({}, {
+        get: (_t, name: string) => ({
+            findMany: async (a: any = {}) => {
+                const w = a.where ?? {};
+                return (tables[name] ?? [])
+                    .filter((r) => !w.id?.in || w.id.in.includes(r.id))
+                    .filter((r) => !w.nombre_tabla || r.nombre_tabla === w.nombre_tabla)
+                    .filter((r) => !w.registro_id?.in || w.registro_id.in.includes(r.registro_id))
+                    .filter((r) => !w.cambios?.contains || String(r.cambios).includes(w.cambios.contains));
+            },
+        }),
+    }) as any;
     const p = (scope: any) => ({ from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: null, dir: "desc" as const, q: null, filters: [], scope });
     it("sin alcance trae todo; con alcance filtra por nivel; vacío no ve nada", async () => {
         assert.equal((await actaEntregaProductos.load(db, p(null))).length, 2);
@@ -89,6 +116,12 @@ describe("acta_entrega_productos: alcance", () => {
         const out = await actaEntregaProductos.load(db, p(null));
         assert.equal(out.find((r) => r.id === 1)!.ejecutivo_cuenta, "Rosa Vega");
         assert.equal(out.find((r) => r.id === 2)!.ejecutivo_cuenta, null);
+    });
+    it("agrega la auditoría del historial en lote (alta = creado, última edición = modificado)", async () => {
+        const out = await actaEntregaProductos.load(db, p(null));
+        const a = out.find((r) => r.id === 1)!, b = out.find((r) => r.id === 2)!;
+        assert.deepEqual([a.creado, a.creado_por, a.modificado, a.modificado_por], ["2026-09-15T10:00:00", "Ana Soto", "2026-09-16T09:00:00", "Luis Mora"]);
+        assert.deepEqual([b.creado, b.creado_por, b.modificado, b.modificado_por], [null, null, null, null]); // sin historial de esta tabla
     });
     it("declara claves que existen en la fila", () => {
         const keys = Object.keys(mapActaEntregaRow(raw()));

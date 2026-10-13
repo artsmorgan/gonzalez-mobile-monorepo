@@ -1,4 +1,5 @@
 import { verifyGuardifyApiKey } from "./auth";
+import { aggregateRows, parseSpec } from "./aggregate";
 import { ParamError, ReportUnavailableError, ScopeUnsupportedError, UnsupportedFilterError } from "./errors";
 import { applyFilters, applyListing, distinctValues, hasColumn, ListingError, MAX_OPTIONS_LIMIT, type OutRow } from "./listing";
 import { parseReportParams, type ReportParams } from "./params";
@@ -42,7 +43,7 @@ const json = (body: unknown, status = 200) =>
  *   GET /api/guardify/reports/{modulo}/options?dimension=<col>&from&to&scope&q&limit&f.<col>…       → { values }
  * Filtros (protocolo v2): `f.<col>` o `f.<col>.<op>` (eq, in, ge, lt, le, tge, tle, contains); ver docs/guardify-reports-api.md.
  */
-export async function handleGuardifyReport(req: Request, modulo: string, kind: "rows" | "options", deps: HandlerDeps): Promise<Response> {
+export async function handleGuardifyReport(req: Request, modulo: string, kind: "rows" | "options" | "aggregate", deps: HandlerDeps): Promise<Response> {
     const started = Date.now();
     const log = (status: number, extra: Record<string, unknown> = {}, user: string | null = null) =>
         console.log(JSON.stringify({ level: "info", msg: "guardify_report", modulo, kind, status, ms: Date.now() - started, user, ...extra }));
@@ -72,6 +73,14 @@ export async function handleGuardifyReport(req: Request, modulo: string, kind: "
             const limit = Math.min(MAX_OPTIONS_LIMIT, Math.max(1, Math.floor(Number(sp.get("limit"))) || MAX_OPTIONS_LIMIT));
             log(200, { rows: all.length }, auth.user);
             return json({ values: distinctValues(others, dimension, { q: p.q, limit }) });
+        }
+        if (kind === "aggregate") {
+            // Mismas filas y filtros que la tabla (búsqueda incluida), sin paginar: Guardify pide los números de los widgets.
+            const spec = parseSpec(sp.get("spec"));
+            const filtered = applyListing(all, { q: p.q, searchKeys: mod.searchKeys, filters: p.filters, sort: null, dir: "desc", defaultSort: mod.defaultSort, page: 1, pageSize: Number.MAX_SAFE_INTEGER }).rows;
+            const agg = aggregateRows(filtered, spec);
+            log(200, { rows: filtered.length, widgets: spec.length }, auth.user);
+            return json(agg);
         }
         const out = applyListing(all, { q: p.q, searchKeys: mod.searchKeys, filters: p.filters, sort: p.sort, dir: p.dir, defaultSort: mod.defaultSort, page: p.page, pageSize: p.pageSize });
         log(200, { rows: out.rows.length, total: out.total, scoped: p.scope !== null }, auth.user);

@@ -60,10 +60,16 @@ describe("evaluación de personal: columnas para filtros", () => {
         assert.equal(o.empleado, "1934 - Pedro Mora");
         assert.equal(o.evaluador, "2001 - Ana Soto");
         assert.equal(o.ejecutivo_cuenta, "Eva Rojas");
-        assert.equal(Object.keys(o).at(-1), "ejecutivo_cuenta");
         const sin = mapEvaluacionPersonalRow(raw());
         assert.equal(sin.empleado, "Pedro Mora");
         assert.equal(sin.ejecutivo_cuenta, null);
+    });
+    it("lleva las 11 columnas estándar; `creado_por`, `modificado` y `modificado_por` salen null (la tabla no los guarda)", () => {
+        const o = mapEvaluacionPersonalRow(raw());
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"]) assert.ok(k in o, k);
+        assert.deepEqual([o.empresa, o.cliente, o.division, o.contrato, o.sucursal, o.puesto], ["9 - Seguridad SA", "Cliente Uno", "Seguridad", "C-31 - Contrato", "55 - Sede", "P140 - Portón"]);
+        assert.deepEqual([o.id, o.creado, o.creado_por, o.modificado, o.modificado_por], [21, "2026-09-15T09:00:00", null, null, null]);
+        assert.equal(o.evaluador, "Ana Soto");
     });
     it("usa la división del contrato solo cuando la evaluación no la guardó", () => {
         assert.equal(mapEvaluacionPersonalRow(raw({ division_id: 0, division_nombre: "0" }), { divisionContrato: "Aseo" }).division, "Aseo");

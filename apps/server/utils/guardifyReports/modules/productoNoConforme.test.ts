@@ -65,7 +65,15 @@ describe("producto no conforme: mapeo", () => {
         assert.equal(o.creado_por, "9 - Ana Pérez");
         assert.equal(o.ejecutivo_cuenta, null);
         assert.equal(mapProductoNoConformeRow(crudo(), "Marta Vega").ejecutivo_cuenta, "Marta Vega");
-        assert.equal(Object.keys(o).at(-1), "ejecutivo_cuenta");
+    });
+    it("lleva las 11 columnas estándar; `modificado` y `modificado_por` salen null si nunca se editó", () => {
+        const o = mapProductoNoConformeRow(crudo());
+        for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "id", "creado", "creado_por", "modificado", "modificado_por"]) assert.ok(k in o, k);
+        assert.deepEqual([o.empresa, o.cliente, o.division, o.contrato, o.sucursal, o.puesto], ["E1 - Empresa", "Cliente", "D3 - División", "C4 - Contrato", "S5 - Sucursal", "P6 - Puesto"]);
+        assert.deepEqual([o.id, o.creado, o.creado_por, o.modificado, o.modificado_por], [11, "2026-09-20T14:05:09", "9 - Ana Pérez", null, null]);
+        const m = mapProductoNoConformeRow(crudo(), null, { cuando: "2026-09-22T10:00:00", quien: "3 - Luis Mora" });
+        assert.deepEqual([m.modificado, m.modificado_por], ["2026-09-22T10:00:00", "3 - Luis Mora"]);
+        assert.equal(mapProductoNoConformeRow(crudo({ puesto_id: 6, puesto_nombre: "6" })).puesto, null);
     });
     it("no expone firmas aunque vengan en la fila ni si se guardan en un campo de texto", () => {
         const o = mapProductoNoConformeRow(crudo({ responsable_aprobar: "data:image/png;base64,AAAA" }));
@@ -98,6 +106,11 @@ describe("producto no conforme: carga y alcance", () => {
         c_empleado: [{ id: 9, codigo: "9", nombre: "Ana", primer_apellido: "Pérez", segundo_apellido: null }],
         e_estructura_sucursal: [{ id: 5, ejecutivoCuenta_id: 8 }, { id: 50, ejecutivoCuenta_id: null }],
         n_ejecutivo_cuenta: [{ id: 8, nombre: "Marta Vega" }],
+        c_cambios_apps_modules: [
+            { id: 1, nombre_tabla: "c_producto_no_conforme", registro_id: 1, created_by: 9, created_at: new Date("2026-09-06T08:00:00Z") },
+            { id: 2, nombre_tabla: "c_producto_no_conforme", registro_id: 1, created_by: 9, created_at: new Date("2026-09-07T11:30:00Z") },
+            { id: 3, nombre_tabla: "c_producto_no_conforme", registro_id: 77, created_by: 9, created_at: new Date("2026-09-08T11:30:00Z") },
+        ],
     };
     it("sin alcance trae el periodo y deja fuera el día `to`", async () => {
         const rows = await productoNoConforme.load(fakeDb(tables), P);
@@ -105,6 +118,13 @@ describe("producto no conforme: carga y alcance", () => {
         assert.equal(rows.find((r) => r.id === 1)!.puesto, "P6 - Puesto");
         assert.equal(rows.find((r) => r.id === 1)!.ejecutivo_cuenta, "Marta Vega");
         assert.equal(rows.find((r) => r.id === 2)!.ejecutivo_cuenta, null);
+    });
+    it("modificado y modificado_por salen del último cambio del historial; sin cambios quedan null", async () => {
+        const rows = await productoNoConforme.load(fakeDb(tables), P);
+        const r1 = rows.find((r) => r.id === 1)!;
+        const r2 = rows.find((r) => r.id === 2)!;
+        assert.deepEqual([r1.modificado, r1.modificado_por], ["2026-09-07T11:30:00", "9 - Ana Pérez"]);
+        assert.deepEqual([r2.modificado, r2.modificado_por], [null, null]);
     });
     it("con alcance deja solo los nodos pedidos (unión) y vacío no ve nada", async () => {
         const ids = async (scope: string) => (await productoNoConforme.load(fakeDb(tables), { ...P, scope: parseScope(scope) })).map((r) => r.id).sort();

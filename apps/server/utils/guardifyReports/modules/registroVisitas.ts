@@ -1,4 +1,4 @@
-import { divisionPorContrato, ejecutivoPorCorpo, nombresEmpleado, usuarioInserta } from "../enrich";
+import { divisionPorContrato, ejecutivoPorCorpo, nombresEmpleado, ubicacionTextos, usuarioInserta, type UbicacionTextos } from "../enrich";
 import { fmtDt } from "../mappers";
 import type { OutRow } from "../listing";
 import { addDays } from "../params";
@@ -11,12 +11,28 @@ const txt = (v: unknown, max = 500): string | null => {
     return s ? s.slice(0, max) : null;
 };
 
-/** Nombre de estructura; la consulta original rellena con el id (o «—») cuando no encuentra el registro: eso es «sin dato». */
-const nombre = (v: unknown, id: unknown): string | null => {
-    const s = txt(v);
-    if (!s || s === "—" || s === String(id ?? "")) return null;
-    return s;
-};
+/**
+ * Último cambio de cada registro en el historial (`c_cambios_apps_modules`): cuándo y quién (id de empleado). Una consulta por bloque
+ * de 1000 registros; si la base no tiene el historial, ningún registro tiene cambio.
+ */
+async function ultimosCambios(db: any, tabla: string, ids: unknown[]): Promise<Map<number, { id: number; at: string; by: number }>> {
+    const all = [...new Set(ids.map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+    const out = new Map<number, { id: number; at: string; by: number }>();
+    try {
+        for (let i = 0; i < all.length; i += 1000) {
+            const rows = await db.c_cambios_apps_modules.findMany({ where: { nombre_tabla: tabla, registro_id: { in: all.slice(i, i + 1000) } }, select: { id: true, registro_id: true, created_by: true, created_at: true } });
+            for (const c of rows) {
+                const at = fmtDt(c.created_at);
+                if (!at) continue;
+                const prev = out.get(Number(c.registro_id));
+                if (!prev || at > prev.at || (at === prev.at && Number(c.id) > prev.id)) out.set(Number(c.registro_id), { id: Number(c.id), at, by: Number(c.created_by) });
+            }
+        }
+    } catch {
+        /* sin historial */
+    }
+    return out;
+}
 
 /** «código - nombre completo» del empleado (solo el nombre si no hay código; solo el código si no hay nombre). */
 const personaLabel = (e: any): string | null => {
@@ -31,12 +47,15 @@ const personaLabel = (e: any): string | null => {
  * (firma en base64); de los activos que ingresa el visitante solo se expone la cantidad.
  *
  * Columnas para los filtros (las agrega `load`): `division` sale del contrato (con la de la cabecera como respaldo),
- * `ejecutivo_cuenta` es el de la sucursal y `usuario_inserta` quien registró la visita (`responsable_id` guarda al usuario de la sesión
- * que la creó). `responsable` se muestra como «código - nombre».
+ * `ejecutivo_cuenta` es el de la sucursal y `creado_por` quien registró la visita (`responsable_id` guarda al usuario de la sesión
+ * que la creó). `creado` es la fecha de creación del registro (`created_at`); la de la visita es `entrada`. `modificado` es `updated_at` y `modificado_por`
+ * el autor del último cambio del historial. La ubicación («código - nombre») la agrega `load`. `responsable` se muestra como «código - nombre».
  */
 export function mapRegistroVisitaRow(r: any): OutRow {
+    const ubic: Partial<UbicacionTextos> = r.ubicacion ?? {};
     return {
         id: Number(r.id),
+        creado: fmtDt(r.created_at),
         entrada: fmtDt(r.hora_entrada),
         salida: fmtDt(r.hora_salida),
         visitante: txt(r.nombre),
@@ -46,33 +65,46 @@ export function mapRegistroVisitaRow(r: any): OutRow {
         depto_visita: txt(r.dep_pers_visita),
         autoriza_salida: txt(r.pers_autoriza_salida),
         responsable: personaLabel(r.c_empleado) ?? txt(r.responsable_label),
-        empresa: nombre(r.empresa_nombre, r.empresa_id),
-        cliente: nombre(r.e_estructura_cliente?.nombre, r.cliente_id),
-        division: txt(r.division_contrato) ?? nombre(r.division_nombre, r.division_id),
-        contrato: nombre(r.contrato_nombre, r.contrato_id),
-        sucursal: nombre(r.e_estructura_sucursal?.nombre, r.corpo_id),
-        puesto: nombre(r.e_estructura_puesto?.nombre, r.puesto_id),
+        empresa: ubic.empresa ?? null,
+        cliente: ubic.cliente ?? null,
+        division: txt(r.division_contrato) ?? ubic.division ?? null,
+        contrato: ubic.contrato ?? null,
+        sucursal: ubic.sucursal ?? null,
+        puesto: ubic.puesto ?? null,
         puesto_salida: txt(r.puesto_salida_nombre),
         activos: Array.isArray(r.e_activo_visitante) ? r.e_activo_visitante.length : 0,
         observaciones: txt(r.observaciones),
         ejecutivo_cuenta: txt(r.ejecutivo_cuenta_nombre),
-        usuario_inserta: txt(r.usuario_inserta_nombre),
+        creado_por: txt(r.creado_por_nombre),
+        modificado: fmtDt(r.updated_at),
+        modificado_por: txt(r.modificado_por_nombre),
     };
 }
 
-/** Agrega, por lote (una consulta por dato, no por fila), el ejecutivo de la sucursal, la división del contrato y el usuario que registró. */
+/**
+ * Agrega, por lote (una consulta por dato, no por fila), la ubicación («código - nombre»), el ejecutivo de la sucursal, la división del contrato,
+ * quien registró (`responsable_id`) y quien hizo el último cambio del historial (`c_cambios_apps_modules`).
+ */
 export async function enrichVisitas(db: any, rows: any[]): Promise<any[]> {
-    const [ejecutivos, divisiones, nombres] = await Promise.all([
+    const ubicOf = (r: any) => ({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.corpo_id, puesto: r.puesto_id });
+    const cambios = await ultimosCambios(db, "e_registro_personas", rows.map((r) => r.id));
+    const [ejecutivos, divisiones, nombres, ubic] = await Promise.all([
         ejecutivoPorCorpo(db, rows.map((r) => r.corpo_id)),
         divisionPorContrato(db, rows.map((r) => r.contrato_id)),
-        nombresEmpleado(db, rows.map((r) => r.responsable_id)),
+        nombresEmpleado(db, [...rows.map((r) => r.responsable_id), ...[...cambios.values()].map((c) => c.by)]),
+        ubicacionTextos(db, rows.map(ubicOf)),
     ]);
-    return rows.map((r) => ({
-        ...r,
-        ejecutivo_cuenta_nombre: ejecutivos.get(Number(r.corpo_id)) ?? null,
-        division_contrato: divisiones.get(Number(r.contrato_id)) ?? null,
-        usuario_inserta_nombre: usuarioInserta(r.responsable_id, nombres),
-    }));
+    return rows.map((r) => {
+        const c = cambios.get(Number(r.id));
+        return {
+            ...r,
+            ejecutivo_cuenta_nombre: ejecutivos.get(Number(r.corpo_id)) ?? null,
+            division_contrato: divisiones.get(Number(r.contrato_id)) ?? null,
+            creado_por_nombre: usuarioInserta(r.responsable_id, nombres),
+            modificado_por_nombre: c ? usuarioInserta(c.by, nombres) : null,
+            ubicacion: ubic(ubicOf(r)),
+        };
+    });
 }
 
 /** Días extra que se leen después del periodo: la consulta filtra por `created_at`, pero la fecha del reporte es la de entrada. */
@@ -102,8 +134,8 @@ export const registroVisitas: GuardifyReportModule = {
     id: "registro_visitas",
     supportsScope: true,
     searchKeys: ["visitante", "cedula", "responsable", "motivo", "depto_visita", "puesto"],
-    filterKeys: ["funcionario", "division", "responsable", "depto_visita", "ejecutivo_cuenta", "usuario_inserta", "entrada", "empresa", "cliente", "contrato", "sucursal", "puesto"],
-    sortKeys: ["entrada", "salida", "visitante", "cedula", "funcionario", "responsable", "depto_visita", "division", "ejecutivo_cuenta", "usuario_inserta", "empresa", "cliente", "contrato", "sucursal", "puesto", "activos"],
+    filterKeys: ["funcionario", "division", "responsable", "depto_visita", "ejecutivo_cuenta", "creado_por", "creado", "modificado", "modificado_por", "entrada", "empresa", "cliente", "contrato", "sucursal", "puesto"],
+    sortKeys: ["entrada", "salida", "visitante", "cedula", "funcionario", "responsable", "depto_visita", "division", "ejecutivo_cuenta", "creado", "creado_por", "modificado", "modificado_por", "empresa", "cliente", "contrato", "sucursal", "puesto", "activos"],
     defaultSort: "entrada",
     form: registroVisitasForm,
     async load(db, p) {

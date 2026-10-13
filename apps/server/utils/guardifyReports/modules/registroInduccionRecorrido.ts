@@ -1,5 +1,6 @@
 import { queryInduccionRecorridoRows } from "../../reports-functions/induccionRecorridoReport";
 import { ejecutivoPorCorpo, nombresEmpleado, usuarioInserta } from "../enrich";
+import { auditoriaPorHistorial } from "./auditoriaCambios";
 import { fmtDt } from "../mappers";
 import type { OutRow } from "../listing";
 import { addDays } from "../params";
@@ -62,7 +63,7 @@ export async function codigosPorCedula(db: any, cedulas: unknown[]): Promise<Map
 /**
  * Registro de inducción y recorrido. Nunca se exponen las firmas (`firma_supervisor`, `firma_responsable` ni la de
  * cada participante). Un participante se muestra «código - nombre (cédula)» cuando su cédula corresponde a un empleado
- * (`codigos`: cédula → código); si no, «nombre (cédula)». `ejecutivo_cuenta` y `usuario_inserta` los agrega `load` por lote.
+ * (`codigos`: cédula → código); si no, «nombre (cédula)». `ejecutivo_cuenta`, `creado_por` (`created_by`) y `modificado`/`modificado_por` (última edición del historial `c_cambios_apps_modules`) los agrega `load` por lote.
  */
 export function mapInduccionRecorridoRow(r: any, codigos?: Map<string, string>): OutRow {
     const temas = parseArr(r.temas_desarrollados);
@@ -96,7 +97,9 @@ export function mapInduccionRecorridoRow(r: any, codigos?: Map<string, string>):
             }),
         ),
         ejecutivo_cuenta: txt(r.ejecutivo_cuenta),
-        usuario_inserta: txt(r.usuario_inserta),
+        creado_por: txt(r.creado_por),
+        modificado: fmtDt(r.modificado),
+        modificado_por: txt(r.modificado_por),
     };
 }
 
@@ -109,7 +112,7 @@ export const registroInduccionRecorrido: GuardifyReportModule = {
     id: "registro_induccion_recorrido",
     supportsScope: true,
     searchKeys: ["responsable", "nombres_participantes", "supervisor_cliente", "supervisor_corporacion", "contrato", "sucursal", "puesto", "cliente"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "responsable", "nombres_participantes", "ejecutivo_cuenta", "usuario_inserta"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "responsable", "nombres_participantes", "ejecutivo_cuenta", "creado_por", "modificado_por"],
     sortKeys: ["creado", "fecha_visita", "empresa", "cliente", "contrato", "sucursal", "puesto", "responsable", "participantes"],
     defaultSort: "creado",
     form: registroInduccionRecorridoForm,
@@ -122,13 +125,14 @@ export const registroInduccionRecorrido: GuardifyReportModule = {
         if (!kept.length) return [];
         // Datos para los filtros, en lote (nunca por fila).
         const participantes = kept.map((r: any) => parseArr(r.participantes));
-        const [ejecutivos, nombres, codigos] = await Promise.all([
+        const [ejecutivos, nombres, codigos, historial] = await Promise.all([
             ejecutivoPorCorpo(db, kept.map((r: any) => r.corpo_id)),
             nombresEmpleado(db, kept.map((r: any) => r.created_by)),
             codigosPorCedula(db, participantes.flat().map((x: any) => txt(x?.cedula))),
+            auditoriaPorHistorial(db, "c_registro_induccion_recorrido", kept.map((r: any) => r.id)),
         ]);
         return kept.map((r: any) =>
-            mapInduccionRecorridoRow({ ...r, ejecutivo_cuenta: ejecutivos.get(Number(r.corpo_id)), usuario_inserta: usuarioInserta(r.created_by, nombres) }, codigos),
+            mapInduccionRecorridoRow({ ...r, ejecutivo_cuenta: ejecutivos.get(Number(r.corpo_id)), creado_por: usuarioInserta(r.created_by, nombres), modificado: historial.get(Number(r.id))?.modificado, modificado_por: historial.get(Number(r.id))?.modificado_por }, codigos),
         );
     },
 };
