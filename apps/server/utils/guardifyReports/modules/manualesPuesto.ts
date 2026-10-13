@@ -40,7 +40,8 @@ export function mapManualPuestoRow(r: any, extra: ManualExtra = {}): OutRow {
     const puestos = [txt(r.puesto_principal_txt), ...links.map((l) => puestoLabel(l?.e_estructura_puesto) ?? extra.puestos?.get(Number(l?.puesto_id)) ?? null)]
         .filter((x): x is string => !!x && !/^\d+$/.test(x));
     const vis = r.e_empleado_visualizacion_manual_puesto;
-    const enviados = personas(r.e_empleados_manual_puesto);
+    // A quién le llegó: los empleados vinculados al manual y también los que lo abrieron aunque no estén vinculados (les llega por su puesto).
+    const enviados = personas([...(Array.isArray(r.e_empleados_manual_puesto) ? r.e_empleados_manual_puesto : []), ...(Array.isArray(vis) ? vis : [])]);
     const vistos = personas(vis);
     return {
         id: Number(r.id),

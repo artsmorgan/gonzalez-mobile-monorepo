@@ -48,6 +48,10 @@ describe("manuales de trabajo: mapeo", () => {
         const o = mapManualPuestoRow({ id: 2, e_empleados_manual_puesto: [{ empleado_id: 1 }, { empleado_id: 1 }, { empleado_id: 2 }], e_empleado_visualizacion_manual_puesto: [{ empleado_id: 1, firma_empleado_manual: "x" }, { empleado_id: 1, firma_empleado_manual: "x" }] });
         assert.deepEqual([o.empleados_enviados, o.vistos, o.firmados, o.pendientes], [2, 1, 1, 1]);
     });
+    it("quien lo abrió cuenta como enviado aunque no esté vinculado (le llegó por su puesto)", () => {
+        const o = mapManualPuestoRow({ id: 3, e_empleados_manual_puesto: [], e_empleado_visualizacion_manual_puesto: [{ empleado_id: 7, firma_empleado_manual: null }] });
+        assert.deepEqual([o.empleados_enviados, o.vistos, o.pendientes], [1, 1, 0]);
+    });
     it("tolera relaciones ausentes y nulos", () => {
         const o = mapManualPuestoRow({ id: 1, created_at: null, title: null, description: null });
         assert.deepEqual([o.creado, o.titulo, o.clasificacion, o.puestos_vinculados, o.empleados_enviados, o.vistos, o.firmados, o.aprobados], [null, null, null, 0, 0, 0, 0, 0]);
