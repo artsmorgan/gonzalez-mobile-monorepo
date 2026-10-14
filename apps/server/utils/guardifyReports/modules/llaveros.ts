@@ -95,8 +95,8 @@ export function mapLlaveroRow(r: any, creador?: any, ejecutivo?: string | null, 
         ultima_recibe: last ? txt(last.nombre_persona_recibe) : null,
         observaciones: short(r.observaciones),
         creado_por: nombre(creador),
-        modificado: fmtDt(modificado?.at as any),
-        modificado_por: txt(modificado?.por),
+        modificado: (r as any).updated_at ? fmtDt((r as any).updated_at) : (fmtDt(modificado?.at as any)),
+        modificado_por: (r as any).audit_modificado_por ?? (txt(modificado?.por)),
         ejecutivo_cuenta: txt(ejecutivo),
     };
 }

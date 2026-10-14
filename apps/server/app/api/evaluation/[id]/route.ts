@@ -5,6 +5,7 @@ import { reportError } from "../../../../utils/reportError";
 import fs from "fs";
 import path from "path";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 export const runtime = "nodejs";
 
 export async function DELETE(
@@ -135,7 +136,7 @@ export async function PATCH(
         table: "c_evaluacion_empleado",
         operation: "update",
         where: { id },
-        data: { [field]: valueToStore }
+        data: { ...auditUpdateFields(payload, ["updated_at", "updated_by"]), [field]: valueToStore }
       }
     });
 

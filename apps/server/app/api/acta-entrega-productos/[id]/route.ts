@@ -8,6 +8,7 @@ import { uploadDynamicFiles } from '../../../../utils/callDynamicFilesApi';
 import { mapActaEntregaImagesForClient } from '../mapActaEntregaImagesForClient';
 import { reportError } from '../../../../utils/reportError';
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 export const runtime = 'nodejs';
 
 type ActaImageInput = {
@@ -133,7 +134,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         table: "c_acta_entre_producto",
         operation: "update",
         where: { id: actaId },
-        data: updateData,
+        data: { ...updateData, ...auditUpdateFields(payload, ["updated_at", "updated_by"]) },
         include: { c_imagenes_acta_entrega_producto: true },
       },
     });
@@ -305,7 +306,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         table: "c_acta_entre_producto",
         operation: "update",
         where: { id: actaId },
-        data: { isActive: false },
+        data: { ...auditUpdateFields(payload, ["updated_at", "updated_by"]), isActive: false },
       },
     });
 

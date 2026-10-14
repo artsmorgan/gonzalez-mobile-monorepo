@@ -11,8 +11,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View,
-} from 'react-native';
+  View, RefreshControl } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import SignatureScreen from 'react-native-signature-canvas';
@@ -45,6 +44,7 @@ import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRe
 import { saveFile, getFile, deleteFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
 import { RootStackParamList } from '../App';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'PermitRequest'>;
 type PermitType = 'Con goce' | 'Sin goce';
@@ -266,6 +266,21 @@ const buildPermitRequestMediaUrl = (
 };
 
 export default function PermitRequestScreenV2() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (fetchAll());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const navigation = useNavigation<Nav>();
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const { scanQR, QRScannerComponent } = useQRScanner();
@@ -1290,7 +1305,7 @@ export default function PermitRequestScreenV2() {
     <ThemedView style={styles.container}>
       <AppHeader title="Solicitud de permiso" onMenuPress={() => setIsMenuVisible(true)} />
 
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+      <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} style={styles.scrollView} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         <ThemedView style={styles.content}>
           {!!error && <ThemedText style={styles.errorText}>{error}</ThemedText>}
 

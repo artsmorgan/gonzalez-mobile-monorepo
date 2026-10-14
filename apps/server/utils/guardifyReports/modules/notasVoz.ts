@@ -53,8 +53,8 @@ export function mapNotaVozRow(r: any, ejecutivo?: string | null): OutRow {
         creado_por: text(r.creador_nombre, 200),
         ejecutivo_cuenta: text(ejecutivo, 200),
         // La tabla no guarda `updated_at`/`updated_by` ni historial de cambios (la nota se puede editar): brecha de auditoría.
-        modificado: null,
-        modificado_por: null,
+        modificado: (r as any).updated_at ? fmtDt((r as any).updated_at) : (null),
+        modificado_por: (r as any).audit_modificado_por ?? (null),
     };
 }
 

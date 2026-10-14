@@ -75,9 +75,9 @@ export function mapVisitaVehiculoRow(r: any): OutRow {
         departamento: txt(r.departamento_visita),
         persona_visita: txt(r.persona_visita),
         ejecutivo_cuenta: txt(r.ejecutivo_cuenta_nombre),
-        creado_por: txt(r.creado_por_nombre),
+        creado_por: (r as any).audit_creado_por ?? (txt(r.creado_por_nombre)),
         modificado: fmtDt(r.updated_at),
-        modificado_por: txt(r.modificado_por_nombre),
+        modificado_por: (r as any).audit_modificado_por ?? (txt(r.modificado_por_nombre)),
     };
 }
 

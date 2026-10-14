@@ -68,8 +68,8 @@ export function mapSolicitudPermisoRow(r: any): OutRow {
         observaciones: txt(r.observaciones_txt ?? r.observaciones),
         creado_por: nombre(r.creado_por_nombre, r.created_by),
         // La tabla no guarda modificación (sin `updated_at` ni `updated_by`): se entrega vacío (brecha de auditoría).
-        modificado: null,
-        modificado_por: null,
+        modificado: (r as any).updated_at ? fmtDt((r as any).updated_at) : (null),
+        modificado_por: (r as any).audit_modificado_por ?? (null),
         tipo_turno: txt([...new Set((Array.isArray(r.turnos_list) ? r.turnos_list : []).map((t: any) => tipoTurnoLabel(t?.tipo_turno)).filter(Boolean))].sort().join("; ")),
     };
 }

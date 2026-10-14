@@ -12,6 +12,7 @@ import {
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 export type EvaluacionPersonalModuleFilters = ActaEntregaModuleFilters & {
     empleadoEvaluadoIds?: number[] | null;
@@ -144,7 +145,7 @@ function safeImageBaseName(name: string): string | null {
     return b;
 }
 
-export async function queryEvaluacionEmpleadoRows(
+async function queryEvaluacionEmpleadoRowsInner(
     prisma: ReportDataAccess,
     filters: EvaluacionPersonalModuleFilters,
     orderKey: EvaluacionPersonalOrderKey,
@@ -265,6 +266,13 @@ export async function queryEvaluacionEmpleadoRows(
                 return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
         }
     });
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryEvaluacionEmpleadoRows(...args: Parameters<typeof queryEvaluacionEmpleadoRowsInner>): ReturnType<typeof queryEvaluacionEmpleadoRowsInner> {
+    const rows = await queryEvaluacionEmpleadoRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 function mergeWide(ws: ExcelJS.Worksheet, r: number, c1: number, c2: number) {

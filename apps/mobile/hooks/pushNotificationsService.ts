@@ -16,22 +16,37 @@ export type PushDeviceAction = {
   created_at: number;
 };
 
-/** Handler en primer plano: mostrar banner/lista/sonido (Android release a menudo no pinta el del SO solo). */
+/**
+ * Con la app abierta, cada push remoto (FCM) se vuelve a presentar UNA vez como notificación local (ver `presentPushAsLocalNotification`
+ * y el listener de App.tsx), porque en Android release el banner del SO a veces no se pinta solo. Para que no salgan dos, mientras ese
+ * listener esté activo el handler solo muestra la copia local y deja pasar en silencio la remota.
+ */
+let localReinforcementActive = false;
+export function setPushLocalReinforcementActive(active: boolean): void {
+  localReinforcementActive = active;
+}
+
+/** Handler en primer plano: una sola notificación visible por push (la copia local si hay refuerzo activo; si no, la remota). */
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
+  handleNotification: async (notification) => {
+    const data = (notification?.request?.content?.data || {}) as Record<string, unknown>;
+    const isLocalCopy = String(data._presentedLocally ?? '') === '1';
+    const show = isLocalCopy || !localReinforcementActive;
+    return {
+      shouldShowAlert: show,
+      shouldPlaySound: show,
+      shouldSetBadge: show,
+      shouldShowBanner: show,
+      shouldShowList: show,
+    };
+  },
 });
 
 export function resolveAppVariant(): 'lite' | 'full' {
   const pkg = String(Constants.expoConfig?.android?.package || '');
   if (pkg.endsWith('.lite')) return 'lite';
   const name = String(Constants.expoConfig?.name || '');
-  if (name.toLowerCase().includes('lite')) return 'lite';
+  if (name.toLowerCase().includes('lite') || name.toLowerCase().includes('(test)')) return 'lite';
   return 'full';
 }
 

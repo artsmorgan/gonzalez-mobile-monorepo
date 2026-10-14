@@ -6,6 +6,8 @@ import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { reportError } from "../../../utils/reportError";
 
+import { auditCreateFields } from "../../../utils/auditFields";
+import { syncActividadHierarchy } from "../../../utils/syncActividadHierarchy";
 export async function GET(req: NextRequest) {
     try {
         return NextResponse.json({ status: true, message: "Método GET" }, { status: 200 });
@@ -52,6 +54,7 @@ export async function POST(req: NextRequest) {
                 action: "POST",
                 table: "e_actividades",
                 data: {
+                    ...auditCreateFields(payload, ["created_at", "created_by"]),
                     nombre_actividad: nombre_actividad,
                     fecha_inicio: new Date(fecha_inicio).toISOString(),
                     fecha_fin: fecha_fin ? new Date(fecha_fin).toISOString() : new Date(fecha_inicio).toISOString(),
@@ -110,6 +113,8 @@ export async function POST(req: NextRequest) {
                         })),
                     },
                 });
+                // Jerarquía propia de la actividad: la de sus puestos (cada nivel solo si todos coinciden).
+                await syncActividadHierarchy(req, Number(actividad.id));
             }
 
             // 3) Plazas activas (misma lógica que main_structure_cache) para notificaciones

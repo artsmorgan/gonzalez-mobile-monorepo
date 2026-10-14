@@ -7,6 +7,7 @@ import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { sendNotificationByEmployee } from "../../../utils/sendNotification";
 import { reportError } from "../../../utils/reportError";
 
+import { auditCreateFields } from "../../../utils/auditFields";
 export async function POST(req: NextRequest) {
     try {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -169,6 +170,7 @@ export async function POST(req: NextRequest) {
                 action: "POST",
                 table: "c_evaluacion_empleado",
                 data: {
+                    ...auditCreateFields(payload, ["created_by"]),
                     empleado_id: empleado_id,
                     evaluador_id: evaluador_id,
                     fecha_ingreso: new Date(fecha_ingreso).toISOString(),

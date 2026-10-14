@@ -63,10 +63,10 @@ export function mapActaEntregaRow(r: any, ejecutivo: string | null = null, audit
         ejecutivo_cuenta: txt(ejecutivo),
         // Quienes intervienen, «cédula - nombre» de quien entrega y de quien recibe: el filtro «Empleado» busca por cédula o nombre en cualquiera de los dos.
         empleado: [persona(r.cedula_entrega, r.nombre_entrega), persona(r.cedula_recibe, r.nombre_recibe)].filter(Boolean).join(" · ").slice(0, 500) || null,
-        creado: auditoria?.creado ?? null,
-        creado_por: txt(auditoria?.creado_por),
-        modificado: auditoria?.modificado ?? null,
-        modificado_por: txt(auditoria?.modificado_por),
+        creado: (r as any).created_at ? fmtDt((r as any).created_at) : (auditoria?.creado ?? null),
+        creado_por: (r as any).audit_creado_por ?? (txt(auditoria?.creado_por)),
+        modificado: (r as any).updated_at ? fmtDt((r as any).updated_at) : (auditoria?.modificado ?? null),
+        modificado_por: (r as any).audit_modificado_por ?? (txt(auditoria?.modificado_por)),
     };
 }
 

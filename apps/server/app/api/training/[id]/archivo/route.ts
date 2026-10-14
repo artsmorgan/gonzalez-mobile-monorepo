@@ -5,9 +5,10 @@ import { deleteDynamicFile } from "../../../../../utils/callDynamicFilesApi";
 import { reportError } from "../../../../../utils/reportError";
 import { parseTrainingFileField, serializeTrainingFileItems } from "../../trainingFileField";
 
+import { auditUpdateFields } from "../../../../../utils/auditFields";
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, expired, message } = await verifyAccessTokenByApi(req);
+        const { valid, expired, message, payload } = await verifyAccessTokenByApi(req);
         if (!valid) {
             return NextResponse.json({ status: false, expired, message }, { status: expired ? 401 : 403 });
         }
@@ -91,7 +92,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
                 table: "e_registro_capacitaciones",
                 operation: "update",
                 where: { id },
-                data: { file: serializeTrainingFileItems(next) },
+                data: { ...auditUpdateFields(payload, ["updated_at", "updated_by"]), file: serializeTrainingFileItems(next) },
             },
         });
 

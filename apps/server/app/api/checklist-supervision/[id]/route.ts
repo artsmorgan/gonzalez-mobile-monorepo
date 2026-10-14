@@ -14,6 +14,7 @@ import {
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../utils/hydratePreexistentIncludes";
 import { reportError } from "../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 const CHECKLIST_SUPERVISION_INCLUDE = {
   e_estructura_cliente: { select: { id: true, nombre: true } },
   e_estructura_sucursal: { select: { id: true, nombre: true } },
@@ -229,7 +230,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         action: "UPDATE",
         table: "c_checklist_supervision",
         where: { id },
-        data: updateDataForApi
+        data: { ...updateDataForApi, ...auditUpdateFields(payload, ["updated_at", "updated_by"]) }
       }
     });
 
@@ -275,7 +276,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             action: "UPDATE",
             table: "c_checklist_supervision",
             where: { id },
-            data: { articulos_puesto: articulosStored },
+            data: { ...auditUpdateFields(payload, ["updated_at", "updated_by"]), articulos_puesto: articulosStored },
           },
         });
       }
@@ -391,7 +392,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         action: "UPDATE",
         table: "c_checklist_supervision",
         where: { id },
-        data: { isActive: false },
+        data: { ...auditUpdateFields(payload, ["updated_at", "updated_by"]), isActive: false },
       },
     });
     return NextResponse.json({ status: true, message: "Checklist eliminado correctamente" }, { status: 200 });

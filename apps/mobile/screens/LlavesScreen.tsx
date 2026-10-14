@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, Modal, View, Image, Dimensions } from 'react-native';
+import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, Modal, View, Image, Dimensions, RefreshControl } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -58,6 +58,7 @@ import {
 import { localizeMovimientosFirmas } from '@/hooks/llavesCacheHelpers';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type LlaveUI = LlaveItem & { id_local?: string };
 type MovimientoUI = {
@@ -183,6 +184,21 @@ const normalizeLlaverosList = async (arr: any[]): Promise<LlaveroUI[]> =>
 const FIRMA_MANUAL_OFFLINE_MESSAGE = 'Para visualizar las firmas manuales, conéctate a internet y actualiza la lista';
 
 export default function LlavesScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (activeTab === 'llaves' ? fetchLlaves() : fetchLlaveros());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const navigation = useNavigation<any>();
   const { employee, refreshAccessToken, logout } = useAuth();
   /** AuthContext no memoiza refresh/logout: sin ref, cualquier useCallback que los liste cambia cada render y re-dispara effects (p. ej. bucle en el picker de llaves del formulario de llavero). */
@@ -3296,7 +3312,7 @@ export default function LlavesScreen() {
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title={activeTab === 'llaves' ? 'Llaves' : 'Llaveros'} />
 
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+      <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <ThemedView style={styles.content}>
           {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
 

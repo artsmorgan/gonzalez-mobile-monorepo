@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, Modal, View, Image, Dimensions } from 'react-native';
+import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, Modal, View, Image, Dimensions, RefreshControl } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../App';
@@ -77,6 +77,7 @@ import {
 import Constants from 'expo-constants';
 import { isStoredPlanillasTokenValid, readStoredPlanillasToken } from '@/hooks/planillasTokenStorage';
 import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRevalidationModal';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 const CHECKLIST_SUPERVISION_PHOTO_PREFIX = 'checklist_supervision';
 
@@ -1534,6 +1535,21 @@ function formatSignatureForDisplay(value?: string | null): string {
 }
 
 export default function ChecklistSupervisionScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (fetchChecklists());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const { scanQR, QRScannerComponent } = useQRScanner();
@@ -4674,7 +4690,7 @@ export default function ChecklistSupervisionScreen() {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Checklist de Supervisión" />
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+      <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <ThemedView style={styles.contentContainer}>
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>

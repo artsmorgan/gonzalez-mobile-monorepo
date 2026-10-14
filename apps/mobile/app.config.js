@@ -29,8 +29,8 @@ module.exports = ({ config }) => {
 
   return {
       expo: {
-      /** Nombre visible: siempre MonitoreApp (la variante lite solo afecta package/flavor). */
-      name: "MonitoreApp",
+      /** Nombre visible bajo el ícono: "MonitoreApp (Test)" en lite y "MonitoreApp" en prod/full (en Android lo fija el recurso app_name de cada flavor). */
+      name: variant === "lite" ? "MonitoreApp (Test)" : "MonitoreApp",
       slug: "Gonzalez-Mobile-App",
       version: "1.0.0",
       platforms: [

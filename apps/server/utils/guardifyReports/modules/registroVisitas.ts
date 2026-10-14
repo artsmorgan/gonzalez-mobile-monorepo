@@ -75,9 +75,9 @@ export function mapRegistroVisitaRow(r: any): OutRow {
         activos: Array.isArray(r.e_activo_visitante) ? r.e_activo_visitante.length : 0,
         observaciones: txt(r.observaciones),
         ejecutivo_cuenta: txt(r.ejecutivo_cuenta_nombre),
-        creado_por: txt(r.creado_por_nombre),
+        creado_por: (r as any).audit_creado_por ?? (txt(r.creado_por_nombre)),
         modificado: fmtDt(r.updated_at),
-        modificado_por: txt(r.modificado_por_nombre),
+        modificado_por: (r as any).audit_modificado_por ?? (txt(r.modificado_por_nombre)),
     };
 }
 

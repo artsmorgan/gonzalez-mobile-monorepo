@@ -7,6 +7,7 @@ import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { reportError } from "../../../../utils/reportError";
 import { deleteUploadsFileByRelativePath } from "../../../utils/deleteUploadsFileByRelativePath";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 type AttendanceControlImageInput = {
   file_base64: string;
   extension?: string;
@@ -217,6 +218,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         operation: "update",
         where: { id: idNum },
         data: {
+            ...auditUpdateFields(payload, ["updated_at", "updated_by"]),
           empresa_id,
           cliente_id,
           division_id,

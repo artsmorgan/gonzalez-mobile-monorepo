@@ -11,7 +11,9 @@ import {
     formatDateOnlyDMY,
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
+    formatDateTimeDMY,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 export type AperturaCierrePuestoModuleFilters = ActaEntregaModuleFilters & {
     createdByIds?: number[] | null;
@@ -155,7 +157,7 @@ async function readOpeningClosingPhotoCandidates(aperturaId: number, imageNames:
     return out;
 }
 
-export async function queryAperturaCierrePuestoRows(
+async function queryAperturaCierrePuestoRowsInner(
     prisma: ReportDataAccess,
     filters: AperturaCierrePuestoModuleFilters,
     orderKey: AperturaCierrePuestoOrderKey,
@@ -293,6 +295,13 @@ export async function queryAperturaCierrePuestoRows(
                 return new Date(b.fecha).getTime() - new Date(a.fecha).getTime();
         }
     });
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryAperturaCierrePuestoRows(...args: Parameters<typeof queryAperturaCierrePuestoRowsInner>): ReturnType<typeof queryAperturaCierrePuestoRowsInner> {
+    const rows = await queryAperturaCierrePuestoRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 export async function buildAperturaCierrePuestoExcelConsolidado(
@@ -477,8 +486,8 @@ export async function buildAperturaCierrePuestoExcelConsolidado(
         const rootRow = addMainRow(main, [
             String(r.id),
             r.creador_nombre,
-            cambio?.nombreCompleto ?? "",
-            cambio?.fechaHoraTexto ?? "",
+            r.audit_modificado_por ?? cambio?.nombreCompleto ?? "",
+            r.updated_at ? formatDateTimeDMY(r.updated_at) : (cambio?.fechaHoraTexto ?? ""),
             r.empresa_nombre,
             r.cliente_nombre,
             r.division_nombre,

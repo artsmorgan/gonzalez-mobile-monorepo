@@ -7,6 +7,7 @@ import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { prisma } from "../../../../utils/prismaClient";
 import { reportError } from "../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 function parseDateTime(value: any): Date | null {
   if (!value) return null;
   const d = new Date(String(value));
@@ -137,7 +138,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         table: "c_boleta_apreciacion_vulnerabilidad",
         operation: "update",
         where: { id },
-        data: updateData,
+        data: { ...updateData, ...auditUpdateFields(payload, ["updated_at", "updated_by"]) },
       },
     });
 
@@ -278,6 +279,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         operation: "update",
         where: { id },
         data: {
+            ...auditUpdateFields(payload, ["updated_at", "updated_by"]),
           isActive: false,
         },
       },

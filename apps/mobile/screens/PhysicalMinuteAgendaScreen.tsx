@@ -10,8 +10,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-  Dimensions,
-} from 'react-native';
+  Dimensions, RefreshControl } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import SignatureScreen from 'react-native-signature-canvas';
@@ -51,6 +50,7 @@ import {
 import authedFetch from '@/hooks/authedFetch';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type PhysicalMinuteAgendaScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'PhysicalMinuteAgenda'>;
 
@@ -408,6 +408,21 @@ const resolveHierarchyByPuestoId = (tree: StructureTree, puestoId: number | null
 };
 
 export default function PhysicalMinuteAgendaScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (fetchRecords());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   // `<Image>` no puede enviar cabecera Authorization: el token se agrega como query param,
   // igual que en ChecklistSupervisionScreen.tsx/VehiclesScreen.tsx, porque el endpoint
@@ -2981,7 +2996,7 @@ export default function PhysicalMinuteAgendaScreen() {
       {isCreating ? (
         renderForm()
       ) : (
-        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+        <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
           <ThemedView style={styles.content}>
             <ThemedView style={styles.titleContainer}>
               <ThemedText type="title" style={styles.title}>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Modal, View, Platform, Image } from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Modal, View, Platform, Image, RefreshControl } from 'react-native';
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -35,6 +35,7 @@ import { saveFile, getLocalFileDisplayUri, persistSignatureRef, hydrateSignature
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { buildNotesImagenesJsonForUpload, deleteNotesLocalFilesFromMeta, stripNoteImagesForActionPayload } from '@/hooks/notesFilesSync';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type NotesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Notes'>;
 
@@ -228,6 +229,21 @@ function findPuestoMetaInStructure(structureArr: MainStructureTree, puestoId: nu
 const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
 export default function NotesScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (fetchNotes());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const { scanQR, QRScannerComponent } = useQRScanner();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -2957,6 +2973,7 @@ export default function NotesScreen() {
         </ThemedView>
       )}
       <ScrollView
+        refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />}
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={true}

@@ -6,6 +6,7 @@ import { toZonedTime } from "date-fns-tz";
 import { saveAgendaMinutaImages, type AgendaMinutaImageInput } from "../../../../utils/agendaMinutaImages";
 import { reportError } from "../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 const AGENDA_MINUTA_ESTRUCTURA_INCLUDE = {
   e_estructura_cliente: { select: { nombre: true } },
   e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
@@ -237,7 +238,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         action: "UPDATE",
         table: "c_agenda_minuta",
         where: { id: idNum },
-        data,
+        data: { ...data, ...auditUpdateFields(payload, ["updated_at", "updated_by"]) },
         ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
       },
     });
@@ -376,7 +377,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         action: "UPDATE",
         table: "c_agenda_minuta",
         where: { id: idNum },
-        data: { isActive: false },
+        data: { ...auditUpdateFields(payload, ["updated_at", "updated_by"]), isActive: false },
       },
     });
 

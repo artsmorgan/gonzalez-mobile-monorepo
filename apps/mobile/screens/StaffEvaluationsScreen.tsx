@@ -10,8 +10,7 @@ import {
   TouchableOpacity,
   View,
   Image,
-  Platform,
-} from 'react-native';
+  Platform, RefreshControl } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList } from '../App';
@@ -58,6 +57,7 @@ import {
   staffEvalMakeLocalImageRef,
   staffEvaluacionStringForActionPayload,
 } from '@/hooks/staffEvaluationsMediaSync';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type StaffEvaluationsNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -354,6 +354,21 @@ const buildStaffHierarchyFromCurrentMarca = (current: any, tree: StaffStructureT
 };
 
 export default function StaffEvaluationsScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (reloadEvaluationsList());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const navigation = useNavigation<StaffEvaluationsNavigationProp>();
   const appendTokenToUrl = (url: string) => {
@@ -2952,6 +2967,7 @@ export default function StaffEvaluationsScreen() {
         title="Evaluaciones de personal"
       />
       <ScrollView
+        refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />}
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"

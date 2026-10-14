@@ -9,8 +9,7 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  View,
-} from 'react-native';
+  View, RefreshControl } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -41,6 +40,7 @@ import {
   validateMobileVariableValue,
 } from '@/utils/validateMobileVariable';
 import { RootStackParamList } from '../App';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type NomencladoresScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Nomencladores'>;
 
@@ -266,6 +266,21 @@ function parseRecordsFromResponse(rows: any[]): NomenclatorRow[] {
 }
 
 export default function NomencladoresScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (selectedType ? fetchRecords(selectedType, filterArticuloId) : undefined);
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const navigation = useNavigation<NomencladoresScreenNavigationProp>();
   const { refreshAccessToken, logout } = useAuth();
 
@@ -965,7 +980,7 @@ export default function NomencladoresScreen() {
         </ThemedView>
       ) : null}
 
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <ThemedView style={styles.titleContainer}>
           <ThemedText type="title" style={styles.title}>
             <Ionicons name="albums" size={22} color="#000000" /> Nomencladores

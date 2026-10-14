@@ -177,6 +177,7 @@ import {
   extractPushData,
   flushPushDeviceActions,
   presentPushAsLocalNotification,
+  setPushLocalReinforcementActive,
   PUSH_DEVICE_ACTIONS_KEY,
   resolvePushNavigationTarget,
   syncPushDeviceRegistration,
@@ -9855,6 +9856,8 @@ function AppContent() {
       void (async () => {
         try {
           const data = extractPushData(notification.request.content);
+          // La copia local que presentamos nosotros mismos vuelve a pasar por este listener: el push original ya se procesó.
+          if (data._presentedLocally === '1') return;
           console.log('[push] Notificación recibida:', {
             title: notification.request.content.title,
             body: notification.request.content.body,
@@ -9887,6 +9890,9 @@ function AppContent() {
         }
       })();
     });
+
+    // Desde aquí, el handler muestra solo la copia local de cada push (evita la notificación duplicada con la app abierta).
+    setPushLocalReinforcementActive(true);
 
     const responseSub = Notifications.addNotificationResponseReceivedListener((response) => {
       void (async () => {
@@ -9930,6 +9936,7 @@ function AppContent() {
     })();
 
     return () => {
+      setPushLocalReinforcementActive(false);
       receivedSub.remove();
       responseSub.remove();
     };

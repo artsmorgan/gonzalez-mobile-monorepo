@@ -9,6 +9,7 @@ import {
     resolveTrainingFilesMetaList,
 } from "../trainingFileField";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
         const { valid, expired, message, payload } = await verifyAccessTokenByApi(req);
@@ -88,7 +89,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     table: "e_registro_capacitaciones",
                     operation: "update",
                     where: { id },
-                    data: updateData,
+                    data: { ...updateData, ...auditUpdateFields(payload, ["updated_at", "updated_by"]) },
                 },
             });
         }

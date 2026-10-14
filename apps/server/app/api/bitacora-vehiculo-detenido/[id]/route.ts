@@ -10,6 +10,7 @@ import {
 import { hydrateBitacoraRevisionImagesFromMultipart } from "../../../../utils/bitacoraRevisionImages";
 import { reportError } from "../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 type MultipartBody = { get(name: string): string | { arrayBuffer(): Promise<ArrayBuffer> } | null };
 
 async function parseBitacoraPutBody(req: NextRequest): Promise<{
@@ -226,7 +227,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         action: "UPDATE",
         table: "c_bitacora_vehiculo_detenido",
         where: { id },
-        data: updateDataForApi
+        data: { ...updateDataForApi, ...auditUpdateFields(payload, ["updated_at", "updated_by"]) }
       }
     });
 

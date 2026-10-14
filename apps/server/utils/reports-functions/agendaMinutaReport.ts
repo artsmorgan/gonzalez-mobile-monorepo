@@ -29,7 +29,9 @@ import {
     fetchLatestCambiosPorRegistro,
     formatDateOnlyDMY,
     type ConsolidadoBannerMeta,
+    formatDateTimeDMY,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 export type AgendaMinutaModuleFilters = ActaEntregaModuleFilters & {
     estadoMinuta?: "todos" | "completado" | "pendiente";
@@ -154,7 +156,7 @@ function parseTemas(raw: string | null | undefined): string[] {
     }
 }
 
-export async function queryAgendaMinutaReportRows(
+async function queryAgendaMinutaReportRowsInner(
     prisma: ReportDataAccess,
     filters: AgendaMinutaModuleFilters,
     orderKey: AgendaMinutaOrderKey,
@@ -270,6 +272,13 @@ export async function queryAgendaMinutaReportRows(
     });
 
     return sorted;
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryAgendaMinutaReportRows(...args: Parameters<typeof queryAgendaMinutaReportRowsInner>): ReturnType<typeof queryAgendaMinutaReportRowsInner> {
+    const rows = await queryAgendaMinutaReportRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 async function resolveLogoBuffer(empresaId: number): Promise<Buffer | null> {
@@ -960,8 +969,8 @@ export async function buildAgendaMinutaExcelConsolidado(
             r.titulo,
             r.autor,
             creadoPorTxt,
-            cambio?.nombreCompleto ?? "",
-            cambio?.fechaHoraTexto ?? "",
+            r.audit_modificado_por ?? cambio?.nombreCompleto ?? "",
+            r.updated_at ? formatDateTimeDMY(r.updated_at) : (cambio?.fechaHoraTexto ?? ""),
             r.estado ? "Completado" : "Pendiente",
         ];
 

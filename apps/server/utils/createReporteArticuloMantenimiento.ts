@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { callDynamicPrisma } from "./callDynamicPrisma";
 import { prisma } from "./prismaClient";
+import { actorFromRequest, auditCreateFields, auditUpdateFields } from "./auditFields";
 
 export type CreatedMantenimientoReport = {
   articuloId: number;
@@ -233,6 +234,8 @@ export async function createReport(
           serie_placa: articulo.serie,
           created_at: articulo.created_at,
           updated_at: articulo.updated_at,
+          ...auditCreateFields(actorFromRequest(req), ["created_by"]),
+          ...auditUpdateFields(actorFromRequest(req), ["updated_by"]),
         },
       },
     });
@@ -270,6 +273,7 @@ export async function updateReport(req: NextRequest, articulos_reporte_update: a
       reporte.serie_placa !== undefined ? reporte.serie_placa : reporte.serie;
     if (seriePlaca !== undefined) data.serie_placa = seriePlaca;
     if (reporte.updated_by !== undefined) data.updated_by = reporte.updated_by;
+    else Object.assign(data, auditUpdateFields(actorFromRequest(req), ["updated_by"]));
     await callDynamicPrisma({
       req,
       data: {

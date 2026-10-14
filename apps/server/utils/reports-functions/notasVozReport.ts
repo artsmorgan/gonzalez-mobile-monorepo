@@ -10,6 +10,7 @@ import {
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 export type NotasVozModuleFilters = ActaEntregaModuleFilters;
 
@@ -70,7 +71,7 @@ export function filtersMatchNotasVozListQuery(parsedRowFilters: any, listModuleF
     return true;
 }
 
-export async function queryNotasVozRows(
+async function queryNotasVozRowsInner(
     prisma: ReportDataAccess,
     filters: NotasVozModuleFilters,
     orderKey: NotasVozOrderKey,
@@ -182,6 +183,13 @@ export async function queryNotasVozRows(
                 return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
         }
     });
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryNotasVozRows(...args: Parameters<typeof queryNotasVozRowsInner>): ReturnType<typeof queryNotasVozRowsInner> {
+    const rows = await queryNotasVozRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 export async function buildNotasVozExcelConsolidado(

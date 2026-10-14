@@ -11,6 +11,7 @@ import { reportError } from "../../../utils/reportError";
 import { v4 as uuidv4 } from "uuid";
 import axios from "axios";
 import dotenv from "dotenv";
+import { resolvePuestoHierarchy } from "../../../utils/resolvePuestoHierarchy";
 dotenv.config();
 
 export const runtime = "nodejs";
@@ -916,6 +917,9 @@ export async function POST(req: NextRequest) {
         const imageReceivesFileName = imageReceivesRaw ? buildEntregaImageFileName() : null;
         const imageDeliveryFileName = imageDeliveryRaw ? buildEntregaImageFileName() : null;
 
+        // Jerarquía propia del registro (empresa, contrato y división; cliente y sucursal ya se guardan) a partir del puesto.
+        const jerarquiaPuesto = await resolvePuestoHierarchy(puesto_id);
+
         // Crear el registro (incluye nombres UUID de las imágenes cuando existen)
         const nuevoRegistro = await callDynamicPrisma({
             req,
@@ -926,6 +930,9 @@ export async function POST(req: NextRequest) {
                     cliente_id: parseInt(cliente_id),
                     corpo_id: parseInt(corpo_id),
                     puesto_id: parseInt(puesto_id),
+                    empresa_id: jerarquiaPuesto.empresa_id,
+                    contrato_id: jerarquiaPuesto.contrato_id,
+                    division_id: jerarquiaPuesto.division_id,
                     oficial_entrega: oficialEntregaFinal,
                     fecha_entrada_entrega: fechaEntradaEntregaISO,
                     fecha_salida_entrega: fechaSalidaEntregaISO,

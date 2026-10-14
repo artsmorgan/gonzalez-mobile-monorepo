@@ -11,8 +11,7 @@ import {
   Linking,
   unstable_batchedUpdates,
   Dimensions,
-  View,
-} from 'react-native';
+  View, RefreshControl } from 'react-native';
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -65,6 +64,7 @@ import EmployeeSearchModal from '@/components/EmployeeSearchModal';
 import PuestoSearchModal from '@/components/PuestoSearchModal';
 import type { EmployeeSearchHit } from '@/hooks/employeeSearch';
 import type { PuestoSearchHit } from '@/hooks/puestoSearch';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type TrainingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Trainings'>;
 type TrainingsScreenRouteProp = RouteProp<RootStackParamList, 'Trainings'>;
@@ -387,6 +387,21 @@ function filterCachedTrainingsForSelectedCorpo(
 }
 
 export default function TrainingsScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (marcaId && filterCorpoId != null && Number(filterCorpoId) > 0 ? fetchTrainingsForCorpo() : undefined);
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const route = useRoute<TrainingsScreenRouteProp>();
   const matchCacheToFilterCorpo = route.params?.matchCacheToFilterCorpo ?? true;
 
@@ -2147,7 +2162,7 @@ export default function TrainingsScreen() {
           <ThemedText style={styles.offlineBannerText}>{offlineMessage}</ThemedText>
         </ThemedView>
       )}
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+      <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         {/* Module Title */}
         <ThemedView style={styles.titleContainer}>
           <ThemedText type="title" style={styles.title}>

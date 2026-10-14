@@ -2,6 +2,7 @@ import { callDynamicPrisma } from "./callDynamicPrisma";
 import { NextRequest } from "next/server";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "./prismaClient";
+import { auditCreateFields } from "./auditFields";
 
 export async function createLoginMarca(req: NextRequest, id: number, now: Date, deviceName: string, sessionId: string, cords: { lat: string | null, lng: string | null }) {
     try {
@@ -21,7 +22,8 @@ export async function createLoginMarca(req: NextRequest, id: number, now: Date, 
                 device: deviceName,
                 session_id: sessionId,
                 lat: cords.lat,
-                lng: cords.lng
+                lng: cords.lng,
+                ...auditCreateFields({ id }, ["created_at", "created_by"]),
             } }
         });
 

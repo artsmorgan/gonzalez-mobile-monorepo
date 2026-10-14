@@ -55,10 +55,10 @@ export function mapRegistroCapacitacionRow(r: any): OutRow {
         observaciones: txt(r.observaciones),
         ejecutivo_cuenta: txt(r.ejecutivo_cuenta_nombre),
         puestos_destino: txt(puestos.map((x) => String(x?.label ?? "").trim()).filter(Boolean).join("; ")),
-        creado: null,
-        creado_por: txt(r.creado_por_nombre),
-        modificado: null,
-        modificado_por: null,
+        creado: (r as any).created_at ? fmtDt((r as any).created_at) : (null),
+        creado_por: (r as any).audit_creado_por ?? (txt(r.creado_por_nombre)),
+        modificado: (r as any).updated_at ? fmtDt((r as any).updated_at) : (null),
+        modificado_por: (r as any).audit_modificado_por ?? (null),
     };
 }
 

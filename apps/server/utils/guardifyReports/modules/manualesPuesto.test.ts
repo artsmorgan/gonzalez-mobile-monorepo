@@ -26,9 +26,13 @@ describe("manuales de trabajo: mapeo", () => {
         assert.equal((o.descripcion as string).length, 500);
         assert.deepEqual([o.empresa, o.cliente, o.division, o.contrato, o.sucursal, o.puesto], ["9 - Empresa", "Cliente", "D - División", "C1 - Contrato", "S1 - Sucursal", "P1 - Puesto"]);
         assert.deepEqual([o.puestos_vinculados, o.empleados_enviados, o.vistos, o.firmados, o.aprobados, o.pendientes], [2, 3, 3, 1, 1, 0]);
-        // Auditoría y jerarquía estándar: el manual no guarda modificación.
+        // Sin `updated_at`/`updated_by` (manual anterior a esas columnas): modificación vacía.
         assert.deepEqual([o.id, o.modificado, o.modificado_por], [60, null, null]);
         assert.equal(o.creado_por, "11 - Carla Soto");
+    });
+    it("toma la modificación de las columnas propias del manual", () => {
+        const o = mapManualPuestoRow({ ...raw, updated_at: new Date("2026-10-02T14:30:00Z"), updated_by_nombre: "12 - Luis Mora" });
+        assert.deepEqual([o.modificado, o.modificado_por], ["2026-10-02T14:30:00", "12 - Luis Mora"]);
     });
     it("agrega los puestos (principal y vinculados), el ejecutivo de cuenta y completa la división", () => {
         const linked = { ...raw, e_puestos_manual_puesto: [{ puesto_id: 10, e_estructura_puesto: { id: 10, codigo: "P2", nombre: "Ronda" } }, { puesto_id: 11, e_estructura_puesto: null }, { puesto_id: 6, e_estructura_puesto: { id: 6, codigo: "P1", nombre: "Puesto" } }] };

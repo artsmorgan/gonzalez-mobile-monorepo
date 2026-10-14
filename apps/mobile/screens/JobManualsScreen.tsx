@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Dimensions, Image, Modal, ScrollView, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Dimensions, Image, Modal, ScrollView, StyleSheet, TextInput, TouchableOpacity, View, RefreshControl } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Network from 'expo-network';
@@ -56,6 +56,7 @@ import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 
@@ -214,6 +215,21 @@ function isVisualizationQuizGraded(vis: {
 }
 
 export default function JobManualsScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (refreshManualsList());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const navigation = useNavigation<JobManualsNavigationProp>();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -418,6 +434,8 @@ export default function JobManualsScreen() {
   const [quizTempAnswers, setQuizTempAnswers] = useState<string[]>([]);
   const [quizTempPoints, setQuizTempPoints] = useState<string>('');
   const [isSavingQuizQuestion, setIsSavingQuizQuestion] = useState(false);
+  /** Id de la pregunta que se está editando en el modal (null = se está agregando una nueva). */
+  const [editingQuizQuestionId, setEditingQuizQuestionId] = useState<string | null>(null);
 
   const getDivisionIdFromMarcaJson = (marca: any): number | null => {
     const raw =
@@ -1047,6 +1065,53 @@ export default function JobManualsScreen() {
     }
   };
 
+  /**
+   * Calificación (0-100) de un intento: las preguntas de selección única se califican solas y las demás con los puntajes
+   * dados a mano (`manualScores`, por id de pregunta). Si falta el puntaje de alguna pregunta calificada a mano (p. ej. un quiz
+   * revisado, porque solo se guarda aprobado/reprobado) el resultado es una estimación (`approximate`).
+   */
+  const computeQuizPercentage = (
+    questions: QuizQuestion[],
+    answers: QuizAnswerPayloadItem[],
+    manualScores?: Record<string, number>,
+  ): { percentage: number; approximate: boolean } | null => {
+    const totalPoints = questions.reduce((sum, q) => sum + (q.points || 0), 0);
+    if (totalPoints <= 0) return null;
+    let obtained = 0;
+    let approximate = false;
+    for (const q of questions) {
+      if (q.type === 'multiple_choice') {
+        const ans = answers.find(a => String(a.question_id) === String(q.id));
+        const userAnswer = (ans?.user_answer && String(ans.user_answer)) || '';
+        const correctAnswer = (q.answer && String(q.answer)) || '';
+        if (userAnswer === correctAnswer) obtained += q.points || 0;
+      } else {
+        const score = manualScores?.[q.id];
+        if (score !== undefined) obtained += score;
+        else approximate = true;
+      }
+    }
+    return { percentage: Math.round((obtained / totalPoints) * 1000) / 10, approximate };
+  };
+
+  const closeQuizQuestionModal = () => {
+    setIsQuizModalVisible(false);
+    setEditingQuizQuestionId(null);
+  };
+
+  /** Abre el modal de pregunta con los datos de una pregunta ya creada para editarla. */
+  const openQuizQuestionEditor = (q: QuizQuestion) => {
+    setEditingQuizQuestionId(q.id);
+    setQuizTempTitle(q.title);
+    setQuizTempType(q.type);
+    setQuizTempOptions(q.options ? [...q.options] : []);
+    setQuizTempOptionInput('');
+    setQuizTempAnswer(q.answer ?? '');
+    setQuizTempAnswers(q.answers ? [...q.answers] : []);
+    setQuizTempPoints(String(q.points ?? ''));
+    setIsQuizModalVisible(true);
+  };
+
   const getQuizTypeLabel = (t: QuizQuestionType) => {
     switch (t) {
       case 'short': return 'Respuesta corta';
@@ -1098,7 +1163,7 @@ export default function JobManualsScreen() {
       return;
     }
 
-    Alert.alert('Confirmar', '¿Agregar esta pregunta al quiz?', [
+    Alert.alert('Confirmar', editingQuizQuestionId ? '¿Guardar los cambios de esta pregunta?' : '¿Agregar esta pregunta al quiz?', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Aceptar',
@@ -1106,9 +1171,12 @@ export default function JobManualsScreen() {
           void (async () => {
             setIsSavingQuizQuestion(true);
             try {
-              const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-              let id = 'q_';
-              for (let i = 0; i < 8; i++) id += chars.charAt(Math.floor(Math.random() * chars.length));
+              // Al editar se conserva el id de la pregunta (los intentos ya guardados se enlazan por id).
+              let id = editingQuizQuestionId ?? 'q_';
+              if (!editingQuizQuestionId) {
+                const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+                for (let i = 0; i < 8; i++) id += chars.charAt(Math.floor(Math.random() * chars.length));
+              }
 
               const newQuestion: QuizQuestion = {
                 id,
@@ -1122,7 +1190,9 @@ export default function JobManualsScreen() {
                 points: pointsValue,
               };
 
-              setQuizQuestions(prev => [...prev, newQuestion]);
+              setQuizQuestions(prev =>
+                editingQuizQuestionId ? prev.map(x => (x.id === editingQuizQuestionId ? newQuestion : x)) : [...prev, newQuestion],
+              );
               setQuizTempTitle('');
               setQuizTempType('short');
               setQuizTempOptions([]);
@@ -1131,6 +1201,7 @@ export default function JobManualsScreen() {
               setQuizTempAnswers([]);
               setQuizTempPoints('');
               setIsQuizModalVisible(false);
+              setEditingQuizQuestionId(null);
             } finally {
               setIsSavingQuizQuestion(false);
             }
@@ -3226,7 +3297,7 @@ export default function JobManualsScreen() {
     <ThemedView style={styles.fullContainer}>
       <AppHeader onMenuPress={handleMenuPress} title="Documentos" />
 
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+      <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <ThemedView style={styles.contentContainer}>
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>
@@ -3451,13 +3522,13 @@ export default function JobManualsScreen() {
                 visible={isQuizModalVisible}
                 transparent={true}
                 animationType="fade"
-                onRequestClose={() => setIsQuizModalVisible(false)}
+                onRequestClose={closeQuizQuestionModal}
               >
                 <View style={styles.modalOverlay}>
                   <ThemedView style={styles.viewerModalContainer}>
                     <View style={styles.modalHeader}>
-                      <ThemedText style={styles.modalTitle}>Agregar pregunta</ThemedText>
-                      <TouchableOpacity onPress={() => setIsQuizModalVisible(false)}>
+                      <ThemedText style={styles.modalTitle}>{editingQuizQuestionId ? 'Editar pregunta' : 'Agregar pregunta'}</ThemedText>
+                      <TouchableOpacity onPress={closeQuizQuestionModal}>
                         <Ionicons name="close" size={24} color="#666666" />
                       </TouchableOpacity>
                     </View>
@@ -3732,6 +3803,7 @@ export default function JobManualsScreen() {
                             <Picker.Item label="Seleccione división..." value={0} color="#000000" />
                             <Picker.Item label="Aseo y limpieza" value={5} color="#000000" />
                             <Picker.Item label="Seguridad" value={4} color="#000000" />
+                            <Picker.Item label="Administrativos" value={6} color="#000000" />
                           </Picker>
                         </ThemedView>
                       </ThemedView>
@@ -4066,6 +4138,7 @@ export default function JobManualsScreen() {
                   <TouchableOpacity
                     style={styles.quizAddButton}
                     onPress={() => {
+                      setEditingQuizQuestionId(null);
                       setQuizTempTitle('');
                       setQuizTempType('short');
                       setQuizTempOptions([]);
@@ -4094,6 +4167,12 @@ export default function JobManualsScreen() {
                               <ThemedText style={styles.quizQuestionTitle} numberOfLines={2}>
                                 {q.title}
                               </ThemedText>
+                              <TouchableOpacity
+                                onPress={() => openQuizQuestionEditor(q)}
+                                style={styles.quizRemoveButton}
+                              >
+                                <Ionicons name="create-outline" size={18} color="#007AFF" />
+                              </TouchableOpacity>
                               <TouchableOpacity
                                 onPress={() => setQuizQuestions(prev => prev.filter(x => x.id !== q.id))}
                                 style={styles.quizRemoveButton}
@@ -4399,6 +4478,7 @@ export default function JobManualsScreen() {
                           <Picker.Item label="Seleccione división..." value={0} color="#000000" />
                           <Picker.Item label="Aseo y limpieza" value={5} color="#000000" />
                           <Picker.Item label="Seguridad" value={4} color="#000000" />
+                          <Picker.Item label="Administrativos" value={6} color="#000000" />
                         </Picker>
                       </ThemedView>
                     </ThemedView>
@@ -4827,6 +4907,13 @@ export default function JobManualsScreen() {
                         const approved = firma.approved ?? null;
                         const approvedPending = !!(firma as any)?.approved_pending;
                         const quizGraded = isVisualizationQuizGraded(firma);
+                        // Calificación (0-100): no se guarda en la base de datos, se calcula aquí con las respuestas del empleado.
+                        const computedScore =
+                          hasQuizConfigured && hasQuizAnswers
+                            ? computeQuizPercentage(quizCfg, quizAnswers, quizReviewScores[firma.empleado_id])
+                            : null;
+                        const scoreValue = computedScore?.percentage ?? null;
+                        const scoreIsEstimated = !!computedScore?.approximate;
                         const currentUserEmpIdForQuiz =
                           typeof employee?.id === 'number' ? employee.id : Number(employee?.id || 0);
                         const isOwnQuizAttempt =
@@ -4856,6 +4943,13 @@ export default function JobManualsScreen() {
                             {hasQuizConfigured && (
                               <ThemedText style={styles.quizReviewStatusText}>
                                 Estado del quiz: {statusLabel}
+                              </ThemedText>
+                            )}
+
+                            {hasQuizConfigured && quizGraded && scoreValue !== null && (
+                              <ThemedText style={styles.quizReviewStatusText}>
+                                Calificación: {scoreValue.toFixed(1)} / 100
+                                {scoreIsEstimated ? ' (estimada: faltan los puntajes de las preguntas calificadas a mano)' : ''}
                               </ThemedText>
                             )}
 
@@ -5310,6 +5404,17 @@ export default function JobManualsScreen() {
                     <ThemedView style={styles.viewerSection}>
                       <ThemedText style={styles.viewerSectionTitle}>Firma manual y quiz</ThemedText>
                       <ThemedText style={styles.quizEmptyText}>Ya completaste este documento.</ThemedText>
+                      {hasQuiz && myVis && isVisualizationQuizGraded(myVis) && (() => {
+                        const computedOwn = computeQuizPercentage(quizCfg, parseQuizAnswersFromVisualization(myVis.quiz_answear));
+                        const ownScore = computedOwn?.percentage ?? null;
+                        const ownEstimated = !!computedOwn?.approximate;
+                        return (
+                          <ThemedText style={styles.quizReviewStatusText}>
+                            Resultado del quiz: {myVis.approved ? 'Aprobado' : 'Reprobado'}
+                            {ownScore !== null ? ` • Calificación: ${ownScore.toFixed(1)} / 100${ownEstimated ? ' (estimada)' : ''}` : ''}
+                          </ThemedText>
+                        );
+                      })()}
                     </ThemedView>
                   );
                 }

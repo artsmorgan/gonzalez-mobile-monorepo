@@ -5,6 +5,7 @@ import fs from "fs";
 import path from "path";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { reportError } from "../../../../utils/reportError";
+import { auditUpdateFields } from "../../../../utils/auditFields";
 
 type ManualFileInput = {
     type: string;
@@ -72,7 +73,8 @@ export async function PUT(
                 data: {
                     title: title ?? manualObj.title,
                     description: description ?? manualObj.description,
-                    firma: firma_responsable ?? manualObj.firma
+                    firma: firma_responsable ?? manualObj.firma,
+                    ...auditUpdateFields(payload),
                 }
             }
         });
@@ -241,7 +243,7 @@ export async function DELETE(
                 table: "e_manual_puesto",
                 operation: "update",
                 where: { id },
-                data: { isActive: false },
+                data: { isActive: false, ...auditUpdateFields(payload) },
             },
         });
 

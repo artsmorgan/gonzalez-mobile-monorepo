@@ -158,6 +158,25 @@ function removeAllKotlinUnder(javaRoot) {
   }
 }
 
+/** Nombre visible de la app (el que se ve bajo el ícono) por flavor; `full` conserva el de `main` ("MonitoreApp"). */
+const APP_NAME_BY_FLAVOR = {
+  lite: "MonitoreApp (Test)",
+  prod: "MonitoreApp",
+};
+
+function writeFlavorAppNames(projectRoot) {
+  for (const [flavor, name] of Object.entries(APP_NAME_BY_FLAVOR)) {
+    const dir = path.join(projectRoot, "android", "app", "src", flavor, "res", "values");
+    fs.mkdirSync(dir, { recursive: true });
+    const escaped = name.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    fs.writeFileSync(
+      path.join(dir, "strings.xml"),
+      `<resources>\n  <string name="app_name">${escaped}</string>\n</resources>\n`,
+      "utf8"
+    );
+  }
+}
+
 function writeFlavorSources(projectRoot, sourceContentsByFile) {
   for (const flavor of ["lite", "full", "prod"]) {
     removeAllKotlinUnder(path.join(projectRoot, "android", "app", "src", flavor, "java"));
@@ -220,6 +239,7 @@ function withAndroidAppVariantsFinalize(config) {
       }
 
       ensureGoogleServicesForLiteFlavor(projectRoot);
+      writeFlavorAppNames(projectRoot);
 
       const mainJava = path.join(projectRoot, "android", "app", "src", "main", "java");
       const mainFiles = findKotlinEntryPoints(mainJava);

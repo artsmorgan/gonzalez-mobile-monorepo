@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Dimensions, Modal, Platform, ScrollView, StyleSheet, TextInput, TouchableOpacity, View, Image } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, Modal, Platform, ScrollView, StyleSheet, TextInput, TouchableOpacity, View, Image, RefreshControl } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Picker } from '@react-native-picker/picker';
@@ -49,6 +49,7 @@ import {
   isChecklistSupervisionIncidentLinkComplete,
   type ChecklistSupervisionIncidentLinkParams,
 } from '@/hooks/checklistSupervisionIncidentLink';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type IncidentsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Incidents'>;
 type IncidentsScreenRouteProp = RouteProp<RootStackParamList, 'Incidents'>;
@@ -234,6 +235,21 @@ const canModifyAporte = (rolAporte: string, aporteEmpleadoId: number, currentEmp
 };
 
 export default function IncidentsScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (fetchAll());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const navigation = useNavigation<IncidentsScreenNavigationProp>();
   const route = useRoute<IncidentsScreenRouteProp>();
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
@@ -3098,7 +3114,7 @@ export default function IncidentsScreen() {
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Incidentes" />
 
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+      <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <ThemedView style={styles.contentContainer}>
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>

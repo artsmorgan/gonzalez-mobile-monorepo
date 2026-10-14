@@ -58,11 +58,12 @@ export async function loadTiempoAlmuerzo(db: ReportDataAccess, p: ReportParams, 
             o[col] = placeholderToNull(r[nameKey], r[idKey]);
         }
         o.ejecutivo_cuenta = ejecutivos.get(Number(r.corpo_id)) ?? null;
-        // Auditoría: la tabla no guarda fecha de registro ni modificación (brecha); quien lo crea es el propio empleado.
-        o.creado = null;
-        o.creado_por = usuarioInserta(r.empleadoId, nombres);
-        o.modificado = null;
-        o.modificado_por = null;
+        // Auditoría: columnas propias (created_at / updated_*); en registros anteriores a ellas no hay fecha de registro ni modificación y
+        // quien lo crea es el propio empleado.
+        o.creado = r.created_at ? fmtDt(r.created_at) : null;
+        o.creado_por = r.audit_creado_por ?? usuarioInserta(r.empleadoId, nombres);
+        o.modificado = r.updated_at ? fmtDt(r.updated_at) : null;
+        o.modificado_por = r.audit_modificado_por ?? null;
         return o;
     });
 }

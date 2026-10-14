@@ -6,6 +6,7 @@ import { prisma } from "../../../../../utils/prismaClient";
 import { sendNotificationByPlaza } from "../../../../../utils/sendNotification";
 import { toZonedTime } from "date-fns-tz";
 import axios from "axios";
+import { resolvePuestoHierarchy } from "../../../../../utils/resolvePuestoHierarchy";
 
 export async function GET(
     req: NextRequest,
@@ -148,6 +149,7 @@ export async function PUT(
             );
         }
 
+        const jerarquiaPuesto = await resolvePuestoHierarchy(puestoId);
         await callDynamicPrisma({
             req,
             data: {
@@ -155,6 +157,7 @@ export async function PUT(
                 table: "c_ubicacion_puesto_registro_cambios",
                 data: {
                     puesto_id: puestoId,
+                    ...jerarquiaPuesto,
                     latitud_anterior: latitud_anterior ? String(latitud_anterior) : null,
                     longitud_anterior: longitud_anterior ? String(longitud_anterior) : null,
                     latitud_nueva: latitud ? String(latitud) : null,

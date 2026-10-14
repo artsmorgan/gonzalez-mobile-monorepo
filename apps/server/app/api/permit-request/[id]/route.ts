@@ -7,6 +7,7 @@ import { sendNotificationByEmployee } from "../../../../utils/sendNotification";
 import axios from "axios";
 import { reportError } from "../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 const parseDateInputToDate = (input: unknown): Date | null => {
     if (!input) return null;
     if (input instanceof Date) return isNaN(input.getTime()) ? null : input;
@@ -155,6 +156,7 @@ export async function PUT(
                 operation: "update",
                 where: { id: idNum },
                 data: {
+                    ...auditUpdateFields(payload, ["updated_at", "updated_by"]),
                     reemplazo_obligatorio: reemplazoObligatorio,
                     turnos: JSON.stringify(turnosUpdated),
                     observaciones: observaciones || null,

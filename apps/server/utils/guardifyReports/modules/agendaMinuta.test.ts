@@ -165,7 +165,8 @@ describe("agenda_minuta: periodo, ejecutivo y creador (carga en lote)", () => {
         // registro antiguo: sin división ni ejecutivo en su sucursal; la división sale de su puesto → sucursal → contrato
         const r2 = rows.find((r) => r.id === 2)!;
         assert.deepEqual([r2.creado_por, r2.ejecutivo_cuenta, r2.completadas, r2.division], ["correo@x.test", null, "No", "Seguridad"]);
-        assert.ok(calls.filter((c) => c === "c_empleado").length <= 1);
+        // En lote, nunca por fila: los creadores del módulo y los nombres de created_by/updated_by (auditoría propia) son una consulta cada uno.
+        assert.ok(calls.filter((c) => c === "c_empleado").length <= 2);
         assert.ok(calls.filter((c) => c === "n_ejecutivo_cuenta").length <= 1);
         assert.equal(JSON.stringify(rows).includes("AAAA"), false);
     });

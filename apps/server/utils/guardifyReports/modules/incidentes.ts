@@ -71,8 +71,8 @@ export function mapIncidenteRow(r: any, x: IncidenteExtra = {}): OutRow {
         aportes: Array.isArray(r.c_contribucion_incidente) ? r.c_contribucion_incidente.length : 0,
         creado_por: txt(x.usuario),
         // `c_incidente` no guarda `updated_at`/`updated_by` ni deja historial de cambios: siempre null (brecha registrada).
-        modificado: null,
-        modificado_por: null,
+        modificado: (r as any).updated_at ? fmtDt((r as any).updated_at) : (null),
+        modificado_por: (r as any).audit_modificado_por ?? (null),
     };
 }
 

@@ -124,8 +124,8 @@ export function mapRevisionVehiculoRow(r: any): OutRow {
         marchamo: yesNo(infoValue(general, "marchamo")) ?? yesNo(r.veh_marchamo),
         ejecutivo_cuenta: txt(r.ejecutivo_cuenta),
         creado_por: txt(r.creado_por),
-        modificado: fmtDt(r.modificado_at),
-        modificado_por: txt(r.modificado_por),
+        modificado: (r as any).updated_at ? fmtDt((r as any).updated_at) : (fmtDt(r.modificado_at)),
+        modificado_por: (r as any).audit_modificado_por ?? (txt(r.modificado_por)),
     };
 }
 

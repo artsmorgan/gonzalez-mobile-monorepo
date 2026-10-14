@@ -11,8 +11,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View,
-} from 'react-native';
+  View, RefreshControl } from 'react-native';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import RecordAudioButton from '@/components/RecordAudioButton';
 import AudioPreviewModal from '@/components/AudioPreviewModal';
@@ -69,6 +68,7 @@ import {
 } from '@/hooks/nonConformingProductFilesSync';
 import { deleteFile, getLocalFileDisplayUri, saveFile, saveBase64File, persistSignatureRef, hydrateSignatureRef } from '@/hooks/fileStorage';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'NonConformingProduct'>;
 
@@ -348,6 +348,21 @@ function findHierarchyByCorpoIn(structureArr: MainStructureTree, corpoId: number
 }
 
 export default function NonConformingProductScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (fetchRecords());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const navigation = useNavigation<Nav>();
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const { scanQR, QRScannerComponent } = useQRScanner();
@@ -2605,7 +2620,7 @@ export default function NonConformingProductScreen() {
     <ThemedView style={styles.container}>
       <AppHeader title="Producto no conforme" onMenuPress={() => setIsMenuVisible(true)} />
 
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+      <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} style={styles.scrollView} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         <ThemedView style={styles.content}>
           {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, View, Image, Dimensions, Linking, Modal } from 'react-native';
+import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, View, Image, Dimensions, Linking, Modal, RefreshControl } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
@@ -63,6 +63,7 @@ import {
 import { parseMantenimientoEquipoPlantillaLocal } from '@/hooks/mantenimientoEquipoPlantillaLocal';
 import { prioritizePlanByArticuloNomencladorId } from '@/hooks/prioritizePlanByArticuloNomencladorId';
 import { searchActaStructure, type StructureLite } from '@/hooks/reportesFunctions';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type TipoMantenimientoArticulo = { id: number; nombre: string };
 
@@ -752,6 +753,21 @@ function normalizeMantenimientoEquipoReporteItem(
 const FIRMA_MANUAL_OFFLINE_MESSAGE = 'Para visualizar las firmas manuales, conéctate a internet y actualiza la lista';
 
 export default function MantenimientoEquipoScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (fetchReportes({ force: true }));
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
     const navigation = useNavigation<any>();
     const { employee, refreshAccessToken, logout, accessToken } = useAuth();
     const appendTokenToUrl = (url: string) => {
@@ -5553,7 +5569,7 @@ export default function MantenimientoEquipoScreen() {
         <ThemedView style={styles.container}>
             <AppHeader onMenuPress={handleMenuPress} title="Equipo del puesto" />
 
-            <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+            <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
                 <ThemedView style={styles.content}>
                     <ThemedView style={styles.titleContainer}>
                         <ThemedText type="title" style={styles.title}>

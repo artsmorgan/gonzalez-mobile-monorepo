@@ -9,6 +9,7 @@ import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
 import { reportError } from "../../../utils/reportError";
 
+import { auditCreateFields } from "../../../utils/auditFields";
 const VULNERABILIDAD_ESTRUCTURA_INCLUDE = {
   e_estructura_cliente: { select: { nombre: true } },
   e_estructura_sucursal: { select: { nombre: true } },
@@ -168,6 +169,7 @@ export async function POST(req: NextRequest) {
         table: "c_boleta_apreciacion_vulnerabilidad",
         operation: "create",
         data: {
+            ...auditCreateFields(payload, ["created_at", "created_by"]),
           cliente_id: parseInt(String(cliente_id)),
           empresa_id: Number(empresa_id) > 0 ? parseInt(String(empresa_id)) : 0,
           division_id: Number(division_id) > 0 ? parseInt(String(division_id)) : 0,

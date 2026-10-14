@@ -20,6 +20,7 @@ import {
     mapLegacyFileItemToApiPayload,
 } from "./trainingArchivosHelpers";
 
+import { auditCreateFields } from "../../../utils/auditFields";
 export async function GET(req: NextRequest) {
     try {
         const { valid, expired, message } = await verifyAccessTokenByApi(req);
@@ -447,6 +448,7 @@ export async function POST(req: NextRequest) {
                 table: "e_registro_capacitaciones",
                 operation: "create",
                 data: {
+                    ...auditCreateFields(payload, ["created_at", "created_by"]),
                     empresa_id: empresaObj.id,
                     cliente_id: clienteObj.id,
                     corpo_id: corpoObj.id,

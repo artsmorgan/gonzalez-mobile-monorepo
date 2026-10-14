@@ -8,7 +8,9 @@ import {
     applyConsolidadoReportBanner,
     fetchLatestCambiosPorRegistro,
     type ConsolidadoBannerMeta,
+    formatDateTimeDMY,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 export type ActaEntregaModuleFilters = {
     creadoDesde?: string | null;
@@ -126,7 +128,7 @@ type ActaRow = {
     firma_recibe: string | null;
 };
 
-export async function queryActaEntregaProductos(
+async function queryActaEntregaProductosInner(
     prisma: ReportDataAccess,
     filters: ActaEntregaModuleFilters,
     orderKey: ActaEntregaOrderKey,
@@ -240,6 +242,13 @@ export async function queryActaEntregaProductos(
     });
 
     return sorted;
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryActaEntregaProductos(...args: Parameters<typeof queryActaEntregaProductosInner>): ReturnType<typeof queryActaEntregaProductosInner> {
+    const rows = await queryActaEntregaProductosInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 export async function buildActaEntregaExcelBuffer(
@@ -744,8 +753,8 @@ export async function buildActaEntregaExcelBufferByType(
             joinDetalle(detalleRows, "cantidad"),
             joinDetalle(detalleRows, "devolucion"),
             joinDetalle(detalleRows, "faltantes"),
-            cambio?.nombreCompleto ?? "",
-            cambio?.fechaHoraTexto ?? "",
+            r.audit_modificado_por ?? cambio?.nombreCompleto ?? "",
+            r.updated_at ? formatDateTimeDMY(r.updated_at) : (cambio?.fechaHoraTexto ?? ""),
         ]);
         rootRow.getCell(COL_VER_DETALLE).value = { text: "Ver detalle", hyperlink: `#'Detalles'!A${detailRow}` };
         rootRow.getCell(COL_VER_FIRMA_ENTREGA).value = { text: "Ver firma entrega", hyperlink: `#'Detalles'!A${detailRow}` };

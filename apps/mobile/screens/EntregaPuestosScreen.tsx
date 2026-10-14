@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Modal, View, Platform, Image } from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Modal, View, Platform, Image, RefreshControl } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
@@ -35,6 +35,7 @@ import { isStoredPlanillasTokenValid } from '@/hooks/planillasTokenStorage';
 import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRevalidationModal';
 import { getEmployeeProfilePhotoDisplayUri } from '@/hooks/employeeProfilePhotoStorage';
 import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type EntregaPuestosScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'EntregaPuestos'>;
 
@@ -226,6 +227,21 @@ const signatureWebStyle = `
 `;
 
 export default function EntregaPuestosScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (filterPuestoId != null ? fetchEntregaRecordsByPuesto(filterPuestoId) : loadData());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<EntregaPuestosScreenNavigationProp>();
@@ -1527,7 +1543,7 @@ export default function EntregaPuestosScreen() {
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={() => setIsMenuVisible(true)} title="Entrega de Puestos" />
 
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+      <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <ThemedView style={styles.content}>
           {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
 

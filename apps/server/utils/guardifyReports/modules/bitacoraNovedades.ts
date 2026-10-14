@@ -68,9 +68,9 @@ export function mapBitacoraNovedadesRow(r: any, extras: BitacoraExtras = {}): Ou
     return {
         id: Number(r.id),
         creado: fmtDt(r.created_at),
-        creado_por: extras.creado_por ?? null,
+        creado_por: (r as any).audit_creado_por ?? (extras.creado_por ?? null),
         modificado: fmtDt(r.updated_at),
-        modificado_por: extras.modificado_por ?? null,
+        modificado_por: (r as any).audit_modificado_por ?? (extras.modificado_por ?? null),
         titulo: cut(r.titulo),
         descripcion: cut(r.description),
         categoria: txt(r.categoria_nombre),

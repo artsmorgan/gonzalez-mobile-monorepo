@@ -11,7 +11,9 @@ import {
     formatDateOnlyDMY,
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
+    formatDateTimeDMY,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 export type EncuestaSatisfaccionModuleFilters = ActaEntregaModuleFilters & {
     responsableIds?: number[] | null;
@@ -287,7 +289,7 @@ function approxLogoBoxPixels(colAWidth: number, colBWidth: number, rowHeightPt: 
     return { w: Math.max(48, widthPx), h: Math.max(28, heightPx) };
 }
 
-export async function queryEncuestaSatisfaccionRows(
+async function queryEncuestaSatisfaccionRowsInner(
     prisma: ReportDataAccess,
     filters: EncuestaSatisfaccionModuleFilters,
     orderKey: EncuestaSatisfaccionOrderKey,
@@ -400,6 +402,13 @@ export async function queryEncuestaSatisfaccionRows(
                 return new Date(b.fecha).getTime() - new Date(a.fecha).getTime();
         }
     });
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryEncuestaSatisfaccionRows(...args: Parameters<typeof queryEncuestaSatisfaccionRowsInner>): ReturnType<typeof queryEncuestaSatisfaccionRowsInner> {
+    const rows = await queryEncuestaSatisfaccionRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 function likertHeaders(global: boolean): string[] {
@@ -1017,8 +1026,8 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(
                 sec.preguntas,
                 sec.respuestas,
                 sec.obsSeccion,
-                cambio?.nombreCompleto ?? "",
-                cambio?.fechaHoraTexto ?? "",
+                r.audit_modificado_por ?? cambio?.nombreCompleto ?? "",
+                r.updated_at ? formatDateTimeDMY(r.updated_at) : (cambio?.fechaHoraTexto ?? ""),
             ]);
             row.getCell(COL_VER_EVAL).value = { text: "Ver evaluaciones", hyperlink: `#'Detalles'!A${evRow}` };
             row.getCell(COL_VER_EVAL).font = { color: { argb: "FF0563C1" }, underline: true };

@@ -64,11 +64,11 @@ export function mapManualPuestoRow(r: any, extra: ManualExtra = {}): OutRow {
         contrato: txt(r.contrato_txt),
         sucursal: txt(r.corpo_txt),
         puesto: txt(r.puesto_principal_txt),
-        // Auditoría y trazabilidad. «Enviado» = creado. El manual no guarda modificación (brecha registrada).
+        // Auditoría y trazabilidad. «Enviado» = creado. La modificación sale de `updated_at` / `updated_by` (null en manuales anteriores a esas columnas).
         creado: fmtDt(r.created_at),
         creado_por: txt(r.created_by_nombre),
-        modificado: null,
-        modificado_por: null,
+        modificado: fmtDt(r.updated_at),
+        modificado_por: txt(r.updated_by_nombre),
     };
 }
 

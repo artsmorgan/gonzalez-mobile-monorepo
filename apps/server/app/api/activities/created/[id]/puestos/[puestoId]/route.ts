@@ -3,6 +3,7 @@ import { verifyAccessTokenByApi } from "../../../../../../../utils/verifyAccessT
 import { callDynamicPrisma } from "../../../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { reportError } from "../../../../../../../utils/reportError";
+import { syncActividadHierarchy } from "../../../../../../../utils/syncActividadHierarchy";
 
 /**
  * Elimina el vínculo actividad–puesto (e_actividades_puesto).
@@ -73,6 +74,8 @@ export async function DELETE(
         where: { actividad_id: actividadId, puesto_id: puestoId },
       },
     });
+    // Cambian los puestos de una actividad existente: se recalcula su jerarquía y queda registrada la modificación.
+    await syncActividadHierarchy(req, actividadId, { registrarModificacion: true });
 
     const createdBy = payload?.id ? Number(payload.id) : 0;
     await callDynamicPrisma({

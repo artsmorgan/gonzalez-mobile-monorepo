@@ -61,8 +61,8 @@ export function mapControlAsistenciaRow(r: any, creador?: any, ejecutivo?: strin
         supervisor: txt(r.nombre_supervisor),
         creado_por: creador ? txt(buildNombre(creador)) : null,
         // La tabla no guarda modificación (sin `updated_at` ni `updated_by`): se entrega vacío (brecha de auditoría).
-        modificado: null,
-        modificado_por: null,
+        modificado: (r as any).updated_at ? fmtDt((r as any).updated_at) : (null),
+        modificado_por: (r as any).audit_modificado_por ?? (null),
         comentarios: short(r.comentarios),
         ejecutivo_cuenta: txt(ejecutivo),
     };

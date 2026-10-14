@@ -9,7 +9,9 @@ import {
     formatDateOnlyDMY,
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
+    formatDateTimeDMY,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 export type BitacoraNovedadesModuleFilters = ActaEntregaModuleFilters & {
     categoriaId?: number | null;
@@ -114,7 +116,7 @@ export function filtersMatchBitacoraNovedadesListQuery(parsedRowFilters: any, li
     return true;
 }
 
-export async function queryBitacoraNovedadesRows(prisma: ReportDataAccess, filters: BitacoraNovedadesModuleFilters, orderKey: BitacoraNovedadesOrderKey) {
+async function queryBitacoraNovedadesRowsInner(prisma: ReportDataAccess, filters: BitacoraNovedadesModuleFilters, orderKey: BitacoraNovedadesOrderKey) {
     const where: any = { isActive: true };
     const desde = parseBoundaryDate(filters.creadoDesde ?? undefined);
     const hasta = parseBoundaryDate(filters.creadoHasta ?? undefined);
@@ -189,6 +191,13 @@ export async function queryBitacoraNovedadesRows(prisma: ReportDataAccess, filte
     });
 
     return sortRowsForExcelOrder(enriched, orderKey);
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryBitacoraNovedadesRows(...args: Parameters<typeof queryBitacoraNovedadesRowsInner>): ReturnType<typeof queryBitacoraNovedadesRowsInner> {
+    const rows = await queryBitacoraNovedadesRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 function sortRowsForExcelOrder(rows: any[], orderKey: BitacoraNovedadesOrderKey): any[] {
@@ -317,8 +326,8 @@ export async function buildBitacoraNovedadesExcelConsolidado(
             formatTimeOnlyHMS(r.updated_at),
             r.firma_manual_responsable ? "Ver firma manual" : "",
             firmaRespShort,
-            cambio?.nombreCompleto ?? "",
-            cambio?.fechaHoraTexto ?? "",
+            r.audit_modificado_por ?? cambio?.nombreCompleto ?? "",
+            r.updated_at ? formatDateTimeDMY(r.updated_at) : (cambio?.fechaHoraTexto ?? ""),
         ]);
         row.eachCell((cell, colNumber) => {
             if (colNumber === 1) return;

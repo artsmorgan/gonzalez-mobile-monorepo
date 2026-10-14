@@ -16,9 +16,11 @@ import {
     applyConsolidadoReportBanner,
     fetchLatestCambiosPorRegistro,
     formatDateOnlyDMY,
+    formatDateTimeDMY,
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 export type MantenimientoArticulosModuleFilters = ActaEntregaModuleFilters & {
     estados?: string[] | null;
@@ -390,7 +392,7 @@ function sortMantenimientoRows(rows: MantenimientoArticuloReportRow[], orderKey:
     });
 }
 
-export async function queryMantenimientoArticulosRows(
+async function queryMantenimientoArticulosRowsInner(
     prisma: ReportDataAccess,
     filters: MantenimientoArticulosModuleFilters,
     orderKey: MantenimientoArticulosOrderKey,
@@ -531,6 +533,13 @@ export async function queryMantenimientoArticulosRows(
     return sortMantenimientoRows(out, orderKey);
 }
 
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryMantenimientoArticulosRows(...args: Parameters<typeof queryMantenimientoArticulosRowsInner>): ReturnType<typeof queryMantenimientoArticulosRowsInner> {
+    const rows = await queryMantenimientoArticulosRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
+}
+
 export async function buildMantenimientoArticulosExcelConsolidado(
     rows: MantenimientoArticuloReportRow[],
     reportDb: ReportDataAccess,
@@ -546,8 +555,8 @@ export async function buildMantenimientoArticulosExcelConsolidado(
     );
     const rowsWithCambios = rows.map((r) => ({
         ...r,
-        usuario_modifica: cambiosByRegistro.get(r.id)?.nombreCompleto ?? "",
-        fecha_hora_modifica: cambiosByRegistro.get(r.id)?.fechaHoraTexto ?? "",
+        usuario_modifica: (r as any).audit_modificado_por ?? cambiosByRegistro.get(r.id)?.nombreCompleto ?? "",
+        fecha_hora_modifica: (r as any).updated_at ? formatDateTimeDMY((r as any).updated_at) : (cambiosByRegistro.get(r.id)?.fechaHoraTexto ?? ""),
     }));
 
     const allColumns = [...MANTENIMIENTO_EXCEL_COLUMNS, ...MANTENIMIENTO_CAMBIOS_COLUMNS];

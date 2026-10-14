@@ -29,7 +29,8 @@ export async function ubicacionPorEmpleado(db: any, empleadoIds: unknown[]): Pro
 
 /**
  * Fila de ingreso con las 11 columnas estándar. `creado` = inicio de la sesión; `creado_por` = el propio empleado (la sesión nace de su
- * ingreso); `modificado`/`modificado_por` no existen en `refresh_token` (null). La jerarquía es la de la plaza actual del empleado.
+ * ingreso); `modificado`/`modificado_por` salen siempre vacíos (la sesión no se edita). La jerarquía es la guardada en el propio ingreso y,
+ * si no la tiene, la de la plaza actual del empleado.
  */
 export function mapIngresoUsuarioStdRow(r: any, ubic?: UbicacionTextos | null): OutRow {
     const base = mapIngresoUsuarioRow(r);
@@ -48,7 +49,7 @@ export function mapIngresoUsuarioStdRow(r: any, ubic?: UbicacionTextos | null): 
 }
 
 /**
- * Ingresos de usuario (`refresh_token`). No tiene ubicación en la estructura propia (la jerarquía sale de la plaza actual del
+ * Ingresos de usuario (`refresh_token`). Su jerarquía propia es opcional (hoy la tabla no se escribe y sale de la plaza actual del
  * empleado), así que no admite alcance por unidad: con un alcance pedido responde 403 y Guardify exige permiso sobre toda la empresa.
  *
  * Trae a cada empleado solo con las columnas que muestra (nombre y cédula): así el reporte no depende de columnas
@@ -68,10 +69,17 @@ export const ingresosUsuario: GuardifyReportModule = {
         const ids = [...new Set(rows.map((r: any) => Number(r.empleadoId)).filter((n) => Number.isFinite(n) && n > 0))];
         const emps = ids.length ? await db.c_empleado!.findMany({ where: { id: { in: ids } }, select: { id: true, nombre: true, primer_apellido: true, segundo_apellido: true, cedula: true } }) : [];
         const byId = new Map(emps.map((e: any) => [Number(e.id), e]));
-        const ubicaciones = await ubicacionPorEmpleado(db, ids);
-        const textos = await ubicacionTextos(db as any, [...ubicaciones.values()]);
+        // Jerarquía guardada en el propio ingreso (columnas de `refresh_token`); en ingresos sin ella, la plaza actual del empleado.
+        const propia = (r: any): UbicacionIds | null =>
+            Number(r.corpo_id) > 0 && Number(r.contrato_id) > 0
+                ? { empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.corpo_id, puesto: r.puesto_id }
+                : null;
+        const idsSinPropia = [...new Set(rows.filter((r: any) => !propia(r)).map((r: any) => Number(r.empleadoId)).filter((n) => Number.isFinite(n) && n > 0))];
+        const ubicaciones = idsSinPropia.length ? await ubicacionPorEmpleado(db, idsSinPropia) : new Map<number, UbicacionIds>();
+        const ubicacionDe = (r: any): UbicacionIds | undefined => propia(r) ?? ubicaciones.get(Number(r.empleadoId));
+        const textos = await ubicacionTextos(db as any, rows.map(ubicacionDe).filter((u): u is UbicacionIds => !!u));
         return rows.map((r: any) => {
-            const u = ubicaciones.get(Number(r.empleadoId));
+            const u = ubicacionDe(r);
             return mapIngresoUsuarioStdRow({ ...r, c_empleado: byId.get(Number(r.empleadoId)) ?? null }, u ? textos(u) : null);
         });
     },

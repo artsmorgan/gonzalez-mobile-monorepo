@@ -94,10 +94,10 @@ export function mapActividadPuestoRow(act: any, ap: any | null, h: Hierarchy | u
     const desc = txt(act.descripcion_actividad);
     return {
         id: Number(ap?.id ?? act.id),
-        creado: aud.creado ?? null,
-        creado_por: txt(aud.creado_por),
-        modificado: aud.modificado ?? null,
-        modificado_por: txt(aud.modificado_por),
+        creado: (act as any).created_at ? fmtDt((act as any).created_at) : (aud.creado ?? null),
+        creado_por: (act as any).audit_creado_por ?? (txt(aud.creado_por)),
+        modificado: (act as any).updated_at ? fmtDt((act as any).updated_at) : (aud.modificado ?? null),
+        modificado_por: (act as any).audit_modificado_por ?? (txt(aud.modificado_por)),
         nombre_actividad: txt(act.nombre_actividad),
         fecha_inicio: fmtDay(act.fecha_inicio),
         fecha_fin: fmtDay(act.fecha_fin),

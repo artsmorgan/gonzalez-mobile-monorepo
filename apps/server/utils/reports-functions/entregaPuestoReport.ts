@@ -15,6 +15,7 @@ import {
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 const ENTREGA_PUESTO_INCLUDE = {
     e_estructura_cliente: { select: { id: true, nombre: true, empresa_id: true } },
@@ -326,7 +327,7 @@ async function resolveLogoPathByEmpresaId(empresaId: number): Promise<string | n
     }
 }
 
-export async function queryEntregaPuestoRows(
+async function queryEntregaPuestoRowsInner(
     prisma: ReportDataAccess,
     filters: EntregaPuestoModuleFilters,
     orderKey: EntregaPuestoOrderKey,
@@ -460,6 +461,13 @@ export async function queryEntregaPuestoRows(
                 return new Date(b.fecha_sort).getTime() - new Date(a.fecha_sort).getTime();
         }
     });
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryEntregaPuestoRows(...args: Parameters<typeof queryEntregaPuestoRowsInner>): ReturnType<typeof queryEntregaPuestoRowsInner> {
+    const rows = await queryEntregaPuestoRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 function applyThinBorderToRange(ws: ExcelJS.Worksheet, fromRow: number, toRow: number, fromCol: number, toCol: number) {

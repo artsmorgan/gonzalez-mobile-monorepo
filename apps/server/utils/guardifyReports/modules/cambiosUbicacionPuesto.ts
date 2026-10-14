@@ -46,8 +46,8 @@ export function mapCambioUbicacionPuestoRow(r: any): OutRow {
         puesto: placeholderToNull(r.puesto_nombre, r.puesto_id),
         creado: fmtDt(r.created_at),
         creado_por: placeholderToNull(r.responsable_nombre, r.created_by),
-        modificado: null,
-        modificado_por: null,
+        modificado: (r as any).updated_at ? fmtDt((r as any).updated_at) : (null),
+        modificado_por: (r as any).audit_modificado_por ?? (null),
         tenia_ubicacion: txt(r.latitud_anterior) && txt(r.longitud_anterior) ? "Sí" : "No",
         metros: metrosEntre(r.latitud_anterior, r.longitud_anterior, r.latitud_nueva, r.longitud_nueva),
     };

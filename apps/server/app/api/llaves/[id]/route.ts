@@ -6,6 +6,7 @@ import { prisma } from "../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { reportError } from "../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 function parseId(v: unknown): number | null {
   if (v === undefined || v === null || v === "") return null;
   const n = parseInt(String(v), 10);
@@ -163,7 +164,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         action: "UPDATE",
         table: "e_llave",
         where: { id },
-        data: updateDataForApi
+        data: { ...updateDataForApi, ...auditUpdateFields(payload, ["updated_at", "updated_by"]) }
       }
     });
 

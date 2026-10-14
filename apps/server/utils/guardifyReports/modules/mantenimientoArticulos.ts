@@ -42,7 +42,7 @@ export function mapMantenimientoArticuloRow(r: MantenimientoArticuloReportRow, e
     return {
         id: Number(r.id),
         creado: fmtDt(r.created_at),
-        creado_por: null,
+        creado_por: (r as any).audit_creado_por ?? (null),
         empresa: text(r.empresa_txt, 200),
         cliente: text(r.cliente_txt, 200),
         division: text(r.division_txt, 200),
@@ -84,7 +84,7 @@ export function mapMantenimientoArticuloRow(r: MantenimientoArticuloReportRow, e
         tipo_mantenimiento_reincidencia: text(r.tipo_mant_art_reincid, 200),
         adjuntos: num(r.archivos_adjuntos_count) ?? 0,
         modificado: fmtDt(r.updated_at),
-        modificado_por: text(modificadoPor, 200),
+        modificado_por: (r as any).audit_modificado_por ?? (text(modificadoPor, 200)),
         ejecutivo_cuenta: text(ejecutivo, 200),
     };
 }

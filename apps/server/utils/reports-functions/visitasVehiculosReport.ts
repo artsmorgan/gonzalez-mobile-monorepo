@@ -15,7 +15,9 @@ import {
     formatDateOnlyDMY,
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
+    formatDateTimeDMY,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 const REGISTRO_VEHICULOS_INCLUDE = {
     c_empleado: { select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true } },
@@ -242,7 +244,7 @@ async function enrichRows(prisma: ReportDataAccess, raw: any[]): Promise<any[]> 
     });
 }
 
-export async function queryVisitasVehiculosRows(
+async function queryVisitasVehiculosRowsInner(
     prisma: ReportDataAccess,
     filters: VisitasVehiculosModuleFilters,
     orderKey: VisitasVehiculosOrderKey,
@@ -311,6 +313,13 @@ export async function queryVisitasVehiculosRows(
                 return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
         }
     });
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryVisitasVehiculosRows(...args: Parameters<typeof queryVisitasVehiculosRowsInner>): ReturnType<typeof queryVisitasVehiculosRowsInner> {
+    const rows = await queryVisitasVehiculosRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 export async function buildVisitasVehiculosExcelConsolidado(
@@ -467,8 +476,8 @@ export async function buildVisitasVehiculosExcelConsolidado(
             excelCellString(r.responsable_label),
             formatDateOnlyDMY(r.created_at),
             formatTimeOnlyHMS(r.created_at),
-            cambio?.nombreCompleto ?? "",
-            cambio?.fechaHoraTexto ?? "",
+            r.audit_modificado_por ?? cambio?.nombreCompleto ?? "",
+            r.updated_at ? formatDateTimeDMY(r.updated_at) : (cambio?.fechaHoraTexto ?? ""),
         ]);
         row.eachCell((cell, colNumber) => {
             if (colNumber === 1) return;

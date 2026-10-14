@@ -7,6 +7,7 @@ import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { toZonedTime } from "date-fns-tz";
 import { reportError } from "../../../utils/reportError";
 
+import { auditCreateFields } from "../../../utils/auditFields";
 function parseDateOnly(value: any): Date | null {
   if (!value) return null;
   const s = String(value);
@@ -139,6 +140,7 @@ export async function POST(req: NextRequest) {
         action: "POST",
         table: "e_control_documento_entregado_cliente",
         data: {
+            ...auditCreateFields(payload, ["created_at", "created_by"]),
           cliente_id: clienteIdNum,
           corpo_id: corpoIdNum,
           empresa_id: Number.isFinite(empresaIdNum) && empresaIdNum > 0 ? empresaIdNum : 0,

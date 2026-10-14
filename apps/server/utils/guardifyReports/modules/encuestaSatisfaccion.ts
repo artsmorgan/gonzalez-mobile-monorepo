@@ -163,9 +163,9 @@ export function mapEncuestaRow(r: any, x: EncuestaExtra = {}): OutRow {
         conoce_quejas: conoceQuejas,
         observaciones: clip(r.observaciones),
         ejecutivo_cuenta: txt(x.ejecutivo),
-        creado_por: txt(x.creadoPor),
-        modificado: x.modificacion?.cuando ?? null,
-        modificado_por: x.modificacion?.quien ?? null,
+        creado_por: (r as any).audit_creado_por ?? (txt(x.creadoPor)),
+        modificado: (r as any).updated_at ? fmtDt((r as any).updated_at) : (x.modificacion?.cuando ?? null),
+        modificado_por: (r as any).audit_modificado_por ?? (x.modificacion?.quien ?? null),
     };
 }
 

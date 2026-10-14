@@ -58,14 +58,17 @@ function parseArticulos(raw: unknown): Array<Record<string, unknown>> {
 /** Datos que no vienen en la fila y se cargan por lote: textos de la ubicación («código - nombre»), ejecutivo de cuenta de la sucursal y quien registró la entrega. */
 export type EntregaExtra = { ubic?: UbicacionTextos | null; ejecutivo?: string | null; creadoPor?: string | null };
 
-/** Ids de la ubicación de una entrega: la fila solo trae cliente, corpo y puesto; empresa, contrato y división se deducen de la sucursal y del cliente. */
+/**
+ * Ids de la ubicación de una entrega: empresa, contrato y división salen de las columnas propias del registro y, en registros anteriores
+ * a ellas, se deducen de la sucursal y del cliente (cliente, sucursal y puesto siempre se guardaron).
+ */
 export function entregaUbicacionIds(r: any): UbicacionIds {
     const corpo = r.e_estructura_sucursal;
     return {
-        empresa: r.empresa_id_resolved,
+        empresa: r.empresa_id ?? r.empresa_id_resolved,
         cliente: r.cliente_id,
-        division: corpo?.e_estructura_contrato?.division_id,
-        contrato: corpo?.contrato_id ?? corpo?.e_estructura_contrato?.id,
+        division: r.division_id ?? corpo?.e_estructura_contrato?.division_id,
+        contrato: r.contrato_id ?? corpo?.contrato_id ?? corpo?.e_estructura_contrato?.id,
         corpo: r.corpo_id,
         puesto: r.puesto_id,
     };
@@ -74,7 +77,7 @@ export function entregaUbicacionIds(r: any): UbicacionIds {
 /**
  * Entrega de puesto (`e_registro_entrega_puesto`) a fila plana. Se omiten a propósito las firmas, los ids de marca y el
  * detalle de los artículos (solo se cuentan: cuántos y cuántos con novedad, es decir «Malo» o «No está»).
- * La tabla no guarda `updated_at`/`updated_by` ni historial de cambios: `modificado` y `modificado_por` salen siempre vacíos.
+ * `modificado`/`modificado_por` salen de `updated_at`/`updated_by` (vacíos en registros anteriores a esas columnas o que nunca se editaron).
  */
 export function mapEntregaPuestoRow(r: any, x: EntregaExtra = {}): OutRow {
     const arts = parseArticulos(r.articulos_puesto);
@@ -89,8 +92,8 @@ export function mapEntregaPuestoRow(r: any, x: EntregaExtra = {}): OutRow {
         puesto: x.ubic?.puesto ?? null,
         creado: fmtDt(r.created_at),
         creado_por: txt(x.creadoPor),
-        modificado: null,
-        modificado_por: null,
+        modificado: (r as any).updated_at ? fmtDt((r as any).updated_at) : (null),
+        modificado_por: (r as any).audit_modificado_por ?? (null),
         oficial_entrega: txt(r.oficial_entrega),
         entrada_entrega: joinDateTime(r.fecha_entrada_entrega, r.hora_entrada_entrega),
         salida_entrega: joinDateTime(r.fecha_salida_entrega, r.hora_salida_entrega),

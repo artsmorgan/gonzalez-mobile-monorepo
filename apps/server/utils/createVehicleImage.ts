@@ -3,6 +3,7 @@ import fs from "fs";
 import { NextRequest } from "next/server";
 import { callDynamicPrisma } from "./callDynamicPrisma";
 import { uploadDynamicFiles } from "./callDynamicFilesApi";
+import { actorFromRequest, auditUpdateFields } from "./auditFields";
 
 export const createVehicleImage = async (req: NextRequest, id_vehicle: number, file: string) => {
     try {
@@ -63,7 +64,7 @@ export const createVehicleImage = async (req: NextRequest, id_vehicle: number, f
                 action: "UPDATE",
                 table: "e_registro_vehiculos",
                 where: { id: id_vehicle },
-                data: { file_name },
+                data: { file_name, ...auditUpdateFields(actorFromRequest(req), ["updated_at", "updated_by"]) },
             },
         });
 

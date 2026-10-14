@@ -12,6 +12,7 @@ import {
     formatDateOnlyDMY,
     type ConsolidadoBannerMeta,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 const REGISTRO_CAPACITACIONES_INCLUDE = {
     e_capacitacion_empleado: true,
@@ -171,7 +172,7 @@ function buildWhere(filters: RegistroCapacitacionesModuleFilters): any {
     return where;
 }
 
-export async function queryRegistroCapacitacionesRows(
+async function queryRegistroCapacitacionesRowsInner(
     prisma: ReportDataAccess,
     filters: RegistroCapacitacionesModuleFilters,
     orderKey: RegistroCapacitacionesOrderKey,
@@ -300,6 +301,13 @@ export async function queryRegistroCapacitacionesRows(
                 return new Date(b.fecha).getTime() - new Date(a.fecha).getTime();
         }
     });
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryRegistroCapacitacionesRows(...args: Parameters<typeof queryRegistroCapacitacionesRowsInner>): ReturnType<typeof queryRegistroCapacitacionesRowsInner> {
+    const rows = await queryRegistroCapacitacionesRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 function appendDetalleCapacitacionBlocks(

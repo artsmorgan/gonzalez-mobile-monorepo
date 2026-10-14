@@ -66,8 +66,8 @@ export function mapAgendaMinutaRow(r: any, creadores: Map<number, string> = new 
         creado_por: usuarioInserta(r.created_by, creadores),
         creado: fmtDt(r.created_at),
         // La tabla no guarda modificación (sin `updated_at` ni `updated_by`): se entrega vacío (brecha de auditoría).
-        modificado: null,
-        modificado_por: null,
+        modificado: (r as any).updated_at ? fmtDt((r as any).updated_at) : (null),
+        modificado_por: (r as any).audit_modificado_por ?? (null),
         hora_inicio: txt(r.hora_inicio_txt),
         hora_fin: txt(r.hora_fin_txt),
         estado: r.estado ? "Completado" : "Pendiente",

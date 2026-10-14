@@ -8,6 +8,7 @@ import path from "path";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { reportError } from "../../../../utils/reportError";
 
+import { auditCreateFields, auditUpdateFields } from "../../../../utils/auditFields";
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const { valid, expired, message, payload } = await verifyAccessTokenByApi(req);
@@ -160,7 +161,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
           action: "POST",
           table: "c_articulo_mantenimiento",
           operation: "create",
-          data: createData,
+          data: { ...createData, ...auditCreateFields(payload, ["created_by"]) },
         }
       });
       return NextResponse.json({ status: true, message: "Registro de mantenimiento creado correctamente" }, { status: 200 });
@@ -333,7 +334,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         table: "c_articulo_mantenimiento",
         operation: "update",
         where: { id },
-        data: updateDataForApi
+        data: { ...updateDataForApi, ...auditUpdateFields(payload, ["updated_by"]) }
       }
     });
 

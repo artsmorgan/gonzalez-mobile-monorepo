@@ -8,9 +8,11 @@ import {
     applyConsolidadoReportBanner,
     fetchLatestCambiosPorRegistro,
     formatDateOnlyDMY,
+    formatDateTimeDMY,
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 const MANUALES_PUESTO_INCLUDE = {
     e_puestos_manual_puesto: true,
@@ -235,6 +237,58 @@ function approvedLabel(v: boolean | null | undefined): string {
     return "Pendiente";
 }
 
+/** Resultado del quiz para la columna del consolidado: la calificación manual solo se guarda como `approved`. */
+function quizResultLabel(v: boolean | null | undefined): string {
+    if (v === true) return "Aprobado";
+    if (v === false) return "Reprobado";
+    return "Pendiente de revisión";
+}
+
+/** Cédula y nombre de un solo empleado: "cédula - nombre completo". */
+function empleadoCedulaNombre(
+    e: { cedula?: string | null; codigo?: string | null; nombre: string | null; primer_apellido: string | null; segundo_apellido: string | null } | null | undefined,
+    fallbackNombre: string,
+): string {
+    if (!e) return fallbackNombre;
+    const full = [e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean).join(" ").trim();
+    const ced = String(e.cedula ?? "").trim() || String(e.codigo ?? "").trim();
+    return [ced, full].filter(Boolean).join(" - ") || fallbackNombre;
+}
+
+/** Porcentaje mínimo de aprobación del quiz (misma regla que la app: 70 % si no está configurado). */
+function quizMinApprovalPercentage(parsedRoot: any, hasQuestions: boolean): number | null {
+    if (!hasQuestions) return null;
+    return typeof parsedRoot?.minApprovalPercentage === "number" ? parsedRoot.minApprovalPercentage : 70;
+}
+
+/**
+ * Puntuación 0-100 calculada con las respuestas del empleado, igual que la app (no hay columna con la calificación). Las preguntas de
+ * selección única (`multiple_choice`) se califican solas; las demás se califican a mano y su puntaje por pregunta no se guarda (solo
+ * `approved`), así que cuentan como 0 y el resultado se marca como estimación (`estimada`).
+ */
+function quizScorePercentage(questionObjs: any[], ansItems: any[]): { value: number; estimada: boolean } | null {
+    if (!questionObjs.length) return null;
+    const byQid = answersByQuestionId(ansItems);
+    let total = 0;
+    let obtained = 0;
+    let estimada = false;
+    for (const q of questionObjs) {
+        const pts = Number(q?.points);
+        const points = Number.isFinite(pts) && pts > 0 ? pts : 0;
+        total += points;
+        if (String(q?.type ?? "").trim().toLowerCase() !== "multiple_choice") {
+            estimada = true;
+            continue;
+        }
+        const ans = byQid.get(String(q?.id ?? "").trim());
+        const userAnswer = ans?.user_answer != null ? String(ans.user_answer) : "";
+        const correct = typeof q?.answer === "string" && q.answer !== "" ? q.answer : Array.isArray(q?.answers) ? q.answers.join(", ") : "";
+        if (correct !== "" && userAnswer === correct) obtained += points;
+    }
+    if (total <= 0) return null;
+    return { value: Math.round((obtained / total) * 1000) / 10, estimada };
+}
+
 async function puestoIdsFromSucursalIds(prisma: ReportDataAccess, sucursalIds: number[]): Promise<number[]> {
     if (!sucursalIds.length) return [];
     const rows = await prisma.e_estructura_puesto.findMany({
@@ -345,7 +399,7 @@ export async function resolveManualReportPuestoIds(prisma: ReportDataAccess, f: 
     return acc;
 }
 
-export async function queryManualesPuestoRows(prisma: ReportDataAccess, filters: ManualesPuestoModuleFilters, orderKey: ManualesPuestoOrderKey) {
+async function queryManualesPuestoRowsInner(prisma: ReportDataAccess, filters: ManualesPuestoModuleFilters, orderKey: ManualesPuestoOrderKey) {
     const puestoSet = await resolveManualReportPuestoIds(prisma, filters);
     if (puestoSet !== undefined && puestoSet.size === 0) return [];
 
@@ -398,14 +452,14 @@ export async function queryManualesPuestoRows(prisma: ReportDataAccess, filters:
         {
             relation: "c_empleado",
             fkField: "empleado_id",
-            select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+            select: { id: true, codigo: true, cedula: true, nombre: true, primer_apellido: true, segundo_apellido: true },
         },
     ]);
     await hydratePreexistentChildRelations(rows, "e_empleados_manual_puesto", [
         {
             relation: "c_empleado",
             fkField: "empleado_id",
-            select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+            select: { id: true, codigo: true, cedula: true, nombre: true, primer_apellido: true, segundo_apellido: true },
         },
     ]);
 
@@ -415,7 +469,13 @@ export async function queryManualesPuestoRows(prisma: ReportDataAccess, filters:
     const contratoIds = [...new Set(rows.map((r) => r.contrato_id).filter((n) => n > 0))];
     const corpoIds = [...new Set(rows.map((r) => r.corpo_id).filter((n) => n > 0))];
     const puestoIds = [...new Set(rows.map((r) => r.puesto_id).filter((n) => n > 0))];
-    const creadorIds = [...new Set(rows.map((r: any) => parseEmpleadoIdFromCreatedBy(r.created_by)).filter((n): n is number => n != null))];
+    const creadorIds = [
+        ...new Set(
+            rows
+                .flatMap((r: any) => [parseEmpleadoIdFromCreatedBy(r.created_by), parseEmpleadoIdFromCreatedBy(r.updated_by)])
+                .filter((n): n is number => n != null),
+        ),
+    ];
 
     const [empresas, clientes, divisiones, contratos, corpos, puestos, creadores] = await Promise.all([
         empresaIds.length ? prisma.e_estructura_empresa.findMany({ where: { id: { in: empresaIds } }, select: { id: true, nombre: true, codigo: true } }) : [],
@@ -450,6 +510,8 @@ export async function queryManualesPuestoRows(prisma: ReportDataAccess, filters:
         const pto = puestoById.get(r.puesto_id);
         const empCreadorId = parseEmpleadoIdFromCreatedBy(r.created_by);
         const creador = empCreadorId != null ? creadorById.get(empCreadorId) : undefined;
+        const empModificadorId = parseEmpleadoIdFromCreatedBy(r.updated_by);
+        const modificador = empModificadorId != null ? creadorById.get(empModificadorId) : undefined;
         return {
             ...r,
             empresa_txt: emp ? `${emp.codigo ? `${emp.codigo} - ` : ""}${emp.nombre}` : String(r.empresa_id),
@@ -459,8 +521,17 @@ export async function queryManualesPuestoRows(prisma: ReportDataAccess, filters:
             corpo_txt: cor ? `${cor.nro_sucursal ? `${cor.nro_sucursal} - ` : ""}${cor.nombre}` : String(r.corpo_id),
             puesto_principal_txt: pto ? `${pto.codigo ? `${pto.codigo} - ` : ""}${pto.nombre}` : String(r.puesto_id),
             created_by_nombre: creador ? empleadoDisplayName(creador) : excelCellString(r.created_by),
+            /** Quién modificó el manual según la propia tabla (`updated_by`); vacío si nunca se guardó (registros anteriores). */
+            updated_by_nombre: modificador ? empleadoDisplayName(modificador) : r.updated_by != null ? excelCellString(r.updated_by) : "",
         };
     });
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryManualesPuestoRows(...args: Parameters<typeof queryManualesPuestoRowsInner>): ReturnType<typeof queryManualesPuestoRowsInner> {
+    const rows = await queryManualesPuestoRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 function applyHeaderRow(row: ExcelJS.Row, cols: number) {
@@ -492,10 +563,10 @@ export async function buildManualesPuestoExcelConsolidado(
     }
 
     /**
-     * Una fila por visualización (o una fila "No visto" por cada empleado vinculado sin visualización
-     * todavía); si un manual no tiene ninguna visualización ni empleado vinculado, se emite 1 fila con
-     * los datos del manual y las columnas de visualización en blanco. Plantilla/Puestos vinculados/
-     * Empleados vinculados se unen en la misma fila con ";" (no tienen fila propia).
+     * Una fila por empleado: cada visualización existente, más una fila "No visto" por cada empleado vinculado
+     * sin visualización todavía; si un manual no tiene ninguna visualización ni empleado vinculado, se emite
+     * 1 fila con los datos del manual y las columnas del empleado en blanco. Los datos del manual se repiten en
+     * todas sus filas; las preguntas/respuestas de cada empleado se unen en su fila con ";".
      */
     const mainHeaders = [
         "ID Manual",
@@ -521,14 +592,21 @@ export async function buildManualesPuestoExcelConsolidado(
         "Enunciado (plantilla)",
         "Tipo pregunta (plantilla)",
         "Puntos (plantilla)",
-        "Puesto (vínculo)",
         "Empleado (vínculo)",
-        "Empleado (visualización)",
+        "Puesto (vínculo)",
         "Estado (visualización)",
+        "Visto (Fecha)",
+        "Visto (Hora)",
+        "Firmado (Fecha)",
+        "Firmado (Hora)",
         "Ver respuestas",
         "Ver firma manual",
         "Pregunta (respuesta)",
         "Respuesta empleado",
+        "Mínimo de aprobación (%)",
+        "Puntuación obtenida (0-100)",
+        "Puntuación estimada",
+        "Resultado del quiz",
     ];
     // Posiciones dentro de `mainHeaders` (sin la columna de margen que agrega `addMainRow`); se usan para escribir en los arreglos `values`.
     const COL_VER_ESTRUCTURA = mainHeaders.indexOf("Ver estructura") + 1;
@@ -909,6 +987,43 @@ export async function buildManualesPuestoExcelConsolidado(
         });
     }
 
+    /** Puestos de cada empleado (`c_empleado_plaza` → `e_estructura_puesto`), para "Puesto (vínculo)". */
+    const empleadoIdsAll = new Set<number>();
+    for (const r of rows) {
+        for (const v of r.e_empleado_visualizacion_manual_puesto || []) empleadoIdsAll.add(Number(v.empleado_id));
+        for (const l of r.e_empleados_manual_puesto || []) empleadoIdsAll.add(Number(l.empleado_id));
+    }
+    const empleadoIdList = [...empleadoIdsAll].filter((n) => Number.isFinite(n) && n > 0);
+    const asignaciones = empleadoIdList.length
+        ? ((await reportDb.c_empleado_plaza.findMany({
+              where: { empleado_id: { in: empleadoIdList }, puesto_id: { not: null } },
+              select: { empleado_id: true, puesto_id: true },
+          })) as Array<{ empleado_id: number | null; puesto_id: number | null }>)
+        : [];
+    const puestoIdsEmpleados = [...new Set(asignaciones.map((a) => Number(a.puesto_id)).filter((n) => Number.isFinite(n) && n > 0))];
+    const puestosEmpleados = puestoIdsEmpleados.length
+        ? ((await reportDb.e_estructura_puesto.findMany({
+              where: { id: { in: puestoIdsEmpleados } },
+              select: { id: true, nombre: true, codigo: true },
+          })) as Array<{ id: number; nombre: string; codigo: string | null }>)
+        : [];
+    const puestoTxtById = new Map(puestosEmpleados.map((p) => [p.id, `${p.codigo ? `${p.codigo} - ` : ""}${p.nombre}`]));
+    const puestosTxtByEmpleado = new Map<number, string>();
+    {
+        const sets = new Map<number, Set<string>>();
+        for (const a of asignaciones) {
+            const t = puestoTxtById.get(Number(a.puesto_id));
+            if (!t || a.empleado_id == null) continue;
+            let set = sets.get(a.empleado_id);
+            if (!set) {
+                set = new Set<string>();
+                sets.set(a.empleado_id, set);
+            }
+            set.add(t);
+        }
+        for (const [eid, set] of sets) puestosTxtByEmpleado.set(eid, [...set].join(";"));
+    }
+
     for (const r of rows) {
         const id = Number(r.id);
         const title = excelCellString(r.title);
@@ -934,8 +1049,8 @@ export async function buildManualesPuestoExcelConsolidado(
             [mainHeaders.indexOf("Creado en (fecha)") + 1]: formatDateOnlyDMY(r.created_at),
             [mainHeaders.indexOf("Creado en (hora)") + 1]: formatTimeOnlyHMS(r.created_at),
             [mainHeaders.indexOf("Creado por") + 1]: r.created_by_nombre,
-            [mainHeaders.indexOf("Usuario modifica") + 1]: cambio?.nombreCompleto ?? "",
-            [mainHeaders.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
+            [mainHeaders.indexOf("Usuario modifica") + 1]: r.updated_by_nombre || (cambio?.nombreCompleto ?? ""),
+            [mainHeaders.indexOf("Fecha y hora modifica") + 1]: r.updated_at ? formatDateTimeDMY(r.updated_at) : (cambio?.fechaHoraTexto ?? ""),
         };
 
         // Plantilla, puestos vinculados y empleados vinculados: unidos en la misma fila, separados por ";".
@@ -952,66 +1067,76 @@ export async function buildManualesPuestoExcelConsolidado(
             return Number.isFinite(ptsNum) ? String(ptsNum) : "—";
         });
 
-        const links = r.e_puestos_manual_puesto || [];
-        general[mainHeaders.indexOf("Puesto (vínculo)") + 1] = links
-            .map((link: any) => {
-                const p = link.e_estructura_puesto;
-                return excelCellString(p ? `${p.codigo ? `${p.codigo} - ` : ""}${p.nombre}` : String(link.puesto_id));
-            })
-            .join(";");
-
         const empleadoLinksMain = r.e_empleados_manual_puesto || [];
-        const empleadoLinkTxt = (link: any): string => {
-            const e = link.c_empleado;
-            return e
-                ? [e.codigo, e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean).join(" ")
-                : String(link.empleado_id);
-        };
-        general[mainHeaders.indexOf("Empleado (vínculo)") + 1] = empleadoLinksMain
-            .map((link: any) => excelCellString(empleadoLinkTxt(link)))
-            .join(";");
+        const parsedQuizRoot = safeJsonParse(r.quiz ?? undefined);
+        const minAprobacion = quizMinApprovalPercentage(parsedQuizRoot, questionObjs.length > 0);
 
-        /** Fila por visualización: 1 fila por empleado que ya visualizó, o "No visto" por cada empleado
-         * vinculado que aún no tiene visualización. `Respuesta` se agrupa por visualización con ";". */
+        /** Fila por empleado: 1 fila por empleado que ya visualizó, o "No visto" por cada empleado vinculado
+         * que aún no tiene visualización. Preguntas y respuestas se agrupan por empleado con ";". */
         type VisRowData = {
-            empTxt: string;
+            empleadoTxt: string;
+            puestoTxt: string;
             estado: "No visto" | "Visto" | "Firmado";
+            vistoFecha: string;
+            vistoHora: string;
+            firmadoFecha: string;
+            firmadoHora: string;
             verRespuestasAnchor: number | null;
             verFirmaManualAnchor: number | null;
             preguntasJoined: string;
             respuestasJoined: string;
+            puntuacion: number | "";
+            /** "Sí" cuando el quiz tiene preguntas calificadas a mano que no se pueden incluir en el cálculo. */
+            puntuacionEstimada: "Sí" | "No" | "";
+            resultado: string;
         };
         const vizList = r.e_empleado_visualizacion_manual_puesto || [];
         const visualizadoEmpleadoIds = new Set(
             vizList.map((v: any) => Number(v.empleado_id)).filter((n: number) => Number.isFinite(n)),
         );
         const visRows: VisRowData[] = vizList.map((v: any) => {
-            const emp = v.c_empleado;
-            const empTxt = emp
-                ? [emp.codigo, emp.nombre, emp.primer_apellido, emp.segundo_apellido].filter(Boolean).join(" ")
-                : excelCellString(v.nombre_empleado);
             const ansItems = parseQuizAnswersPayload(v.quiz_answear);
+            const firmado = !!(v as any).firma_empleado_manual;
+            // La calificación no se guarda: se calcula aquí con las respuestas del empleado.
+            const score = quizScorePercentage(questionObjs, ansItems);
             return {
-                empTxt: excelCellString(empTxt),
-                estado: (v as any).firma_empleado_manual ? "Firmado" : "Visto",
+                empleadoTxt: excelCellString(empleadoCedulaNombre(v.c_empleado, excelCellString(v.nombre_empleado))),
+                puestoTxt: puestosTxtByEmpleado.get(Number(v.empleado_id)) ?? "",
+                estado: firmado ? "Firmado" : "Visto",
+                vistoFecha: formatDateOnlyDMY(v.created_at),
+                vistoHora: formatTimeOnlyHMS(v.created_at),
+                // La firma manual no guarda su propia marca de tiempo: se usa la última actualización de la visualización.
+                firmadoFecha: firmado ? formatDateOnlyDMY(v.updated_at) : "",
+                firmadoHora: firmado ? formatTimeOnlyHMS(v.updated_at) : "",
                 verRespuestasAnchor: anchorQuizByVisualizationId.get(Number(v.id)) ?? null,
                 verFirmaManualAnchor: anchorFirmaManualByVisualizationId.get(Number(v.id)) ?? null,
                 preguntasJoined: ansItems
                     .map((ans: any) => qTitleById.get(String(ans?.question_id ?? "").trim()) || "—")
                     .join(";"),
                 respuestasJoined: ansItems.map((ans: any) => displayUserAnswerCell(ans)).join(";"),
+                puntuacion: score?.value ?? "",
+                puntuacionEstimada: score ? (score.estimada ? "Sí" : "No") : "",
+                resultado: questionObjs.length > 0 ? quizResultLabel(v.approved) : "",
             };
         });
         for (const link of empleadoLinksMain) {
             const empleadoId = Number(link.empleado_id);
             if (Number.isFinite(empleadoId) && visualizadoEmpleadoIds.has(empleadoId)) continue;
             visRows.push({
-                empTxt: excelCellString(empleadoLinkTxt(link)),
+                empleadoTxt: excelCellString(empleadoCedulaNombre(link.c_empleado, String(link.empleado_id))),
+                puestoTxt: puestosTxtByEmpleado.get(empleadoId) ?? "",
                 estado: "No visto",
+                vistoFecha: "",
+                vistoHora: "",
+                firmadoFecha: "",
+                firmadoHora: "",
                 verRespuestasAnchor: null,
                 verFirmaManualAnchor: null,
                 preguntasJoined: "",
                 respuestasJoined: "",
+                puntuacion: "",
+                puntuacionEstimada: "",
+                resultado: "",
             });
         }
 
@@ -1022,9 +1147,18 @@ export async function buildManualesPuestoExcelConsolidado(
             values[COL_PUESTOS_VINC - 1] = "Puestos vinculados";
             values[COL_EMPLEADOS_VINC - 1] = "Empleados vinculados";
             values[COL_VIS_EMPLEADOS - 1] = "Visualización empleados";
+            values[mainHeaders.indexOf("Mínimo de aprobación (%)")] = minAprobacion ?? "";
             if (vis) {
-                values[mainHeaders.indexOf("Empleado (visualización)")] = vis.empTxt;
+                values[mainHeaders.indexOf("Empleado (vínculo)")] = vis.empleadoTxt;
+                values[mainHeaders.indexOf("Puesto (vínculo)")] = vis.puestoTxt;
                 values[mainHeaders.indexOf("Estado (visualización)")] = vis.estado;
+                values[mainHeaders.indexOf("Visto (Fecha)")] = vis.vistoFecha;
+                values[mainHeaders.indexOf("Visto (Hora)")] = vis.vistoHora;
+                values[mainHeaders.indexOf("Firmado (Fecha)")] = vis.firmadoFecha;
+                values[mainHeaders.indexOf("Firmado (Hora)")] = vis.firmadoHora;
+                values[mainHeaders.indexOf("Puntuación obtenida (0-100)")] = vis.puntuacion;
+                values[mainHeaders.indexOf("Puntuación estimada")] = vis.puntuacionEstimada;
+                values[mainHeaders.indexOf("Resultado del quiz")] = vis.resultado;
                 if (vis.verRespuestasAnchor != null) values[COL_VER_RESPUESTAS - 1] = "Ver respuestas";
                 if (vis.verFirmaManualAnchor != null) values[COL_VER_FIRMA_MANUAL - 1] = "Ver firma manual";
                 values[mainHeaders.indexOf("Pregunta (respuesta)")] = vis.preguntasJoined;
@@ -1085,14 +1219,21 @@ export async function buildManualesPuestoExcelConsolidado(
         { width: 50 },
         { width: 30 },
         { width: 20 },
-        { width: 34 },
-        { width: 34 },
-        { width: 28 },
+        { width: 46 },
+        { width: 40 },
         { width: 16 },
+        { width: 14 },
+        { width: 12 },
+        { width: 14 },
+        { width: 12 },
         { width: 16 },
         { width: 16 },
         { width: 50 },
         { width: 40 },
+        { width: 16 },
+        { width: 16 },
+        { width: 14 },
+        { width: 22 },
     ];
 
     return Buffer.from(await wb.xlsx.writeBuffer());

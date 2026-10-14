@@ -46,10 +46,10 @@ export function mapDocumentoEntregadoRow(r: any, ejecutivo?: string | null, audi
         oficial_recibe: txt(r.nombre_oficial_recibe),
         descripcion: short(r.descripcion),
         ejecutivo_cuenta: txt(ejecutivo),
-        creado: auditoria?.creado ?? null,
-        creado_por: txt(auditoria?.creado_por),
-        modificado: auditoria?.modificado ?? null,
-        modificado_por: txt(auditoria?.modificado_por),
+        creado: (r as any).created_at ? fmtDt((r as any).created_at) : (auditoria?.creado ?? null),
+        creado_por: (r as any).audit_creado_por ?? (txt(auditoria?.creado_por)),
+        modificado: (r as any).updated_at ? fmtDt((r as any).updated_at) : (auditoria?.modificado ?? null),
+        modificado_por: (r as any).audit_modificado_por ?? (txt(auditoria?.modificado_por)),
     };
 }
 

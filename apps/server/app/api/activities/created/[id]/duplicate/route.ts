@@ -4,6 +4,8 @@ import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { reportError } from "../../../../../../utils/reportError";
 
+import { auditCreateFields } from "../../../../../../utils/auditFields";
+import { syncActividadHierarchy } from "../../../../../../utils/syncActividadHierarchy";
 export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -41,6 +43,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         action: "POST",
         table: "e_actividades",
         data: {
+            ...auditCreateFields(payload, ["created_at", "created_by"]),
           nombre_actividad: copyName,
           descripcion_actividad: existing.descripcion_actividad,
           fecha_inicio: existing.fecha_inicio,
@@ -93,6 +96,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         },
       });
       puestosDuplicados = puestoIds.length;
+      await syncActividadHierarchy(req, newId);
     }
 
     const createdBy = payload?.id ? Number(payload.id) : 0;
