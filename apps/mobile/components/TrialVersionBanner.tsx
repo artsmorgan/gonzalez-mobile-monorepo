@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 
 /** Cambiar a `true` para volver a mostrar el banner de "Versión de prueba". */
-const SHOW_TRIAL_VERSION_BANNER = true;
+export const SHOW_TRIAL_VERSION_BANNER = true;
 
 /**
  * Banner fijo en la parte superior de toda la app (versión de prueba + últimos 4 del commit).

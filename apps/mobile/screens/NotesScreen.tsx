@@ -37,6 +37,12 @@ import { buildNotesImagenesJsonForUpload, deleteNotesLocalFilesFromMeta, stripNo
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
+/**
+ * Botón «Enviar notas al cliente» (y su modal). Oculto para todos los roles: cambiar a `true` para volver a mostrarlo.
+ * Mientras sea `false` ni el botón ni el modal se renderizan, así que no hay forma de abrirlos.
+ */
+const SHOW_SEND_NOTES_TO_CLIENT = false;
+
 type NotesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Notes'>;
 
 interface CurrentMarca {
@@ -3165,7 +3171,7 @@ export default function NotesScreen() {
             </TouchableOpacity>
           )}
 
-          {isAdministrativo && (
+          {SHOW_SEND_NOTES_TO_CLIENT && isAdministrativo && (
             <TouchableOpacity style={styles.sendClientButton} onPress={() => setIsSendNotesModalVisible(true)}>
               <Ionicons name="mail-outline" size={18} color="#FFFFFF" />
               <ThemedText style={styles.sendClientButtonText}>Enviar notas al cliente</ThemedText>
@@ -3270,7 +3276,7 @@ export default function NotesScreen() {
         </ThemedView>
       </Modal>
 
-      <Modal visible={isSendNotesModalVisible} transparent animationType="slide" onRequestClose={() => setIsSendNotesModalVisible(false)}>
+      <Modal visible={SHOW_SEND_NOTES_TO_CLIENT && isSendNotesModalVisible} transparent animationType="slide" onRequestClose={() => setIsSendNotesModalVisible(false)}>
         <ThemedView style={styles.modalOverlay}>
           <ThemedView style={styles.sendModalContainer}>
             <ThemedView style={styles.modalHeader}>

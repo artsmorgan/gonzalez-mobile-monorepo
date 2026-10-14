@@ -160,7 +160,7 @@ function removeAllKotlinUnder(javaRoot) {
 
 /** Nombre visible de la app (el que se ve bajo el ícono) por flavor; `full` conserva el de `main` ("MonitoreApp"). */
 const APP_NAME_BY_FLAVOR = {
-  lite: "MonitoreApp (Test)",
+  lite: "MntrApp (Test)",
   prod: "MonitoreApp",
 };
 

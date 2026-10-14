@@ -10,6 +10,7 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import { eventBus } from '../hooks/eventBus';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CURRENT_MARCA_UPDATED_EVENT } from '@/hooks/pushNotificationsService';
 import {
   MODULES_RELEASE_UPDATED_EVENT,
@@ -42,6 +43,8 @@ const MENU_WIDTH = SCREEN_WIDTH * 0.75;
 export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePress, currentRoute }: SlideMenuProps) {
   const navigation = useNavigation<NavigationProp>();
   const { employee, logout, accessToken, refreshAccessToken } = useAuth();
+  // Con la pantalla de borde a borde la barra de navegación del dispositivo se dibuja encima: el botón de cerrar sesión sube ese margen.
+  const insets = useSafeAreaInsets();
   const slideAnim = React.useRef(new Animated.Value(MENU_WIDTH)).current;
   const [shouldRender, setShouldRender] = React.useState(false);
   const [isLoggingOut, setIsLoggingOut] = React.useState(false);
@@ -1748,7 +1751,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
           </ScrollView>
 
           {/* Logout Section at Bottom */}
-          <ThemedView style={styles.logoutSection}>
+          <ThemedView style={[styles.logoutSection, { paddingBottom: LOGOUT_SECTION_PADDING + insets.bottom }]}>
             <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
               <ThemedText style={styles.logoutButtonText}>{getActionIcon('logout', false)} Cerrar Sesión</ThemedText>
             </TouchableOpacity>
@@ -1774,6 +1777,8 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     </>
   );
 }
+
+const LOGOUT_SECTION_PADDING = 20;
 
 const styles = StyleSheet.create({
   overlay: {
@@ -1893,7 +1898,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   logoutSection: {
-    padding: 20,
+    padding: LOGOUT_SECTION_PADDING,
     borderTopWidth: 1,
     borderTopColor: '#E0E0E0',
   },

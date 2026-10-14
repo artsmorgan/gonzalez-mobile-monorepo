@@ -30,7 +30,7 @@ module.exports = ({ config }) => {
   return {
       expo: {
       /** Nombre visible bajo el ícono: "MonitoreApp (Test)" en lite y "MonitoreApp" en prod/full (en Android lo fija el recurso app_name de cada flavor). */
-      name: variant === "lite" ? "MonitoreApp (Test)" : "MonitoreApp",
+      name: variant === "lite" ? "MntrApp (Test)" : "MonitoreApp",
       slug: "Gonzalez-Mobile-App",
       version: "1.0.1",
       platforms: [
@@ -125,7 +125,7 @@ module.exports = ({ config }) => {
           process.env.NEXT_PUBLIC_API_SERVER ||
           // test https://api-gonzalez-mobile-monorepo-production.up.railway.app
           // prod https://gonzalez-mobile-app-production.up.railway.app
-          "https://gonzalez-mobile-app-production.up.railway.app",
+          "https://api-gonzalez-mobile-monorepo-production.up.railway.app",
         /** Debe coincidir con `MOBILE_ACCESS_TOKEN` del servidor (query en `/api/main-structure`). */
         MOBILE_ACCESS_TOKEN:
           process.env.EXPO_PUBLIC_MOBILE_ACCESS_TOKEN ||
