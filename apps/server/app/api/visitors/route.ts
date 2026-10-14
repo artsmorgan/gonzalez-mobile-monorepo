@@ -13,6 +13,7 @@ import {
 } from "../../../utils/registroCorpoPuesto";
 import { reportError } from "../../../utils/reportError";
 
+import { auditCreateFields } from "../../../utils/auditFields";
 export async function GET(req: NextRequest) {
     try {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -248,6 +249,7 @@ export async function POST(req: NextRequest) {
                 action: "POST",
                 table: "e_registro_personas",
                 data: {
+                    ...auditCreateFields(payload, ["created_by"]),
                     cliente_id: hierarchy.cliente_id,
                     corpo_id: targetCorpoId,
                     puesto_id: puestoIdFinal,

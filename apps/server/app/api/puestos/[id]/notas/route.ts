@@ -7,6 +7,7 @@ import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenBy
 import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
 import { reportError } from "../../../../../utils/reportError";
 
+import { auditCreateFields } from "../../../../../utils/auditFields";
 export async function GET(req: NextRequest, _context: { params: Promise<{ id: string }> }) {
     try {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -221,6 +222,7 @@ export async function POST(req: NextRequest, _context: { params: Promise<{ id: s
                     action: "POST",
                     table: "c_puesto_notas",
                     data: {
+                        ...auditCreateFields(payload, ["created_by"]),
                         titulo,
                         description,
                         categoria_id: categoria_id,

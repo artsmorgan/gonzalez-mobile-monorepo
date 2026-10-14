@@ -244,6 +244,7 @@ export async function POST(req: NextRequest) {
           table: "c_checklist_supervision",
           where: { id: created.id },
           data: {
+              
             evaluacion: JSON.stringify(processedEvaluation),
           }
         }

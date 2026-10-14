@@ -5,6 +5,7 @@ import { prisma } from "../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { reportError } from "../../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../../utils/auditFields";
 function getTurnoLetter(turno: string): string {
   return String(turno || "").trim().charAt(0).toUpperCase();
 }
@@ -125,6 +126,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         operation: "update",
         where: { id: idNum },
         data: {
+            ...auditUpdateFields(payload, ["updated_at", "updated_by"]),
           colaboradores: JSON.stringify(colaboradores),
           total_presentes: totalPresentes,
           total_empleados_turno: totalEmpleadosTurno,

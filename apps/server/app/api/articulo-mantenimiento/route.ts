@@ -5,9 +5,10 @@ import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { reportError } from "../../../utils/reportError";
 
+import { auditCreateFields, auditUpdateFields } from "../../../utils/auditFields";
 export async function POST(req: NextRequest) {
   try {
-    const { valid, expired, message } = await verifyAccessTokenByApi(req);
+    const { valid, expired, message, payload } = await verifyAccessTokenByApi(req);
     if (!valid) {
       return NextResponse.json({ status: false, expired, message }, { status: expired ? 401 : 403 });
     }
@@ -201,7 +202,7 @@ export async function POST(req: NextRequest) {
             table: "c_articulo_mantenimiento",
             operation: "update",
             where: { id: latest.id },
-            data: updateData,
+            data: { ...updateData, ...auditUpdateFields(payload, ["updated_by"]) },
           },
         });
 
@@ -221,6 +222,7 @@ export async function POST(req: NextRequest) {
           action: "POST",
           table: "c_articulo_mantenimiento",
           data: {
+              ...auditCreateFields(payload, ["created_by"]),
             articulo_plan_id: planId,
             articulo_asignado_id: asignadoId,
             estado: estado_actual,
@@ -277,7 +279,7 @@ export async function POST(req: NextRequest) {
           table: "c_articulo_mantenimiento",
           operation: "update",
           where: { id: latest.id },
-          data: updateData,
+          data: { ...updateData, ...auditUpdateFields(payload, ["updated_by"]) },
         },
       });
 

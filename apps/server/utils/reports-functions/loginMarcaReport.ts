@@ -8,6 +8,7 @@ import {
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 export type LoginMarcaModuleFilters = {
     /** Combinación fecha+hora sin conversión de zona (filtro sobre `fecha_hora`). */
@@ -83,7 +84,7 @@ export function filtersMatchLoginMarcaListQuery(parsedRowFilters: any, listModul
     return true;
 }
 
-export async function queryLoginMarcaRows(
+async function queryLoginMarcaRowsInner(
     prisma: ReportDataAccess,
     filters: LoginMarcaModuleFilters,
     orderKey: LoginMarcaOrderKey,
@@ -154,6 +155,13 @@ export async function queryLoginMarcaRows(
                 return String(a.cedula_empleado ?? "").localeCompare(String(b.cedula_empleado ?? ""), "es");
         }
     });
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryLoginMarcaRows(...args: Parameters<typeof queryLoginMarcaRowsInner>): ReturnType<typeof queryLoginMarcaRowsInner> {
+    const rows = await queryLoginMarcaRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 const GRP_HDR = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } } as const;

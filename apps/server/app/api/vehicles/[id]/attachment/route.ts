@@ -4,9 +4,10 @@ import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { deleteDynamicFile } from "../../../../../utils/callDynamicFilesApi";
 import { reportError } from "../../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../../utils/auditFields";
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, expired, message } = await verifyAccessTokenByApi(req);
+        const { valid, expired, message, payload } = await verifyAccessTokenByApi(req);
         if (!valid) {
             return NextResponse.json(
                 { status: false, expired, message },
@@ -49,7 +50,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
                 action: "UPDATE",
                 table: "e_registro_vehiculos",
                 where: { id },
-                data: { file_name: null },
+                data: { ...auditUpdateFields(payload, ["updated_by"]), file_name: null },
                 returning: false,
             },
         });

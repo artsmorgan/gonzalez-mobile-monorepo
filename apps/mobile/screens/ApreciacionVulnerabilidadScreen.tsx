@@ -10,8 +10,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-  Dimensions,
-} from 'react-native';
+  Dimensions, RefreshControl } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import SignatureScreen from 'react-native-signature-canvas';
@@ -62,6 +61,7 @@ import {
 import { buildApreciacionImagenesJsonForUpload, deleteApreciacionLocalFilesFromMeta, stripApreciacionImagesForActionPayload } from '@/hooks/apreciacionVulnerabilidadFilesSync';
 import Constants from 'expo-constants';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 /** Alcance del listado/caché: sucursal (corpo_id). */
 type ApreciacionListCorpoScope = {
@@ -493,6 +493,21 @@ const normalizeBoletaSections = (value: any): BoletaSection[] => {
 };
 
 export default function ApreciacionVulnerabilidadScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (fetchItems());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const navigation = useNavigation<any>();
   const { employee, refreshAccessToken, logout } = useAuth();
   const { scanQR, QRScannerComponent } = useQRScanner();
@@ -2133,7 +2148,7 @@ export default function ApreciacionVulnerabilidadScreen() {
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Aprec. vulnerabilidad" />
 
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+      <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <ThemedView style={styles.content}>
           {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
           {offlineMessage && !error ? <ThemedText style={styles.offlineText}>{offlineMessage}</ThemedText> : null}

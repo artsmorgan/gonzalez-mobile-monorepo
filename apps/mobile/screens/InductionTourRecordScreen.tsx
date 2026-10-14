@@ -10,8 +10,7 @@ import {
   Modal,
   View,
   Image,
-  Dimensions,
-} from 'react-native';
+  Dimensions, RefreshControl } from 'react-native';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import EmployeeSearchModal, { type EmployeeSearchHit } from '@/components/EmployeeSearchModal';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -45,6 +44,7 @@ import { eventBus } from '@/hooks/eventBus';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type InductionTourRecordScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'InductionTourRecord'>;
 
@@ -322,6 +322,21 @@ function inductionTourRowVisibleInList(item: any): boolean {
 }
 
 export default function InductionTourRecordScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (fetchRecords());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<InductionTourRecordScreenNavigationProp>();
@@ -2542,6 +2557,7 @@ export default function InductionTourRecordScreen() {
       <AppHeader onMenuPress={handleMenuPress} title="Induc. y Recorr. Misc" />
 
       <ScrollView
+        refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />}
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
       >

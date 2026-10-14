@@ -8,6 +8,7 @@ import {
 } from "../../../../../../utils/bitacoraRevisionImages";
 import { reportError } from "../../../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../../../utils/auditFields";
 export const runtime = "nodejs";
 
 function revisionFolder(bitacoraId: number): string {
@@ -19,7 +20,7 @@ export async function DELETE(
   context: { params: Promise<{ id: string; image: string }> }
 ) {
   try {
-    const { valid, expired, message } = await verifyAccessTokenByApi(req);
+    const { valid, expired, message, payload } = await verifyAccessTokenByApi(req);
     if (!valid) {
       return NextResponse.json({ status: false, expired, message }, { status: expired ? 401 : 403 });
     }
@@ -71,7 +72,7 @@ export async function DELETE(
         action: "UPDATE",
         table: "c_bitacora_vehiculo_detenido",
         where: { id: bitacoraId },
-        data: { informacion_revision: nextRevisionStr },
+        data: { ...auditUpdateFields(payload, ["updated_at", "updated_by"]), informacion_revision: nextRevisionStr },
       },
     });
 

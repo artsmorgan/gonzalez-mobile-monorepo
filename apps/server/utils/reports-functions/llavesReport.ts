@@ -13,7 +13,9 @@ import {
     formatDateOnlyDMY,
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
+    formatDateTimeDMY,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 export type LlavesModuleFilters = ActaEntregaModuleFilters & {
     entregadoPorContains?: string | null;
@@ -204,7 +206,7 @@ export function filtersMatchLlavesListQuery(parsedRowFilters: any, listModuleFil
     return true;
 }
 
-export async function queryLlavesRows(prisma: ReportDataAccess, filters: LlavesModuleFilters, orderKey: LlavesOrderKey) {
+async function queryLlavesRowsInner(prisma: ReportDataAccess, filters: LlavesModuleFilters, orderKey: LlavesOrderKey) {
     const where: any = { isActive: true };
     const desde = parseBoundaryDate(filters.creadoDesde ?? undefined);
     const hasta = parseBoundaryDate(filters.creadoHasta ?? undefined);
@@ -307,6 +309,13 @@ export async function queryLlavesRows(prisma: ReportDataAccess, filters: LlavesM
                 return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
         }
     });
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryLlavesRows(...args: Parameters<typeof queryLlavesRowsInner>): ReturnType<typeof queryLlavesRowsInner> {
+    const rows = await queryLlavesRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 export async function buildLlavesExcelConsolidado(
@@ -483,8 +492,8 @@ export async function buildLlavesExcelConsolidado(
         values[headers.indexOf("Creado (fecha)")] = formatDateOnlyDMY(r.created_at);
         values[headers.indexOf("Creado (hora)")] = formatTimeOnlyHMS(r.created_at);
         values[headers.indexOf("Creado por")] = fmtCreadorEmpleado(creadorById.get(Number(r.created_by)));
-        values[headers.indexOf("Usuario modifica")] = cambio?.nombreCompleto ?? "";
-        values[headers.indexOf("Fecha y hora modifica")] = cambio?.fechaHoraTexto ?? "";
+        values[headers.indexOf("Usuario modifica")] = r.audit_modificado_por ?? cambio?.nombreCompleto ?? "";
+        values[headers.indexOf("Fecha y hora modifica")] = r.updated_at ? formatDateTimeDMY(r.updated_at) : (cambio?.fechaHoraTexto ?? "");
         values[headers.indexOf("Ver movimientos")] = "Ver movimientos";
         values[headers.indexOf("Entrega (movimientos)")] = joinMovimientos(movs, (m) => excelCellString(m.nombre_persona_entrega));
         values[headers.indexOf("Recibe (movimientos)")] = joinMovimientos(movs, (m) => excelCellString(m.nombre_persona_recibe));

@@ -10,6 +10,7 @@ import { assertCorpoAllowedForMarca, resolveClienteYPuestoParaAlta, getRegistroV
 import { deleteDynamicFile } from "../../../../utils/callDynamicFilesApi";
 import { reportError } from "../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -79,7 +80,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     action: "UPDATE",
                     table: "e_registro_vehiculos",
                     where: { id },
-                    data: { file_name: null },
+                    data: { ...auditUpdateFields(payload, ["updated_by"]), file_name: null },
                     returning: false,
                 },
             });
@@ -230,7 +231,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 action: "UPDATE",
                 table: "e_registro_vehiculos",
                 where: { id },
-                data: updateData,
+                data: { ...updateData, ...auditUpdateFields(payload, ["updated_by"]) },
                 returning: false
             }
         });

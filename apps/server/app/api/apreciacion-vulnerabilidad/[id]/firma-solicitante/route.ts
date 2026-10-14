@@ -5,6 +5,7 @@ import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { reportError } from "../../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../../utils/auditFields";
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -48,6 +49,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         operation: "update",
         where: { id },
         data: {
+            ...auditUpdateFields(payload, ["updated_at", "updated_by"]),
           firma_solicitante: firmaSolicitante,
         },
       },

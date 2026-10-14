@@ -11,8 +11,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-  Dimensions,
-} from 'react-native';
+  Dimensions, RefreshControl } from 'react-native';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
@@ -84,6 +83,7 @@ import {
   type BitacoraRevisionEntry,
 } from '@/hooks/bitacoraRevisionMediaSync';
 import { deleteFile, hydrateSignatureRef, resolveStoredSignatureDisplayUri } from '@/hooks/fileStorage';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'BitacoraVehiculosDetenidos'>;
 
@@ -642,6 +642,21 @@ const buildRevisionConfig = (tipo: TipoBitacora): RevisionEntry[] => {
 const FIRMA_MANUAL_OFFLINE_MESSAGE = 'Para visualizar las firmas manuales, conéctate a internet y actualiza la lista';
 
 export default function BitacoraVehiculosDetenidosScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (fetchRecords());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const navigation = useNavigation<Nav>();
   const route = useRoute<RouteProp<RootStackParamList, 'BitacoraVehiculosDetenidos'>>();
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
@@ -3576,7 +3591,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Revisión de vehículos" />
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+      <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <ThemedView style={styles.content}>
           {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
 

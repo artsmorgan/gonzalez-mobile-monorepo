@@ -14,5 +14,27 @@
       "Módulo de recursos: gestión de vehículos, llaves, equipos de mantenimiento y documentos entregados.",
       "Módulo de personas: visitas, rutas, capacitaciones, evaluaciones de personal y encuestas de satisfacción."
     ]
+  },
+  {
+    "version": "1.0.1",
+    "id": "43e3b21b-7091-415b-9e4a-78fadb696fbd",
+    "name": "MonitoreApp",
+    "created_at": "2026-10-14T00:00:00Z",
+    "title": "Reportes en modalidad tabular, actualización de listas y quices de documentos",
+    "description": "Incorpora la modalidad tabular en los reportes, la actualización de las listas de los módulos mediante gesto de deslizamiento y la edición de preguntas y la visualización de calificaciones en el módulo de documentos.",
+    "notas": [
+      {
+        "title": "Reportes",
+        "description": "Incorporación de la modalidad tabular (consolidada) en los reportes: una fila por registro, con los datos del registro repetidos en cada fila derivada y los valores múltiples concatenados con «;»."
+      },
+      {
+        "title": "Listas de módulos",
+        "description": "Actualización de las listas mediante el gesto de deslizamiento (pull-to-refresh) al inicio de la lista: reejecuta la consulta vigente con los filtros aplicados, estén o no visibles, y respeta el estado de conectividad (consulta remota o caché local)."
+      },
+      {
+        "title": "Documentos",
+        "description": "Edición de las preguntas durante la creación del quiz, además de su alta y eliminación, y visualización de la calificación (0-100) de cada empleado en los quices revisados, calculada a partir de sus respuestas."
+      }
+    ]
   }
 ]

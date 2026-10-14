@@ -9,6 +9,7 @@ import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { visitorsResolveHierarchyFromPuestoId } from "../../../../utils/visitorsResolveHierarchyFromPuesto";
 import { reportError } from "../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 async function getClienteIdForSucursalPut(_req: NextRequest, sucursalId: number): Promise<number | null> {
     const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: sucursalId } });
     if (!sucursal?.contrato_id) {
@@ -265,7 +266,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 action: "UPDATE",
                 table: "e_registro_personas",
                 where: { id },
-                data: updateData
+                data: { ...updateData, ...auditUpdateFields(payload, ["updated_by"]) }
             }
         });
 
@@ -349,7 +350,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                         action: "UPDATE",
                         table: "e_registro_personas",
                         where: { id: visitor.id },
-                        data: { foto_cedula: file_name }
+                        data: { ...auditUpdateFields(payload, ["updated_by"]), foto_cedula: file_name }
                     }
                 });
             }

@@ -13,9 +13,11 @@ import {
     applyConsolidadoReportBanner,
     fetchLatestCambiosPorRegistro,
     formatDateOnlyDMY,
+    formatDateTimeDMY,
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 const REGISTRO_VISITAS_INCLUDE = {
     e_activo_visitante: { include: { n_tipo_activo_visitas: { select: { nombre: true } } } },
@@ -284,7 +286,7 @@ async function enrichRows(prisma: ReportDataAccess, raw: any[]): Promise<any[]> 
     });
 }
 
-export async function queryRegistroVisitasRows(
+async function queryRegistroVisitasRowsInner(
     prisma: ReportDataAccess,
     filters: RegistroVisitasModuleFilters,
     orderKey: RegistroVisitasOrderKey,
@@ -329,6 +331,13 @@ export async function queryRegistroVisitasRows(
     await hydratePreexistentRelations(raw, preexistentSpecs);
     const enriched = await enrichRows(prisma, raw);
     return sortRegistroVisitasRows(enriched, orderKey);
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryRegistroVisitasRows(...args: Parameters<typeof queryRegistroVisitasRowsInner>): ReturnType<typeof queryRegistroVisitasRowsInner> {
+    const rows = await queryRegistroVisitasRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 function sortRegistroVisitasRows(rows: any[], orderKey: RegistroVisitasOrderKey): any[] {
@@ -708,8 +717,8 @@ export async function buildRegistroVisitasExcelConsolidado(
             [mainHeaders.indexOf("Responsable") + 1]: excelCellString(r.responsable_label),
             [mainHeaders.indexOf("Creado en (fecha)") + 1]: formatDateOnlyDMY(r.created_at),
             [mainHeaders.indexOf("Creado en (hora)") + 1]: formatTimeOnlyHMS(r.created_at),
-            [mainHeaders.indexOf("Usuario modifica") + 1]: cambiosByRegistro.get(vid)?.nombreCompleto ?? "",
-            [mainHeaders.indexOf("Fecha y hora modifica") + 1]: cambiosByRegistro.get(vid)?.fechaHoraTexto ?? "",
+            [mainHeaders.indexOf("Usuario modifica") + 1]: (r as any).audit_modificado_por ?? cambiosByRegistro.get(vid)?.nombreCompleto ?? "",
+            [mainHeaders.indexOf("Fecha y hora modifica") + 1]: (r as any).updated_at ? formatDateTimeDMY((r as any).updated_at) : (cambiosByRegistro.get(vid)?.fechaHoraTexto ?? ""),
         };
 
         const activos = Array.isArray(r.e_activo_visitante) ? r.e_activo_visitante : [];

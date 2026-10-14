@@ -5,6 +5,7 @@ import { prisma } from "../../../../../utils/prismaClient";
 import { fetchActivePlazaIdsForPuestos, sendNotificationByPlaza } from "../../../../../utils/sendNotification";
 import { toZonedTime } from "date-fns-tz";
 import { reportError } from "../../../../../utils/reportError";
+import { auditUpdateFields } from "../../../../../utils/auditFields";
 
 /**
  * Añade vínculos manual–puesto sin eliminar los existentes.
@@ -147,6 +148,18 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
                     plazas_ids
                 );
             }
+
+            // Vincular modifica el manual: se registra quién y cuándo en el propio registro.
+            await callDynamicPrisma({
+                req,
+                data: {
+                    action: "UPDATE",
+                    table: "e_manual_puesto",
+                    operation: "update",
+                    where: { id: manualId },
+                    data: { ...auditUpdateFields(payload) },
+                },
+            });
 
             const createdBy = payload?.id ? Number(payload.id) : 0;
             await callDynamicPrisma({

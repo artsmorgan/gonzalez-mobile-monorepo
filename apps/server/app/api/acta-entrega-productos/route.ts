@@ -8,6 +8,7 @@ import { uploadDynamicFiles } from '../../../utils/callDynamicFilesApi';
 import { mapActaEntregaImagesForClient } from './mapActaEntregaImagesForClient';
 import { reportError } from '../../../utils/reportError';
 
+import { auditCreateFields } from "../../../utils/auditFields";
 export const runtime = 'nodejs';
 
 type ActaImageInput = {
@@ -193,6 +194,7 @@ export async function POST(req: NextRequest) {
         table: "c_acta_entre_producto",
         operation: "create",
         data: {
+            ...auditCreateFields(payload, ["created_at", "created_by"]),
           empresa_id: Number(empresa_id),
           cliente_id: Number(cliente_id),
           division_id: Number(division_id),

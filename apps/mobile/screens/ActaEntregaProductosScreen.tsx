@@ -11,8 +11,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-  Dimensions,
-} from 'react-native';
+  Dimensions, RefreshControl } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -71,6 +70,7 @@ import {
   deleteSignatureLocalRef,
 } from '@/hooks/fileStorage';
 import { stripActaEntregaImagesForActionPayload } from '@/hooks/actaEntregaProductosImagesSync';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type NavProp = NativeStackNavigationProp<RootStackParamList, 'ActaEntregaProductos'>;
 
@@ -466,6 +466,21 @@ const signatureWebStyle = `
 `;
 
 export default function ActaEntregaProductosScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (fetchRecords());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const navigation = useNavigation<NavProp>();
   const { employee, isAuthenticated, isLoading, refreshAccessToken, logout, accessToken } = useAuth();
   const { scanQR } = useQRScanner();
@@ -2308,7 +2323,7 @@ export default function ActaEntregaProductosScreen() {
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={() => setIsMenuVisible(true)} title="Entrega de productos" />
 
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+      <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <ThemedView style={styles.contentContainer}>
           <ThemedView style={styles.titleContainer}>
             <ThemedText style={styles.title}>

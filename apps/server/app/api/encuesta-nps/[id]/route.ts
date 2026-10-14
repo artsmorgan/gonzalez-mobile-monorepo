@@ -5,6 +5,7 @@ import { prisma } from "../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { reportError } from "../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 function encuestaCambiosEq(a: any, b: any): boolean {
   if (a === b) return true;
   if (a == null && b == null) return true;
@@ -323,7 +324,7 @@ export async function PUT(
         table: "c_encuesta_cliente",
         operation: "update",
         where: { id },
-        data: updateData,
+        data: { ...updateData, ...auditUpdateFields(payload, ["updated_at", "updated_by"]) },
       },
     });
 
@@ -430,7 +431,7 @@ export async function PATCH(
         table: "c_encuesta_cliente",
         operation: "update",
         where: { id },
-        data: { firma_evaluado: valueToStore },
+        data: { ...auditUpdateFields(payload, ["updated_at", "updated_by"]), firma_evaluado: valueToStore },
       },
     });
 

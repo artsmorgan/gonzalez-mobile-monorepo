@@ -21,6 +21,7 @@ import {
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 const ACTIVIDADES_REPORT_INCLUDE = {
     e_actividades_puesto: {
@@ -371,7 +372,7 @@ function parseArticles(raw: string | null | undefined): any[] {
     }
 }
 
-export async function queryActividadesReportRows(prisma: ReportDataAccess, filters: ActividadesModuleFilters, orderKey: ActividadesOrderKey) {
+async function queryActividadesReportRowsInner(prisma: ReportDataAccess, filters: ActividadesModuleFilters, orderKey: ActividadesOrderKey) {
     const desde = parseBoundaryDate(filters.creadoDesde ?? undefined);
     const hasta = parseBoundaryDate(filters.creadoHasta ?? undefined);
 
@@ -434,6 +435,13 @@ export async function queryActividadesReportRows(prisma: ReportDataAccess, filte
         frecuencia_horario: frecuenciaScheduleStr(r.frecuencia),
         fecha_txt: r.fecha_inicio instanceof Date ? r.fecha_inicio.toISOString().slice(0, 10) : String(r.fecha_inicio ?? ""),
     }));
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryActividadesReportRows(...args: Parameters<typeof queryActividadesReportRowsInner>): ReturnType<typeof queryActividadesReportRowsInner> {
+    const rows = await queryActividadesReportRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 const MAIN_SHEET = "Actividades";
@@ -615,7 +623,11 @@ export async function buildActividadesExcelConsolidado(
             act.es_revision_equipo ? "Sí" : "No",
             String(act.descripcion_actividad ?? "").slice(0, 5000),
         ];
-        const cambioCols = [cambio?.nombreCompleto ?? "", cambio?.fechaTexto ?? "", cambio?.horaTexto ?? ""];
+        const cambioCols = [
+            act.audit_modificado_por ?? cambio?.nombreCompleto ?? "",
+            act.updated_at ? formatDateOnlyDMY(act.updated_at) : (cambio?.fechaTexto ?? ""),
+            act.updated_at ? formatTimeOnlyHMS(act.updated_at) : (cambio?.horaTexto ?? ""),
+        ];
         const emptyUsuarioCols = ["", "", "", "", "", "", "", "", "", "", "", "", "", ""]; // ID act. usuario … observaciones artículo
 
         const puestos: any[] = act.e_actividades_puesto || [];

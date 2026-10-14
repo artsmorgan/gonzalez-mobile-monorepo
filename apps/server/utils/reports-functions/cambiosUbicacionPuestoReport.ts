@@ -13,6 +13,7 @@ import {
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 export type CambiosUbicacionPuestoModuleFilters = ActaEntregaModuleFilters & {
     responsableIds?: number[] | null;
@@ -152,7 +153,7 @@ async function loadPuestoChains(prisma: ReportDataAccess, puestoIds: number[]): 
     return map;
 }
 
-export async function queryCambiosUbicacionPuestoRows(
+async function queryCambiosUbicacionPuestoRowsInner(
     prisma: ReportDataAccess,
     filters: CambiosUbicacionPuestoModuleFilters,
     orderKey: CambiosUbicacionPuestoOrderKey,
@@ -194,12 +195,26 @@ export async function queryCambiosUbicacionPuestoRows(
 
     const puestoIds = [...new Set(rows.map((r) => r.puesto_id).filter((id) => id > 0))];
     const chainByPuesto = await loadPuestoChains(prisma, puestoIds);
+    /** Jerarquía guardada en el propio registro (al crearlo); en registros sin ella, la actual del puesto. */
+    const chainOf = (r: any) => {
+        if (Number(r.corpo_id) > 0 && Number(r.contrato_id) > 0) {
+            return {
+                empresa_id: Number(r.empresa_id) || 0,
+                cliente_id: Number(r.cliente_id) || 0,
+                division_id: Number(r.division_id) || 0,
+                contrato_id: Number(r.contrato_id) || 0,
+                corpo_id: Number(r.corpo_id) || 0,
+            };
+        }
+        return chainByPuesto.get(r.puesto_id);
+    };
+    const chains = rows.map(chainOf).filter((c): c is NonNullable<ReturnType<typeof chainOf>> => !!c);
 
-    const empresaIds = [...new Set([...chainByPuesto.values()].map((c) => c.empresa_id).filter((n) => n > 0))];
-    const clienteIds = [...new Set([...chainByPuesto.values()].map((c) => c.cliente_id).filter((n) => n > 0))];
-    const divisionIds = [...new Set([...chainByPuesto.values()].map((c) => c.division_id).filter((n) => n > 0))];
-    const contratoIds = [...new Set([...chainByPuesto.values()].map((c) => c.contrato_id).filter((n) => n > 0))];
-    const corpoIds = [...new Set([...chainByPuesto.values()].map((c) => c.corpo_id).filter((n) => n > 0))];
+    const empresaIds = [...new Set(chains.map((c) => c.empresa_id).filter((n) => n > 0))];
+    const clienteIds = [...new Set(chains.map((c) => c.cliente_id).filter((n) => n > 0))];
+    const divisionIds = [...new Set(chains.map((c) => c.division_id).filter((n) => n > 0))];
+    const contratoIds = [...new Set(chains.map((c) => c.contrato_id).filter((n) => n > 0))];
+    const corpoIds = [...new Set(chains.map((c) => c.corpo_id).filter((n) => n > 0))];
     const creatorIds = [...new Set(rows.map((r) => r.created_by).filter((id) => id > 0))];
 
     const [empresas, clientes, divisiones, contratos, corpos, puestos, empleados] = await Promise.all([
@@ -234,7 +249,7 @@ export async function queryCambiosUbicacionPuestoRows(
     const empleadoById = new Map(empleados.map((x) => [x.id, x]));
 
     const enriched = rows.map((r) => {
-        const chain = chainByPuesto.get(r.puesto_id);
+        const chain = chainOf(r);
         const empresa = chain ? empresaById.get(chain.empresa_id) : undefined;
         const cliente = chain ? clienteById.get(chain.cliente_id) : undefined;
         const division = chain ? divisionById.get(chain.division_id) : undefined;
@@ -282,6 +297,13 @@ export async function queryCambiosUbicacionPuestoRows(
                 return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
         }
     });
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryCambiosUbicacionPuestoRows(...args: Parameters<typeof queryCambiosUbicacionPuestoRowsInner>): ReturnType<typeof queryCambiosUbicacionPuestoRowsInner> {
+    const rows = await queryCambiosUbicacionPuestoRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 export async function buildCambiosUbicacionPuestoExcelConsolidado(

@@ -11,6 +11,7 @@ import {
 } from "../../../../utils/corporateVehiclePayload";
 import { reportError } from "../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 export const runtime = "nodejs";
 
 type VehicleImageInput = {
@@ -178,7 +179,7 @@ export async function PUT(
         table: "c_vehiculos_corporativos",
         operation: "update",
         where: { id: vehiculoId },
-        data: updateData,
+        data: { ...updateData, ...auditUpdateFields(payload, ["updated_at", "updated_by"]) },
         include: { c_imagenes_vehiculos_corporativos: true },
       },
     });
@@ -214,6 +215,7 @@ export async function PUT(
               operation: "update",
               where: { id: rid },
               data: {
+                  ...auditUpdateFields(payload, ["updated_at", "updated_by"]),
                 empresa_id: nextEmp,
                 cliente_id: nextCli,
                 sucursal_id: nextSuc,

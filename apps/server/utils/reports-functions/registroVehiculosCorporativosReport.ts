@@ -12,7 +12,9 @@ import {
     formatDateOnlyDMY,
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
+    formatDateTimeDMY,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 export type RegistroVehiculosCorporativosModuleFilters = ActaEntregaModuleFilters & {
     tiposVehiculo?: string[] | null;
@@ -295,6 +297,11 @@ export type RegistroVehiculoCorporativoReportRow = {
     /** Valor crudo de `created_at` (sin formatear) — usado solo en la hoja principal para separar fecha/hora. */
     created_at: Date;
     created_by: number;
+    /** Auditoría propia de la tabla (`updated_*`) y nombres ya resueltos (ver `attachAuditoriaPropia`). */
+    updated_at?: Date | string | null;
+    updated_by?: number | null;
+    audit_creado_por?: string | null;
+    audit_modificado_por?: string | null;
     usos_count: number;
     mantenimientos_count: number;
     usos: UsoRow[];
@@ -406,7 +413,7 @@ function sortVehicleRows(
     });
 }
 
-export async function queryRegistroVehiculosCorporativosRows(
+async function queryRegistroVehiculosCorporativosRowsInner(
     prisma: ReportDataAccess,
     filters: RegistroVehiculosCorporativosModuleFilters,
     orderKey: RegistroVehiculosCorporativosOrderKey,
@@ -519,6 +526,8 @@ export async function queryRegistroVehiculosCorporativosRows(
             created_at_txt: fmtDateTime(v.created_at),
             created_at: v.created_at,
             created_by: v.created_by,
+            updated_at: v.updated_at ?? null,
+            updated_by: v.updated_by ?? null,
             usos_count: usos.length,
             mantenimientos_count: mantenimientos.length,
             usos,
@@ -527,6 +536,13 @@ export async function queryRegistroVehiculosCorporativosRows(
     }
 
     return sortVehicleRows(out, orderKey);
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryRegistroVehiculosCorporativosRows(...args: Parameters<typeof queryRegistroVehiculosCorporativosRowsInner>): ReturnType<typeof queryRegistroVehiculosCorporativosRowsInner> {
+    const rows = await queryRegistroVehiculosCorporativosRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 const USO_HEADERS = [
@@ -768,8 +784,8 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
             [mainHeaders.indexOf("Fecha de creación") + 1]: formatDateOnlyDMY(r.created_at),
             [mainHeaders.indexOf("Hora de creación") + 1]: formatTimeOnlyHMS(r.created_at),
             [mainHeaders.indexOf("Creado por") + 1]: fmtCreador(creadorById.get(Number(r.created_by))),
-            [mainHeaders.indexOf("Usuario modifica") + 1]: cambio?.nombreCompleto ?? "",
-            [mainHeaders.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
+            [mainHeaders.indexOf("Usuario modifica") + 1]: r.audit_modificado_por ?? cambio?.nombreCompleto ?? "",
+            [mainHeaders.indexOf("Fecha y hora modifica") + 1]: r.updated_at ? formatDateTimeDMY(r.updated_at) : (cambio?.fechaHoraTexto ?? ""),
         };
 
         const rootValues = new Array(mainHeaders.length).fill("");

@@ -10,8 +10,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-  Dimensions,
-} from 'react-native';
+  Dimensions, RefreshControl } from 'react-native';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 import EmployeeSearchModal, { type EmployeeSearchHit } from '@/components/EmployeeSearchModal';
@@ -62,6 +61,7 @@ import {
   hydrateGirPersonasFirmas,
 } from '@/hooks/generalInductionRegisterCache';
 import { saveFile, getFile, deleteFile, getLocalFileDisplayUri, hydrateSignatureRef, deleteSignatureLocalRef } from '@/hooks/fileStorage';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type GeneralInductionRegisterScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -783,6 +783,21 @@ function findHierarchyByPuestoIn(structureArr: MainStructureTree, puestoId: numb
 }
 
 export default function GeneralInductionRegisterScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (fetchRecords());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const navigation = useNavigation<GeneralInductionRegisterScreenNavigationProp>();
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const { scanQR, QRScannerComponent } = useQRScanner();
@@ -3499,7 +3514,7 @@ export default function GeneralInductionRegisterScreen() {
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Registro inducción general" />
 
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+      <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} style={styles.scrollView} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         <ThemedView style={styles.contentContainer}>
           <ThemedView style={styles.titleContainer}>
             <ThemedView style={styles.mainHeaderRow}>

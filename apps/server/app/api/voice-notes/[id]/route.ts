@@ -4,6 +4,7 @@ import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../utils/prismaClient";
 import { reportError } from "../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -138,7 +139,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
                 table: "c_notas_voz",
                 operation: "update",
                 where: { id },
-                data: updateData
+                data: { ...updateData, ...auditUpdateFields(payload, ["updated_at", "updated_by"]) }
             }
         });
         return NextResponse.json({ status: true, message: "Nota de voz actualizada con éxito" }, { status: 200 });

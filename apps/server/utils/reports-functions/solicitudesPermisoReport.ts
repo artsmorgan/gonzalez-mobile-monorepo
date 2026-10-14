@@ -15,7 +15,9 @@ import {
     formatDateOnlyDMY,
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
+    formatDateTimeDMY,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 const SOLICITUDES_PERMISO_INCLUDE = {
     c_empleado: {
@@ -220,7 +222,7 @@ function empleadoNombre(e: {
     return name || e.codigo;
 }
 
-export async function querySolicitudesPermisoRows(
+async function querySolicitudesPermisoRowsInner(
     prisma: ReportDataAccess,
     filters: SolicitudesPermisoModuleFilters,
     orderKey: SolicitudesPermisoOrderKey,
@@ -397,6 +399,13 @@ export async function querySolicitudesPermisoRows(
                 return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
         }
     });
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function querySolicitudesPermisoRows(...args: Parameters<typeof querySolicitudesPermisoRowsInner>): ReturnType<typeof querySolicitudesPermisoRowsInner> {
+    const rows = await querySolicitudesPermisoRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 const GRP_HDR = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } } as const;
@@ -641,8 +650,8 @@ export async function buildSolicitudesPermisoExcelConsolidado(
             [headers.indexOf("Creado (fecha)") + 1]: formatDateOnlyDMY(r.created_at),
             [headers.indexOf("Creado (hora)") + 1]: formatTimeOnlyHMS(r.created_at),
             [headers.indexOf("Creado por") + 1]: r.creado_por_nombre,
-            [headers.indexOf("Usuario modifica") + 1]: cambio?.nombreCompleto ?? "",
-            [headers.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
+            [headers.indexOf("Usuario modifica") + 1]: r.audit_modificado_por ?? cambio?.nombreCompleto ?? "",
+            [headers.indexOf("Fecha y hora modifica") + 1]: r.updated_at ? formatDateTimeDMY(r.updated_at) : (cambio?.fechaHoraTexto ?? ""),
             [headers.indexOf("Motivo") + 1]: String(r.motivo_txt ?? r.motivo ?? "").slice(0, 500),
             [headers.indexOf("Observaciones") + 1]: String(r.observaciones_txt ?? r.observaciones ?? "").slice(0, 500),
         };

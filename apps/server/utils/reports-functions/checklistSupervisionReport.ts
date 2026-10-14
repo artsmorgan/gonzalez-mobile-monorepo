@@ -12,7 +12,9 @@ import {
     formatDateOnlyDMY,
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
+    formatDateTimeDMY,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 export type ChecklistSupervisionModuleFilters = ActaEntregaModuleFilters & {
     ejecutivoCuentaIds?: number[] | null;
@@ -113,7 +115,7 @@ export function filtersMatchChecklistSupervisionListQuery(parsedRowFilters: any,
     return true;
 }
 
-export async function queryChecklistSupervisionRows(
+async function queryChecklistSupervisionRowsInner(
     prisma: ReportDataAccess,
     filters: ChecklistSupervisionModuleFilters,
     orderKey: ChecklistSupervisionOrderKey,
@@ -199,6 +201,13 @@ export async function queryChecklistSupervisionRows(
     });
 
     return sortChecklistRows(enriched, orderKey);
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryChecklistSupervisionRows(...args: Parameters<typeof queryChecklistSupervisionRowsInner>): ReturnType<typeof queryChecklistSupervisionRowsInner> {
+    const rows = await queryChecklistSupervisionRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 function sortChecklistRows(rows: any[], orderKey: ChecklistSupervisionOrderKey): any[] {
@@ -873,8 +882,8 @@ export async function buildChecklistSupervisionExcelConsolidado(
             formatDateOnlyDMY(r.created_at),
             formatTimeOnlyHMS(r.created_at),
             fmtCreadorEmpleado(creadorById.get(Number(r.created_by))),
-            cambio?.nombreCompleto ?? "",
-            cambio?.fechaHoraTexto ?? "",
+            r.audit_modificado_por ?? cambio?.nombreCompleto ?? "",
+            r.updated_at ? formatDateTimeDMY(r.updated_at) : (cambio?.fechaHoraTexto ?? ""),
         ];
 
         const evaluacion = parseEvalJson(r.evaluacion);

@@ -5,6 +5,7 @@ import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { reportError } from "../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 function parseDateOnly(value: any): Date | null {
   if (!value) return null;
   const s = String(value);
@@ -140,7 +141,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         action: "UPDATE",
         table: "e_control_documento_entregado_cliente",
         where: { id },
-        data: updateData,
+        data: { ...updateData, ...auditUpdateFields(payload, ["updated_at", "updated_by"]) },
       },
     });
 
@@ -272,7 +273,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         action: "UPDATE",
         table: "e_control_documento_entregado_cliente",
         where: { id },
-        data: { isActive: false },
+        data: { ...auditUpdateFields(payload, ["updated_at", "updated_by"]), isActive: false },
       },
     });
     return NextResponse.json({ status: true, message: "Documento entregado eliminado correctamente" }, { status: 200 });

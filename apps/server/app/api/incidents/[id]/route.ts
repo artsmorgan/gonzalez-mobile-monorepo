@@ -9,6 +9,7 @@ import path from "path";
 import { sendNotificationByRole } from "../../../../utils/sendNotification";
 import { reportError } from "../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 type IncidentFileInput = {
     type: string;
     extension: string;
@@ -123,7 +124,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 action: "UPDATE",
                 table: "c_incidente",
                 where: { id: incidentId },
-                data: updateData
+                data: { ...updateData, ...auditUpdateFields(payload, ["updated_at", "updated_by"]) }
             }
         });
 

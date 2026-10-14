@@ -6,8 +6,7 @@ import {
   Alert,
   ActivityIndicator,
   TextInput,
-  Platform,
-} from 'react-native';
+  Platform, RefreshControl } from 'react-native';
 import DateTimePicker from "@react-native-community/datetimepicker";
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { ThemedText } from '@/components/ThemedText';
@@ -39,6 +38,7 @@ import {
   voiceNoteInPuestoFetchScope,
 } from '@/hooks/voiceNotesCacheHelpers';
 import { saveFile, deleteFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type VoiceNotesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'VoiceNotes'>;
 
@@ -311,6 +311,21 @@ function getMarcaPuestoIdFromJson(marca: any): number | null {
 }
 
 export default function VoiceNotesScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (fetchData());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<VoiceNotesScreenNavigationProp>();
@@ -2165,7 +2180,7 @@ export default function VoiceNotesScreen() {
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Notas de Voz" />
 
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollViewContent}>
+      <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} style={styles.scrollView} contentContainerStyle={styles.scrollViewContent}>
         {/* Title Section */}
         <ThemedView style={styles.titleContainer}>
           <ThemedText type="title" style={styles.title}>

@@ -9,8 +9,7 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  View,
-} from 'react-native';
+  View, RefreshControl } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { getDocumentTypes, getTiposProductoNoConforme, getIncidentsClassifications, getCategories, getTipoQuejas, getManualClassification } from '../hooks/updateNomenclator';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -82,6 +81,7 @@ import {
   type StructureLite,
   type VehiculoCorporativoLite,
 } from '../hooks/reportesFunctions';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 /** Ms desde `getHoraAccion` o reloj local si falta servidor (mismo criterio que ActaEntregaProductosScreen). */
 async function getHoraAccionSafeMs(): Promise<number> {
@@ -1014,6 +1014,21 @@ type DocumentTypeLite = { id: number; nombre: string };
 type IncidentClassificationLite = { id: number; nombre: string };
 
 export default function ReportesScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (loadLista());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const navigation = useNavigation();
   const { employee, refreshAccessToken, logout } = useAuth();
 
@@ -4680,6 +4695,7 @@ export default function ReportesScreen() {
       ) : null}
 
       <ScrollView
+        refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />}
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"

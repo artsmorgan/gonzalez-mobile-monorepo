@@ -5,6 +5,7 @@ import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { reportError } from "../../../utils/reportError";
 
 
+import { auditCreateFields } from "../../../utils/auditFields";
 export async function POST(req: NextRequest) {
     try {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -129,6 +130,7 @@ export async function POST(req: NextRequest) {
                 action: "POST",
                 table: "c_empleado_almuerzo",
                 data: {
+                    ...auditCreateFields(payload, ["created_at"]),
                     empleadoId: empleadoIdToUse,
                     empleado_nombre: empleadoNombre,
                     cedula_empleado: cedulaEmpleado,

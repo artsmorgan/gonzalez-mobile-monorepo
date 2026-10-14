@@ -10,7 +10,9 @@ import {
     fetchLatestCambiosPorRegistro,
     formatDateOnlyDMY,
     type ConsolidadoBannerMeta,
+    formatDateTimeDMY,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 export type DocumentosEntregadosModuleFilters = ActaEntregaModuleFilters & {
     tipoDocumento?: string | null;
@@ -88,7 +90,7 @@ async function resolveLogoPathByEmpresaId(empresaId: number): Promise<string | n
     }
 }
 
-export async function queryDocumentosEntregadosRows(
+async function queryDocumentosEntregadosRowsInner(
     prisma: ReportDataAccess,
     filters: DocumentosEntregadosModuleFilters,
     orderKey: DocumentosEntregadosOrderKey
@@ -194,6 +196,13 @@ export async function queryDocumentosEntregadosRows(
     });
 }
 
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryDocumentosEntregadosRows(...args: Parameters<typeof queryDocumentosEntregadosRowsInner>): ReturnType<typeof queryDocumentosEntregadosRowsInner> {
+    const rows = await queryDocumentosEntregadosRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
+}
+
 export async function buildDocumentosEntregadosExcelConsolidado(
     rows: any[],
     reportDb: ReportDataAccess,
@@ -292,7 +301,7 @@ export async function buildDocumentosEntregadosExcelConsolidado(
         const row = addMainRow(wsMain, [
             r.id, formatDateOnlyDMY(r.fecha), r.empresa_nombre, r.cliente_nombre, r.division_nombre, r.contrato_nombre, r.corpo_nombre, r.puesto_nombre,
             r.tipo_documento, r.nombre_oficial_entrega, r.nombre_oficial_recibe, r.descripcion, "",
-            cambio?.nombreCompleto ?? "", cambio?.fechaHoraTexto ?? "",
+            r.audit_modificado_por ?? cambio?.nombreCompleto ?? "", r.updated_at ? formatDateTimeDMY(r.updated_at) : (cambio?.fechaHoraTexto ?? ""),
         ]);
         row.getCell(COL_VER_FIRMA).value = { text: "Ver firma", hyperlink: `#'Firmas'!A${anchor}` };
         row.getCell(COL_VER_FIRMA).font = { color: { argb: "FF0563C1" }, underline: true };

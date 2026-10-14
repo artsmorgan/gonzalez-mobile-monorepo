@@ -11,7 +11,9 @@ import {
     formatDateOnlyDMY,
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
+    formatDateTimeDMY,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 export type ControlAsistenciaModuleFilters = ActaEntregaModuleFilters & {
     tipoTurno?: "D" | "M" | "N" | null;
@@ -154,7 +156,7 @@ async function resolveLogoPathByEmpresaId(empresaId: number): Promise<string | n
     }
 }
 
-export async function queryControlAsistenciaRows(prisma: ReportDataAccess, filters: ControlAsistenciaModuleFilters, orderKey: ControlAsistenciaOrderKey) {
+async function queryControlAsistenciaRowsInner(prisma: ReportDataAccess, filters: ControlAsistenciaModuleFilters, orderKey: ControlAsistenciaOrderKey) {
     const where: any = { isActive: true };
     const desde = parseBoundaryDate(filters.creadoDesde ?? undefined);
     const hasta = parseBoundaryDate(filters.creadoHasta ?? undefined);
@@ -265,6 +267,13 @@ export async function queryControlAsistenciaRows(prisma: ReportDataAccess, filte
                 return new Date(b.fecha).getTime() - new Date(a.fecha).getTime();
         }
     });
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryControlAsistenciaRows(...args: Parameters<typeof queryControlAsistenciaRowsInner>): ReturnType<typeof queryControlAsistenciaRowsInner> {
+    const rows = await queryControlAsistenciaRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 export async function buildControlAsistenciaExcelConsolidado(
@@ -411,8 +420,8 @@ export async function buildControlAsistenciaExcelConsolidado(
         const general = [
             String(r.id),
             fmtEmpleado(empById.get(Number(r.created_by))) || String(r.created_by ?? ""),
-            cambio?.nombreCompleto ?? "",
-            cambio?.fechaHoraTexto ?? "",
+            r.audit_modificado_por ?? cambio?.nombreCompleto ?? "",
+            r.updated_at ? formatDateTimeDMY(r.updated_at) : (cambio?.fechaHoraTexto ?? ""),
             r.empresa_nombre,
             r.cliente_nombre,
             r.division_nombre,

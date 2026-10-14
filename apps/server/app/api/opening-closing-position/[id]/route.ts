@@ -9,6 +9,7 @@ import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../utils/hydratePreexistentIncludes";
 import { reportError } from "../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
 export const runtime = "nodejs";
 
 const OPENING_CLOSING_FULL_INCLUDE = {
@@ -230,7 +231,7 @@ export async function PUT(
                 table: "c_apertura_cierre_puesto",
                 operation: "update",
                 where: { id },
-                data: updateData
+                data: { ...updateData, ...auditUpdateFields(payload, ["updated_at", "updated_by"]) }
             },
         });
 
@@ -407,7 +408,7 @@ export async function DELETE(
                 table: "c_apertura_cierre_puesto",
                 operation: "update",
                 where: { id },
-                data: { isActive: false },
+                data: { ...auditUpdateFields(payload, ["updated_at", "updated_by"]), isActive: false },
             },
         });
 

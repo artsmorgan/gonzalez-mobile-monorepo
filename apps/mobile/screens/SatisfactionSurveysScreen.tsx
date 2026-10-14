@@ -10,8 +10,7 @@ import {
   View,
   Platform,
   Image,
-  Dimensions,
-} from 'react-native';
+  Dimensions, RefreshControl } from 'react-native';
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -46,6 +45,7 @@ import {
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type SatisfactionSurveysScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'SatisfactionSurveys'>;
 
@@ -761,6 +761,21 @@ function resolveHierarchyNamesFromStructure(
 }
 
 export default function SatisfactionSurveysScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (fetchSurveysList(getListScopeForRefresh(), false));
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const { employee, refreshAccessToken, logout } = useAuth();
   const { scanQR, QRScannerComponent } = useQRScanner();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -3382,7 +3397,7 @@ export default function SatisfactionSurveysScreen() {
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Encuestas de Satisfacción" />
 
-      <ScrollView style={styles.scrollView}>
+      <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} style={styles.scrollView}>
         <ThemedView style={styles.scrollContent}>
           <ThemedView style={styles.contentContainer}>
             <ThemedView style={styles.titleContainer}>

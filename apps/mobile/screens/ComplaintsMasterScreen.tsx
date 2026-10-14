@@ -10,8 +10,7 @@ import {
   Platform,
   Image,
   Dimensions,
-  Modal,
-} from 'react-native';
+  Modal, RefreshControl } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -70,6 +69,7 @@ import { deleteFile, saveFile, getLocalFileDisplayUri, type StoredFileType } fro
 import { downloadAuthedUrlToDevice } from '@/hooks/downloadReportFileToDevice';
 import * as DocumentPicker from 'expo-document-picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 const COMPLAINTS_MASTER_FILE_STORAGE_PREFIX = 'complaints_master';
 const COMPLAINTS_MASTER_DEBUG_LOG = '[ComplaintsMaster]';
@@ -404,6 +404,21 @@ function findSucursalNodeInFormPath(
 }
 
 export default function ComplaintsMasterScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (refetchComplaintsList());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [queryAccessToken, setQueryAccessToken] = useState('');
   const refreshQueryAccessToken = useCallback(async () => {
@@ -3352,6 +3367,7 @@ export default function ComplaintsMasterScreen() {
       <AppHeader onMenuPress={() => setIsMenuVisible(true)} title="Maestro de Quejas" />
 
       <ScrollView
+        refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />}
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={true}

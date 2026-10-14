@@ -7,6 +7,7 @@ import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessToke
 import { uploadDynamicFiles } from "../../../../../../utils/callDynamicFilesApi";
 import { reportError } from "../../../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../../../utils/auditFields";
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string, "id-nota": string }> }) {
     try {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -129,6 +130,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 table: "c_puesto_notas",
                 where: { id: id_nota },
                 data: {
+                    ...auditUpdateFields(payload, ["updated_by"]),
                     titulo,
                     description,
                     categoria_id: categoria_id,
@@ -270,7 +272,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
                 action: "UPDATE",
                 table: "c_puesto_notas",
                 where: { id: id_nota },
-                data: { isActive: false, updated_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString() },
+                data: { ...auditUpdateFields(payload, ["updated_by"]), isActive: false, updated_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString() },
                 returning: false
             }
         });

@@ -10,8 +10,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-  Dimensions,
-} from 'react-native';
+  Dimensions, RefreshControl } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
@@ -51,6 +50,7 @@ import {
   getDocEntregadoCorpoId,
 } from '@/hooks/documentosEntregadosCacheHelpers';
 import { persistSignatureRef, resolveStoredSignatureDisplayUri, hydrateSignatureRef, localizeSignatureFieldInList, deleteSignatureLocalRef } from '@/hooks/fileStorage';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 type DocUI = DocumentoEntregadoItem & { id_local?: string };
 type DocumentTypeUI = { id: number; nombre: string };
@@ -253,6 +253,21 @@ type MarcaSnapshot = {
 };
 
 export default function DocumentosEntregadosScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (fetchRecords());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const navigation = useNavigation<any>();
   const { employee, refreshAccessToken, logout } = useAuth();
   const { scanQR, QRScannerComponent } = useQRScanner();
@@ -1703,7 +1718,7 @@ export default function DocumentosEntregadosScreen() {
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Documentos entregados" />
 
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+      <ScrollView refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />} style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <ThemedView style={styles.content}>
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>

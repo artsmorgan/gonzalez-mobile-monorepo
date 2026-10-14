@@ -9,6 +9,7 @@ import { prisma } from "../../../utils/prismaClient";
 import { assertCorpoAllowedForMarca, resolveClienteYPuestoParaAlta, getRegistroVehiculoLocationAnchors } from "../../../utils/registroCorpoPuesto";
 import { reportError } from "../../../utils/reportError";
 
+import { auditCreateFields } from "../../../utils/auditFields";
 export async function GET(req: NextRequest) {
     try {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -231,6 +232,7 @@ export async function POST(req: NextRequest) {
                 action: "POST",
                 table: "e_registro_vehiculos",
                 data: {
+                    ...auditCreateFields(payload, ["created_by"]),
                     cliente_id: clienteIdFinal,
                     corpo_id: targetCorpoId,
                     puesto_id: puestoIdFinal,

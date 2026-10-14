@@ -11,7 +11,9 @@ import {
     formatDateOnlyDMY,
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
+    formatDateTimeDMY,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 export type VulnerabilidadModuleFilters = ActaEntregaModuleFilters;
 export type VulnerabilidadOrderKey = "empresa_id" | "cliente_id" | "division_id" | "contrato_id" | "corpo_id" | "puesto_id" | "fecha";
@@ -119,7 +121,7 @@ async function resolveLogoBuffer(empresaId: number): Promise<Buffer | null> {
     }
 }
 
-export async function queryVulnerabilidadRows(
+async function queryVulnerabilidadRowsInner(
     prisma: ReportDataAccess,
     filters: VulnerabilidadModuleFilters,
     orderKey: VulnerabilidadOrderKey,
@@ -209,6 +211,13 @@ export async function queryVulnerabilidadRows(
                 return new Date(b.fecha).getTime() - new Date(a.fecha).getTime();
         }
     });
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryVulnerabilidadRows(...args: Parameters<typeof queryVulnerabilidadRowsInner>): ReturnType<typeof queryVulnerabilidadRowsInner> {
+    const rows = await queryVulnerabilidadRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 export async function buildVulnerabilidadExcelConsolidado(
@@ -404,8 +413,8 @@ export async function buildVulnerabilidadExcelConsolidado(
                 joinPuntoYComa(sec.respuestas),
                 String(pctSection?.vulnerabilityLevel ?? ""),
                 metricas.join(";"),
-                cambio?.nombreCompleto ?? "",
-                cambio?.fechaHoraTexto ?? "",
+                r.audit_modificado_por ?? cambio?.nombreCompleto ?? "",
+                r.updated_at ? formatDateTimeDMY(r.updated_at) : (cambio?.fechaHoraTexto ?? ""),
             ]);
             rootRow.getCell(COL_VER_BOLETA).value = { text: "Ver boleta", hyperlink: `#'Detalles'!A${dr}` };
             rootRow.getCell(COL_VER_METRICAS).value = { text: "Ver métricas", hyperlink: `#'Detalles'!A${dr}` };

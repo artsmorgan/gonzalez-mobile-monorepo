@@ -8,6 +8,7 @@ import {
     formatTimeOnlyHMS,
     type ConsolidadoBannerMeta,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 export type TiempoAlmuerzoModuleFilters = {
     /** Combinación fecha+hora sin conversión de zona (filtro sobre columna `inicio`). */
@@ -162,7 +163,7 @@ function parsePausasJson(raw: string | null | undefined): PausaParsed[] {
     return out;
 }
 
-export async function queryTiempoAlmuerzoRows(
+async function queryTiempoAlmuerzoRowsInner(
     prisma: ReportDataAccess,
     filters: TiempoAlmuerzoModuleFilters,
     orderKey: TiempoAlmuerzoOrderKey,
@@ -268,6 +269,13 @@ export async function queryTiempoAlmuerzoRows(
                 return 0;
         }
     });
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryTiempoAlmuerzoRows(...args: Parameters<typeof queryTiempoAlmuerzoRowsInner>): ReturnType<typeof queryTiempoAlmuerzoRowsInner> {
+    const rows = await queryTiempoAlmuerzoRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 const GRP_HDR = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } } as const;

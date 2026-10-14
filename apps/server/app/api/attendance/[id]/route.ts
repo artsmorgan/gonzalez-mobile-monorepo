@@ -11,6 +11,8 @@ import axios from "axios";
 import { getTiempoGraciaMarcarSalida } from "../../../../utils/getTiempoGraciaMarcarSalida";
 import { reportError } from "../../../../utils/reportError";
 
+import { auditUpdateFields } from "../../../../utils/auditFields";
+import { resolvePuestoHierarchy } from "../../../../utils/resolvePuestoHierarchy";
 const getUsuarioInsercion = async (req: NextRequest, id: number) => {
     const empleado = await prisma.c_empleado.findUnique({ where: { id } });
     if (!empleado) {
@@ -468,9 +470,11 @@ try {
         marca_salida_real: hora_salida_real ?? null
     };
 
+    // Jerarquía propia del login (empresa, cliente, división, contrato y sucursal) a partir del puesto de la marca.
+    const jerarquiaPuesto = await resolvePuestoHierarchy(puesto_id);
     const updated = await callDynamicPrisma({
         req,
-        data: { action: "UPDATE", table: "c_login_marca_almuerzo", where: { id: loginMarca.id }, data: body }
+        data: { action: "UPDATE", table: "c_login_marca_almuerzo", where: { id: loginMarca.id }, data: { ...body, ...(jerarquiaPuesto.corpo_id ? jerarquiaPuesto : {}), ...auditUpdateFields({ id: empleado_id }, ["updated_at", "updated_by"]) } }
     });
     if (!updated) {
         return { status: false, message: "No se pudo actualizar la login marca" };

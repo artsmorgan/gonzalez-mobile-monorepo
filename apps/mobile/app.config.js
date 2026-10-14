@@ -29,10 +29,10 @@ module.exports = ({ config }) => {
 
   return {
       expo: {
-      /** Nombre visible: siempre MonitoreApp (la variante lite solo afecta package/flavor). */
-      name: "MonitoreApp",
+      /** Nombre visible bajo el ícono: "MonitoreApp (Test)" en lite y "MonitoreApp" en prod/full (en Android lo fija el recurso app_name de cada flavor). */
+      name: variant === "lite" ? "MonitoreApp (Test)" : "MonitoreApp",
       slug: "Gonzalez-Mobile-App",
-      version: "1.0.0",
+      version: "1.0.1",
       platforms: [
         "android",
         "ios",
@@ -132,124 +132,24 @@ module.exports = ({ config }) => {
           process.env.MOBILE_ACCESS_TOKEN ||
           "",
         APP_VERSION_INFO: {
-          "version": "1.0.0",
-          "id": "a7e2c41f-6b8d-4f19-9e53-2c0d8f1a5b67",
+          "version": "1.0.1",
+          "id": "43e3b21b-7091-415b-9e4a-78fadb696fbd",
           "name": "MonitoreApp",
-          "created_at": "2026-07-30T00:00:00Z",
-          "title": "Planillas, permisos, mutuos acuerdos y sincronización",
-          "description": "Integración con Planillas para turnos y marcas, validación de conflictos en permisos y mutuos acuerdos, mejoras en actividades, entrega de puestos y archivos de acciones.",
+          "created_at": "2026-10-14T00:00:00Z",
+          "title": "Reportes en modalidad tabular, actualización de listas y quices de documentos",
+          "description": "Incorpora la modalidad tabular en los reportes, la actualización de las listas de los módulos mediante gesto de deslizamiento y la edición de preguntas y la visualización de calificaciones en el módulo de documentos.",
           "notas": [
             {
-              "title": "Actividades",
-              "description": "Marcar y gestionar actividades del turno con foto, frecuencia/horario y sincronización offline."
+              "title": "Reportes",
+              "description": "Incorporación de la modalidad tabular (consolidada) en los reportes: una fila por registro, con los datos del registro repetidos en cada fila derivada y los valores múltiples concatenados con «;»."
             },
             {
-              "title": "Actividades",
-              "description": "Revisión de equipo/inventario por actividad y acceso a entrega de puestos cuando el módulo está visible."
+              "title": "Listas de módulos",
+              "description": "Actualización de las listas mediante el gesto de deslizamiento (pull-to-refresh) al inicio de la lista: reejecuta la consulta vigente con los filtros aplicados, estén o no visibles, y respeta el estado de conectividad (consulta remota o caché local)."
             },
             {
-              "title": "Checklist de Supervisión",
-              "description": "Evaluación por división/puesto con ítems dinámicos, fotos y firmas de supervisor/responsable."
-            },
-            {
-              "title": "Checklist de Supervisión",
-              "description": "Uso offline con cola local y actualización de estado de artículos y cachés relacionadas."
-            },
-            {
-              "title": "Mi Firma Digital",
-              "description": "QR de firma con ubicación GPS y firma manual dibujada/guardada en el perfil."
-            },
-            {
-              "title": "Mi Firma Digital",
-              "description": "Escaneo de firma QR desde Inicio para validar identidad en otros módulos."
-            },
-            {
-              "title": "Entrega de Puestos",
-              "description": "Acta de entrega/recibo del turno con firmas, fotos de entrega y recepción, e inventario del puesto."
-            },
-            {
-              "title": "Entrega de Puestos",
-              "description": "Al confirmar, actualiza la revisión de equipo en actividades y el último mantenimiento en jerarquía."
-            },
-            {
-              "title": "Inicio",
-              "description": "Accesos rápidos (marca, escanear firma, jerarquía), hora de acción y ubicación del dispositivo."
-            },
-            {
-              "title": "Inicio",
-              "description": "Modal de sincronizaciones pendientes, notas de versión y aviso cuando hay actualización disponible."
-            },
-            {
-              "title": "Jerarquía",
-              "description": "Navegación de la estructura empresa → cliente → división → contrato → sucursal → puesto → plaza → empleado."
-            },
-            {
-              "title": "Jerarquía",
-              "description": "Descarga de fragmentos de main-structure con conexión y consulta offline."
-            },
-            {
-              "title": "Tiempo de alimentación",
-              "description": "Temporizador con pausas, firma del empleado y registro offline (continúa en segundo plano)."
-            },
-            {
-              "title": "Tiempo de alimentación",
-              "description": "Configuración de minutos del almuerzo en el horario de la marca con token de Planillas y cola de sincronización."
-            },
-            {
-              "title": "Equipo del puesto",
-              "description": "Consulta de artículos del puesto, mantenimientos, adjuntos y movimientos, con sync offline."
-            },
-            {
-              "title": "Equipo del puesto",
-              "description": "Descarga unificada de documentos adjuntos y carga masiva/plantilla para perfiles administrativos."
-            },
-            {
-              "title": "Marcar Ingreso/Salida",
-              "description": "Entrada/salida con validación de horario, GPS (radio 50 m) y token de Planillas; cola offline de asistencia."
-            },
-            {
-              "title": "Marcar Ingreso/Salida",
-              "description": "Consulta de turnos futuros vía Planillas (30 días) y enriquecimiento desde c_marca_dia."
-            },
-            {
-              "title": "Marcar Ingreso/Salida",
-              "description": "Ausencia, salida temprana, reversión de salida y sincronización al recuperar conexión con renovación del token si expiró."
-            },
-            {
-              "title": "Mutuos acuerdos",
-              "description": "Intercambio de turnos: marcas por empleado/fecha vía Planillas, firmas, adjuntos y renovación del token con contraseña."
-            },
-            {
-              "title": "Mutuos acuerdos",
-              "description": "Bloqueo al crear si hay conflicto de fechas con permisos u otros mutuos pendientes/aprobados (ausente y reemplazo)."
-            },
-            {
-              "title": "Solicitud de permiso",
-              "description": "Solicitud por plaza y rango de fechas con turnos obtenidos vía Planillas, firmas y archivos adjuntos."
-            },
-            {
-              "title": "Solicitud de permiso",
-              "description": "Validación de solape con otros permisos o mutuos acuerdos pendientes/aprobados del mismo empleado."
-            },
-            {
-              "title": "Perfil de Usuario",
-              "description": "Consulta de datos personales y laborales (nombre, cédula, código, email, teléfono y fecha de contratación)."
-            },
-            {
-              "title": "Ubicación del puesto",
-              "description": "Selección por jerarquía (precarga desde marca) y comparación de coordenadas del puesto vs GPS del dispositivo."
-            },
-            {
-              "title": "Ubicación del puesto",
-              "description": "Actualización de coordenadas (GPS o manual) con persistencia y sincronización offline."
-            },
-            {
-              "title": "Archivos de acciones",
-              "description": "Listado de acciones personales pendientes de adjunto (cliente, sucursal, puesto, tipo y vencimiento)."
-            },
-            {
-              "title": "Archivos de acciones",
-              "description": "Subida de imagen, audio, video o documento con caché local y cola offline de archivos de acciones."
+              "title": "Documentos",
+              "description": "Edición de las preguntas durante la creación del quiz, además de su alta y eliminación, y visualización de la calificación (0-100) de cada empleado en los quices revisados, calculada a partir de sus respuestas."
             }
           ]
         },

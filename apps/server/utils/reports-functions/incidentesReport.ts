@@ -16,6 +16,7 @@ import {
     formatDateOnlyDMY,
     type ConsolidadoBannerMeta,
 } from "./reportConsolidadoBanner";
+import { attachAuditoriaPropia } from "./auditoriaPropia";
 
 const INCIDENTES_REPORT_INCLUDE = {
     n_clasificacion_incidente: { select: { id: true, nombre: true } },
@@ -195,7 +196,7 @@ export function filtersMatchIncidenteListQuery(parsedRowFilters: any, listModule
     return true;
 }
 
-export async function queryIncidenteRows(prisma: ReportDataAccess, filters: IncidenteModuleFilters, orderKey: IncidenteOrderKey) {
+async function queryIncidenteRowsInner(prisma: ReportDataAccess, filters: IncidenteModuleFilters, orderKey: IncidenteOrderKey) {
     const where: any = { isActive: true };
     const frDesde = parseBoundaryDate(filters.fechaReporteDesde ?? undefined);
     const frHasta = parseBoundaryDate(filters.fechaReporteHasta ?? undefined);
@@ -314,6 +315,13 @@ export async function queryIncidenteRows(prisma: ReportDataAccess, filters: Inci
                 return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
         }
     });
+}
+
+/** Igual que la consulta original, pero deja resueltos los nombres de `created_by` / `updated_by` (auditoría propia de la tabla). */
+export async function queryIncidenteRows(...args: Parameters<typeof queryIncidenteRowsInner>): ReturnType<typeof queryIncidenteRowsInner> {
+    const rows = await queryIncidenteRowsInner(...args);
+    await attachAuditoriaPropia(args[0] as ReportDataAccess, rows);
+    return rows;
 }
 
 export async function buildIncidenteExcelConsolidado(

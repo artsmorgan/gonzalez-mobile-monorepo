@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, TextInput, Image, View, Platform, Dimensions, Animated } from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, TextInput, Image, View, Platform, Dimensions, Animated, RefreshControl } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -33,6 +33,7 @@ import { prioritizePlanByArticuloNomencladorId } from '@/hooks/prioritizePlanByA
 import ArticuloMantenimientoArchivosModal from '@/components/ArticuloMantenimientoArchivosModal';
 import type { ArticuloMantenimientoPendingFile } from '@/utils/articuloMantenimientoFiles';
 import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 
 const ACTIVITIES_MARK_PHOTO_PREFIX = 'activities_mark';
 
@@ -892,6 +893,21 @@ function ScalePressButton({
 }
 
 export default function ActivitiesScreen() {
+  // Jalar hacia abajo estando al inicio de la lista repite la búsqueda que el módulo ya hace al entrar o al cambiar los filtros
+  // (la propia función resuelve si hay conexión o si trabaja con el caché).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const onPullToSearch = async () => {
+    if (isPullRefreshing) return;
+    setIsPullRefreshing(true);
+    try {
+      await (fetchActivities());
+    } catch (e) {
+      console.warn('[pull-to-search] no se pudo actualizar la lista', e);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  };
+
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<ActivitiesScreenNavigationProp>();
@@ -3913,6 +3929,7 @@ export default function ActivitiesScreen() {
         </ThemedView>
       )}
       <ScrollView
+        refreshControl={<RefreshControl refreshing={isPullRefreshing} onRefresh={onPullToSearch} {...HIDDEN_REFRESH_CONTROL_PROPS} />}
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={true}

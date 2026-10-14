@@ -5,6 +5,7 @@ import { prisma } from "../../../../../../utils/prismaClient";
 import { fetchActivePlazaIdsForPuestos, sendNotificationByPlaza } from "../../../../../../utils/sendNotification";
 import { toZonedTime } from "date-fns-tz";
 import { reportError } from "../../../../../../utils/reportError";
+import { syncActividadHierarchy } from "../../../../../../utils/syncActividadHierarchy";
 
 /**
  * Añade vínculos actividad–puesto sin eliminar los existentes.
@@ -126,6 +127,8 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
           })),
         },
       });
+      // Cambian los puestos de una actividad existente: se recalcula su jerarquía y queda registrada la modificación.
+      await syncActividadHierarchy(req, actividadId, { registrarModificacion: true });
 
       const existingPuestoIds = Array.from(alreadyLinked);
       const plazaIdsAlreadyOnActivity = new Set(await fetchActivePlazaIdsForPuestos(req, existingPuestoIds));
