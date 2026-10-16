@@ -41,17 +41,23 @@ async function leerTodas(table: string, where: any, select: any): Promise<any[]>
     }
 }
 
-type Config = { tabla: string; sinJerarquia: any; columnas: Array<"empresa_id" | "cliente_id" | "division_id" | "contrato_id" | "corpo_id"> };
+type Config = {
+    tabla: string;
+    sinJerarquia: any;
+    columnas: Array<"empresa_id" | "cliente_id" | "division_id" | "contrato_id" | "corpo_id">;
+    /** `puesto_id` admite NULL en la tabla (Prisma rechaza `not: null` sobre un campo obligatorio). */
+    puestoOpcional?: boolean;
+};
 const TODAS: Config["columnas"] = ["empresa_id", "cliente_id", "division_id", "contrato_id", "corpo_id"];
 const TABLAS_POR_PUESTO: Config[] = [
     { tabla: "c_ubicacion_puesto_registro_cambios", sinJerarquia: { corpo_id: null }, columnas: TODAS },
     // La entrega ya guardaba cliente y sucursal: solo faltan empresa, contrato y división.
     { tabla: "e_registro_entrega_puesto", sinJerarquia: { empresa_id: null }, columnas: ["empresa_id", "contrato_id", "division_id"] },
-    { tabla: "c_login_marca_almuerzo", sinJerarquia: { corpo_id: null }, columnas: TODAS },
+    { tabla: "c_login_marca_almuerzo", sinJerarquia: { corpo_id: null }, columnas: TODAS, puestoOpcional: true },
 ];
 
 async function rellenarPorPuesto(cfg: Config) {
-    const where = { ...cfg.sinJerarquia, puesto_id: { not: null } };
+    const where = cfg.puestoOpcional ? { ...cfg.sinJerarquia, puesto_id: { not: null } } : { ...cfg.sinJerarquia };
     const rows = await leerTodas(cfg.tabla, where, { puesto_id: true });
     const puestoIds = [...new Set(rows.map((r) => Number(r.puesto_id)).filter((n) => Number.isFinite(n) && n > 0))];
     const cadenas = puestoIds.length ? await cadenasDePuestos(puestoIds) : new Map();

@@ -1,10 +1,8 @@
 /** Reglas de asistencia en dispositivo (alineadas con attendance/user/[id]/route.ts). */
 
-import { toZonedTime } from 'date-fns-tz';
 import { DEFAULT_MONITORING_PREVIOUS_MINUTES } from './monitoringPreviousMinutesStorage';
 
 export const MARCA_LOCATION_RADIUS_METERS = 50;
-const COSTA_RICA_TZ = 'America/Costa_Rica';
 
 export type LocalMarcaValidationResult = {
   markingBlocked: boolean;
@@ -62,27 +60,38 @@ function parseMarcaFechaParts(fecha: unknown): { y: number; m: number; d: number
   return { y, m: m - 1, d };
 }
 
+/**
+ * Fecha de la marca + hora de reloj (de `hora`, que llega como ISO con la hora de Costa Rica guardada "tal cual" en UTC), como
+ * instante UTC: el mismo convenio de `getHoraAccion` / `server_time`, donde los getters UTC muestran la hora de reloj de Costa Rica.
+ * No depende de la zona horaria del dispositivo. `addDays` suma días de calendario (turnos que cruzan la medianoche).
+ *
+ * Antes se usaba `toZonedTime` + `setFullYear`: para horas anteriores a las 06:00 retrocedía al día anterior y luego se le
+ * imponía el día de la marca, con lo que el inicio quedaba un día después.
+ */
+export function buildMarcaNaiveMs(fecha: unknown, hora: unknown, addDays = 0): number | null {
+  const fp = parseMarcaFechaParts(fecha);
+  if (!fp || hora == null) return null;
+  const t = new Date(String(hora));
+  if (Number.isNaN(t.getTime())) return null;
+  const ms = Date.UTC(fp.y, fp.m, fp.d + addDays, t.getUTCHours(), t.getUTCMinutes(), t.getUTCSeconds());
+  return Number.isNaN(ms) ? null : ms;
+}
+
 function buildMarcaDateTime(
   marca: Record<string, unknown>,
   horaField: 'hora_inicio' | 'hora_fin',
   addDayIfCrossMidnight: boolean
 ): Date | null {
-  const fp = parseMarcaFechaParts(marca.fecha);
-  if (!fp || marca[horaField] == null) return null;
+  if (marca[horaField] == null) return null;
 
-  const dt = toZonedTime(new Date(String(marca[horaField])), COSTA_RICA_TZ);
   const crossMidnight =
     marca.hora_inicio != null &&
     marca.hora_fin != null &&
     new Date(String(marca.hora_inicio)) > new Date(String(marca.hora_fin));
 
-  let day = fp.d;
-  if (addDayIfCrossMidnight && crossMidnight && horaField === 'hora_fin') {
-    day += 1;
-  }
-
-  dt.setFullYear(fp.y, fp.m, day);
-  return Number.isNaN(dt.getTime()) ? null : dt;
+  const addDays = addDayIfCrossMidnight && crossMidnight && horaField === 'hora_fin' ? 1 : 0;
+  const ms = buildMarcaNaiveMs(marca.fecha, marca[horaField], addDays);
+  return ms == null ? null : new Date(ms);
 }
 
 export function computeMarcaShiftBounds(marca: Record<string, unknown>): {
@@ -287,6 +296,9 @@ export function evaluateLocalMarcaRules(
   if (marca.hora_entrada_digitada == null) {
     const nextChangeTime = new Date(inicio.getTime());
     nextChangeTime.setMinutes(nextChangeTime.getMinutes() - monitoringPreviousMinutes);
+
+    console.log('nextChangeTime', nextChangeTime);
+    console.log('nowMs', nowMs);
     if (nowMs < nextChangeTime.getTime()) {
       canMarkEntrada = false;
       return {

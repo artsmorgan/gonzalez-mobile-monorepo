@@ -10,7 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { eventBus } from '@/hooks/eventBus';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { SHOW_TRIAL_VERSION_BANNER } from '@/components/TrialVersionBanner';
+import { shouldShowTrialVersionBanner } from '@/components/TrialVersionBanner';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -27,7 +27,8 @@ export default function AppHeader({ onMenuPress, title }: AppHeaderProps) {
   // Con la pantalla de borde a borde la barra de estado (hora, batería) se dibuja encima de la app: el área segura superior
   // se reserva aquí. Si el banner de versión de prueba está visible, él ya la reserva, así que no se duplica.
   const insets = useSafeAreaInsets();
-  const topInset = SHOW_TRIAL_VERSION_BANNER ? 0 : insets.top;
+  const trialBannerVisible = shouldShowTrialVersionBanner();
+  const topInset = trialBannerVisible ? 0 : insets.top;
 
   useEffect(() => {
     // Cargar contador al montar
@@ -66,7 +67,7 @@ export default function AppHeader({ onMenuPress, title }: AppHeaderProps) {
 
   return (
     <ThemedView style={{ paddingTop: topInset }}>
-    {!SHOW_TRIAL_VERSION_BANNER && <StatusBar style="dark" />}
+    {!trialBannerVisible && <StatusBar style="dark" />}
     <ThemedView style={styles.header}>
       <ThemedView style={styles.titleContainer}>
         {route.name !== 'Home' && (

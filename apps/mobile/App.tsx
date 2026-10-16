@@ -253,6 +253,7 @@ import {
   HIERARCHY_UPDATE_OVERLAY_HIDE_EVENT,
   HIERARCHY_UPDATE_OVERLAY_SHOW_EVENT,
 } from './hooks/backgroundMainStructureDownload';
+import { getEmbeddedAppVersionInfo } from './hooks/appVariant';
 
 /**
  * `participantes` (agenda minuta) es un JSON-string con `firma` por elemento, guardado como
@@ -849,7 +850,7 @@ function AppContent() {
   };
 
   const checkMobileVersionAvailability = useCallback(async () => {
-    const appVersionInfo = Constants.expoConfig?.extra?.APP_VERSION_INFO;
+    const appVersionInfo = getEmbeddedAppVersionInfo();
     const appVersion = String(appVersionInfo?.version || '0.0.0');
     const storedLastVersion = await AsyncStorage.getItem(LAST_APP_VERSION_KEY);
     if (!storedLastVersion) {

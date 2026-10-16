@@ -9,6 +9,7 @@ import { getMonitoringPostMinutes } from "../../../../../utils/getMonitoringPost
 import { getTiempoGraciaMarcarSalida } from "../../../../../utils/getTiempoGraciaMarcarSalida";
 import { getValidateGpsSalida } from "../../../../../utils/getValidateGpsSalida";
 import { reportError } from "../../../../../utils/reportError";
+import { buildMarcaCandidata, resolverConflictoDeMarcas } from "../../../../../utils/resolveMarcaConflicto";
 import dotenv from "dotenv";
 dotenv.config();
 import axios from "axios";
@@ -94,7 +95,11 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             ],
         },*/
 
+        const planillasMarcasCache = new Map<string, any[]>();
         const fetchPlanillasMarcasForDate = async (fecha: Date): Promise<any[]> => {
+            const cacheKey = fecha.toISOString().split("T")[0];
+            const cached = planillasMarcasCache.get(cacheKey);
+            if (cached) return cached;
             const planillasResponse = await axios.get(`${process.env.PLANILLAS_URL}/marcas`, {
                 headers: {
                     "Authorization": `Bearer ${planillasToken}`
@@ -105,7 +110,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 }
             });
             const marcas = planillasResponse?.data?.data?.marcas;
-            return Array.isArray(marcas) ? marcas : [];
+            const result = Array.isArray(marcas) ? marcas : [];
+            planillasMarcasCache.set(cacheKey, result);
+            return result;
         };
 
         const loadMarcasDiaForEmployee = async (
@@ -120,10 +127,55 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 where: { id: { in: marcas_ids } },
                 orderBy: [{ fecha: order }, { hora_inicio: order }],
             });
+            const planillasPorId = new Map<number, any>(planillasMarcas.map((m: any) => [Number(m?.id), m]));
             // Quitar marcas del fijo cuando hay un reemplazo distinto al consultado.
-            return rows.filter(
-                (marca: any) => !(marca.empleadoFijo_id === empleado.id && marca.empleadoReemplaza_id !== null),
-            );
+            return rows
+                .filter((marca: any) => !(marca.empleadoFijo_id === empleado.id && marca.empleadoReemplaza_id !== null))
+                .map((marca: any) => Object.assign(marca, { __planillas: planillasPorId.get(Number(marca.id)) ?? null }));
+        };
+
+        /**
+         * Si la marca elegida choca en horario con otras del mismo empleado (fecha y horas de entrada/salida), se usa la prioritaria:
+         * la que tiene como `empleadoReemplaza` al empleado consultado y, entre varias (o si ninguna lo tiene), la de «fecha + inicio
+         * del horario» menor y, a igual inicio, la de `id` menor. Ver `utils/resolveMarcaConflicto.ts`.
+         */
+        const resolverConflictoMarcaDia = async (elegida: any) => {
+            try {
+                const base = new Date(new Date(elegida.fecha).toISOString().split("T")[0]);
+                const dias = [-1, 0, 1].map((d) => new Date(base.getTime() + d * 24 * 60 * 60 * 1000));
+                const porDia = await Promise.all(
+                    dias.map(async (dia) => {
+                        const planillasMarcas = await fetchPlanillasMarcasForDate(dia);
+                        return planillasMarcas.length > 0 ? await loadMarcasDiaForEmployee(planillasMarcas, "asc") : [];
+                    }),
+                );
+                const filas = new Map<number, any>();
+                for (const fila of porDia.flat()) filas.set(Number(fila.id), fila);
+                if (!filas.has(Number(elegida.id))) filas.set(Number(elegida.id), elegida);
+
+                const candidatas = [...filas.values()].map((fila: any) => {
+                    const p = fila.__planillas;
+                    return buildMarcaCandidata({
+                        id: fila.id,
+                        fecha: p?.fecha ?? fila.fecha,
+                        horaInicio: p?.horario?.inicio ?? fila.hora_inicio,
+                        horaFin: p?.horario?.fin ?? fila.hora_fin,
+                        empleadoReemplazaId: p ? (p.empleadoReemplaza?.id ?? null) : fila.empleadoReemplaza_id,
+                    });
+                });
+                const idElegido = resolverConflictoDeMarcas(Number(elegida.id), candidatas, empleado.id);
+                if (idElegido === Number(elegida.id)) return elegida;
+                console.log(`Conflicto de horario entre marcas: se usa la marca ${idElegido} en lugar de ${elegida.id}`);
+                const alternativa = filas.get(idElegido);
+                if (!alternativa) return elegida;
+                // Misma normalización que `buildMarcaDateTime` aplica a la marca elegida por la búsqueda normal.
+                if (!alternativa.hora_inicio) alternativa.hora_inicio = new Date("1970-01-01 00:00:00");
+                return alternativa;
+            } catch (conflictError: unknown) {
+                // La resolución de conflictos es un refinamiento: ante cualquier falla se conserva la marca ya elegida.
+                console.warn("No se pudo resolver el conflicto de marcas:", conflictError instanceof Error ? conflictError.message : conflictError);
+                return elegida;
+            }
         };
 
         let marcaDia = null;
@@ -183,6 +235,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró la marca del dia");
             return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 404 });
         }
+
+        marcaDia = await resolverConflictoMarcaDia(marcaDia);
 
         if (!marcaDia.empresa_id) {
             await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró la empresa");
