@@ -32,6 +32,7 @@ import {
 } from '@/hooks/updateLastLocation';
 import * as Location from 'expo-location';
 import { downloadAndShareLargeAuthedFile } from '@/hooks/downloadReportFileToDevice';
+import { getEmbeddedAppVersionInfo } from '@/hooks/appVariant';
 
 type HomeScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 
@@ -58,9 +59,7 @@ type MobileVersionPayload = {
 };
 
 function readEmbeddedAppVersionInfo(): AppVersionInfo {
-  const raw = Constants.expoConfig?.extra?.APP_VERSION_INFO;
-  if (!raw || typeof raw !== 'object') return {};
-  return raw as AppVersionInfo;
+  return getEmbeddedAppVersionInfo() as AppVersionInfo;
 }
 
 function formatVersionReleaseDate(createdAt?: string): string {

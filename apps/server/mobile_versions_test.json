@@ -1,0 +1,32 @@
+[
+  {
+    "version": "1.0.0",
+    "id": "34cd939c-893f-4a98-9279-d76c82cbca3c",
+    "name": "MonitoreApp",
+    "created_at": "2026-03-18T00:00:00Z",
+    "title": "MonitoreApp versión inicial",
+    "description": "Versión inicial de la aplicación MonitoreApp",
+    "url": "https://github.com/artsmorgan/gonzalez-mobile-monorepo/releases/download/v1.0.0/MonitoreApp-v1.0.0.apk",
+    "notas": [
+      "Módulo de navegación principal y menú lateral para acceso a todas las funciones.",
+      "Módulo de operación diaria: asistencia, control de presencia, minutas físicas y mutuos acuerdos.",
+      "Módulo de seguridad y calidad: gestión de incidentes, matrices de riesgo, no conformidades y acciones de mejora.",
+      "Módulo de recursos: gestión de vehículos, llaves, equipos de mantenimiento y documentos entregados.",
+      "Módulo de personas: visitas, rutas, capacitaciones, evaluaciones de personal y encuestas de satisfacción."
+    ]
+  },
+  {
+    "version": "1.0.2",
+    "id": "9e045449-0841-48be-b1e1-47e85e99e0a0",
+    "name": "MonitoreApp",
+    "created_at": "2026-10-16T00:00:00Z",
+    "title": "Corrección de horas en las marcas de asistencia",
+    "description": "Corrige el cálculo de las horas de inicio y fin del turno y la selección de la marca cuando hay horarios en conflicto.",
+    "notas": [
+      {
+        "title": "Marcas de asistencia",
+        "description": "Corrección del cálculo de la hora de inicio y de fin del turno: dependía de la zona horaria del dispositivo y sumaba un día al inicio en los turnos anteriores a las 06:00, lo que bloqueaba el ingreso. Ahora se calcula como hora de reloj de Costa Rica, comparable con la hora de referencia de la aplicación. Además, cuando dos marcas del mismo empleado se traslapan en horario, se prioriza la de reemplazo y, en su defecto, la de inicio más temprano (a igual inicio, la de menor id)."
+      }
+    ]
+  }
+]

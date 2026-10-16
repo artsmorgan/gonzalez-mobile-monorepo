@@ -4,6 +4,7 @@ import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { resolveAppConnectivity } from '@/hooks/resolveAppConnectivity';
+import { getEmbeddedAppVersionInfo } from '@/hooks/appVariant';
 
 export const PUSH_DEVICE_ACTIONS_KEY = 'push_device_actions';
 export const PUSH_LOCAL_TOKEN_KEY = 'push_fcm_token';
@@ -140,7 +141,7 @@ export function buildRegisterPayload(params: {
     token: params.token,
     platform: Platform.OS === 'ios' ? 'ios' : 'android',
     device_id: Device.modelId || Device.modelName || null,
-    app_version: String(Constants.expoConfig?.version || Constants.expoConfig?.extra?.APP_VERSION_INFO?.version || ''),
+    app_version: String(getEmbeddedAppVersionInfo().version || Constants.expoConfig?.version || ''),
     app_variant: resolveAppVariant(),
   };
   if (params.plazaId != null && Number.isFinite(Number(params.plazaId)) && Number(params.plazaId) > 0) {

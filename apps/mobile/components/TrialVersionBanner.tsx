@@ -3,9 +3,15 @@ import { StyleSheet, Text, View } from 'react-native';
 import Constants from 'expo-constants';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import { resolveRuntimeAppVariant } from '@/hooks/appVariant';
 
-/** Cambiar a `true` para volver a mostrar el banner de "Versión de prueba". */
-export const SHOW_TRIAL_VERSION_BANNER = true;
+/** Cambiar a `false` para ocultar el banner de "Versión de prueba" también en lite. */
+const TRIAL_VERSION_BANNER_ENABLED = true;
+
+/** El banner solo aparece en la variante lite (pruebas); prod y full nunca lo muestran. */
+export function shouldShowTrialVersionBanner(): boolean {
+  return TRIAL_VERSION_BANNER_ENABLED && resolveRuntimeAppVariant() === 'lite';
+}
 
 /**
  * Banner fijo en la parte superior de toda la app (versión de prueba + últimos 4 del commit).
@@ -17,7 +23,7 @@ export default function TrialVersionBanner() {
     .slice(-4)
     .toLowerCase();
 
-  if (!SHOW_TRIAL_VERSION_BANNER) {
+  if (!shouldShowTrialVersionBanner()) {
     return null;
   }
 

@@ -27,6 +27,7 @@ import {
   removePendingSalidaActionsForMarca,
 } from '@/hooks/attendanceActionsStorage';
 import {
+  buildMarcaNaiveMs,
   computeChangeAvailable,
   evaluateLocalMarcaRules,
   getMarcaPuestoCoords,
@@ -227,13 +228,8 @@ function buildMarcaInicioMs(marca: {
   hora_inicio: string;
 }): number | null {
   try {
-    const fecha = String(marca.fecha).split('-');
-    if (fecha.length < 3 || marca.hora_inicio == null) return null;
-    const day = parseInt(String(fecha[2]).slice(0, 2), 10);
-    const inicioTurno = toZonedTime(new Date(marca.hora_inicio), 'America/Costa_Rica');
-    inicioTurno.setFullYear(parseInt(fecha[0], 10), parseInt(fecha[1], 10) - 1, day);
-    const ms = inicioTurno.getTime();
-    return Number.isFinite(ms) ? ms : null;
+    const ms = buildMarcaNaiveMs(marca.fecha, marca.hora_inicio);
+    return ms != null && Number.isFinite(ms) ? ms : null;
   } catch {
     return null;
   }
@@ -245,17 +241,8 @@ function buildMarcaFinMs(marca: {
   hora_fin: string;
 }): number | null {
   try {
-    const fecha = String(marca.fecha).split('-');
-    if (fecha.length < 3 || marca.hora_fin == null) return null;
-    const day = parseInt(String(fecha[2]).slice(0, 2), 10);
-    const finTurno = toZonedTime(new Date(marca.hora_fin), 'America/Costa_Rica');
-    finTurno.setFullYear(
-      parseInt(fecha[0], 10),
-      parseInt(fecha[1], 10) - 1,
-      marca.hora_inicio > marca.hora_fin ? day + 1 : day
-    );
-    const ms = finTurno.getTime();
-    return Number.isFinite(ms) ? ms : null;
+    const ms = buildMarcaNaiveMs(marca.fecha, marca.hora_fin, marca.hora_inicio > marca.hora_fin ? 1 : 0);
+    return ms != null && Number.isFinite(ms) ? ms : null;
   } catch {
     return null;
   }
@@ -1195,15 +1182,15 @@ export default function MarcarIngresoSalidaScreen() {
 
     const estado = marca.hora_entrada_digitada != null ? "Ingresado" : "No ingresado";
 
-    let next_time = toZonedTime(new Date(estado == "No ingresado" ? marca.hora_inicio : marca.hora_fin), "America/Costa_Rica");
-    next_time.setFullYear(parseInt(fecha[0]), parseInt(fecha[1]) - 1, marca.hora_inicio > marca.hora_fin ? parseInt(fecha[2]) + 1 : parseInt(fecha[2]));
+    // Inicio y fin del turno como hora de reloj de CR en UTC (mismo convenio que `getHoraAccion`), sin depender de la zona horaria
+    // del dispositivo. Solo el FIN suma un día si el turno cruza la medianoche; el inicio siempre es el de la fecha de la marca.
+    const crossesMidnight = marca.hora_inicio > marca.hora_fin;
+    const inicioTurnoMs = buildMarcaNaiveMs(marca.fecha, marca.hora_inicio) ?? NaN;
+    const finTurnoMs = buildMarcaNaiveMs(marca.fecha, marca.hora_fin, crossesMidnight ? 1 : 0) ?? NaN;
 
-    let inicioTurno = toZonedTime(new Date(marca.hora_inicio), "America/Costa_Rica");
-    inicioTurno.setFullYear(parseInt(fecha[0]), parseInt(fecha[1]) - 1, parseInt(fecha[2]));
-
-    let next_change_time = new Date(next_time.getTime());
-    next_change_time.setFullYear(parseInt(fecha[0]), parseInt(fecha[1]) - 1, marca.hora_inicio > marca.hora_fin ? parseInt(fecha[2]) + 1 : parseInt(fecha[2]));
-    next_change_time.setMinutes(next_change_time.getMinutes() - monitoringMinutes);
+    const inicioTurno = new Date(inicioTurnoMs);
+    const next_time = new Date(estado == "No ingresado" ? inicioTurnoMs : finTurnoMs);
+    const next_change_time = new Date(next_time.getTime() - monitoringMinutes * 60 * 1000);
 
     let change_available = true;
     let is_late = resolveMarcaIsLate(marca);
@@ -1569,12 +1556,9 @@ export default function MarcarIngresoSalidaScreen() {
       const postMinutes = await getMonitoringPostMinutesFromStorage();
       let isLate = resolveMarcaIsLate(marca);
       try {
-        const fecha = String(marca.fecha ?? '').split('-');
-        if (fecha.length >= 3 && marca.hora_inicio) {
-          const day = parseInt(String(fecha[2]).slice(0, 2), 10);
-          const inicioTurno = toZonedTime(new Date(marca.hora_inicio), 'America/Costa_Rica');
-          inicioTurno.setFullYear(parseInt(fecha[0], 10), parseInt(fecha[1], 10) - 1, day);
-          const lateThreshold = inicioTurno.getTime() + postMinutes * 60 * 1000;
+        const inicioTurnoMs = marca.hora_inicio ? buildMarcaNaiveMs(marca.fecha, marca.hora_inicio) : null;
+        if (inicioTurnoMs != null) {
+          const lateThreshold = inicioTurnoMs + postMinutes * 60 * 1000;
           isLate = horaAccionValue > lateThreshold;
         }
       } catch {
@@ -2299,6 +2283,8 @@ const getActivities = async (marcaId: number) => {
       }
 
       const referenceMs = (await getHoraAccion()) || Date.now();
+      // La lista de próximos días se arma en el render con esta hora (getHoraAccion), no con el reloj del dispositivo.
+      setHoraAccion(referenceMs);
       const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
       if (!hasValidPlanillasToken) {
         setFutureMarks([]);
@@ -2375,15 +2361,14 @@ const getActivities = async (marcaId: number) => {
       });
 
       // Construir los próximos 30 días (incluyendo días sin marcas)
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const next30Days = Array.from({ length: 30 }, (_, index) => {
-        const d = new Date(today);
-        d.setDate(d.getDate() + index);
-        const year = d.getFullYear();
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        const isoDate = `${year}-${month}-${day}`;
+      // «Hoy» sale de getHoraAccion (hora de CR en UTC, guardada en `horaAccion` al cargar las marcas), no del reloj del dispositivo.
+      const referenceMs = Number(horaAccion);
+      const refDate = new Date(Number.isFinite(referenceMs) ? referenceMs : NaN);
+      const todayUtcMs = Number.isNaN(refDate.getTime())
+        ? NaN
+        : Date.UTC(refDate.getUTCFullYear(), refDate.getUTCMonth(), refDate.getUTCDate());
+      const next30Days = (Number.isNaN(todayUtcMs) ? [] : Array.from({ length: 30 }, (_, index) => index)).map((index) => {
+        const isoDate = new Date(todayUtcMs + index * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
         const label = formatDateDMY(isoDate);
         return { key: isoDate, label };
       });
