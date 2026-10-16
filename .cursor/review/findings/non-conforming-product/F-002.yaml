@@ -1,0 +1,15 @@
+id: F-002
+module_id: non-conforming-product
+severity: low
+status: fixed
+file: apps/mobile/screens/NonConformingProductScreen.tsx
+lines: "414-421"
+category: connectivity
+title: Gate online usa expo-network solamente
+description: |
+  No resolveAppConnectivity.
+reproduction: |
+  1. Captive portal.
+impact: Intentos online fallidos sin cola.
+suggested_fix: |
+  Usar resolveAppConnectivity.

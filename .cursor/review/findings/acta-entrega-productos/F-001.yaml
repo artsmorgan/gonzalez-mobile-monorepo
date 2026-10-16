@@ -1,0 +1,21 @@
+id: F-001
+module_id: acta-entrega-productos
+severity: critical
+status: fixed
+file: apps/mobile/screens/MarcarIngresoSalidaScreen.tsx
+lines: "1280-1288,1467-1502"
+category: offline
+title: Marcar entrada borra cola evaluations_actions y cache de actas
+description: |
+  hydrateAfterEntrada llama cleanAsyncStorage(), que elimina todas las keys AsyncStorage excepto una lista
+  fija de excepciones. No preserva evaluations_actions (cola offline de acta_entrega_producto) ni
+  acta_entrega_productos_cache. Ocurre tras entrada online exitosa aunque queden actas offline pendientes de sync.
+reproduction: |
+  1. Crear acta offline (evaluations_actions + acta_entrega_productos_cache).
+  2. Antes de que sync complete, marcar entrada online en el siguiente turno.
+  3. hydrateAfterEntrada → cleanAsyncStorage elimina evaluations_actions y acta_entrega_productos_cache.
+  4. La acta offline nunca se envía al servidor.
+impact: Pérdida irreversible de actas capturadas offline; inconsistencia con servidor.
+suggested_fix: |
+  Preservar evaluations_actions y acta_entrega_productos_cache en cleanAsyncStorage exceptions,
+  o drenar colas antes del sweep / no llamar cleanAsyncStorage hasta sync completo.

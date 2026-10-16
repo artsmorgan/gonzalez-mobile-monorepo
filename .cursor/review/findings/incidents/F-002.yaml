@@ -1,0 +1,15 @@
+id: F-002
+module_id: incidents
+severity: medium
+status: fixed
+file: apps/mobile/App.tsx
+lines: "7575-7590"
+category: offline
+title: Sync update de incidente nunca encolado desde pantalla
+description: |
+  Rama update en sync sin enqueue desde IncidentsScreen.
+reproduction: |
+  N/A salvo cola legacy.
+impact: Rama sync muerta para edits offline de incidente.
+suggested_fix: |
+  Encolar update offline o remover rama.

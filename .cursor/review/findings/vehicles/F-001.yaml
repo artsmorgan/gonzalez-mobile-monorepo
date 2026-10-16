@@ -1,0 +1,16 @@
+id: F-001
+module_id: vehicles
+severity: critical
+status: fixed
+file: apps/mobile/App.tsx
+lines: "1529-1566"
+category: offline
+title: checkVehiclesActionsCache snapshot stale
+description: |
+  Sin actions = updatedActions tras filter success.
+reproduction: |
+  1. 2+ creates vehicles_actions.
+  2. Sync.
+impact: Visitas vehículos duplicadas.
+suggested_fix: |
+  Reasignar actions tras cada éxito.

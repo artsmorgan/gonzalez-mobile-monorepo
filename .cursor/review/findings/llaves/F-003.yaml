@@ -1,0 +1,15 @@
+id: F-003
+module_id: llaves
+severity: informational
+status: fixed
+file: apps/mobile/App.tsx
+lines: "2010-2057"
+category: offline
+title: Sub-colas movimientos/llaveros re-leen storage
+description: |
+  Patrón correcto en sub-handlers.
+reproduction: |
+  N/A
+impact: Referencia para fix F-001/F-002.
+suggested_fix: |
+  Aplicar mismo patrón a llaves_actions root.

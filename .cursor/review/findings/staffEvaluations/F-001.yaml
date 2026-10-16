@@ -1,0 +1,15 @@
+id: F-001
+module_id: staffEvaluations
+severity: medium
+status: fixed
+file: apps/mobile/App.tsx
+lines: "7354-7373"
+category: offline
+title: Create dequeued sin evaluationId
+description: |
+  saveActions filtra create aunque newId ausente.
+reproduction: |
+  1. POST ok sin data.id.
+impact: Fila cache id=0 permanece; cola limpia.
+suggested_fix: |
+  Dequeue condicionado a newId > 0.
