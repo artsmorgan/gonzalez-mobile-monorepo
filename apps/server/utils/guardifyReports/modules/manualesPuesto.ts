@@ -6,6 +6,7 @@ import { loadPuestoHierarchy, matchesScope } from "../scope";
 import { divisionPorContrato, ejecutivoPorCorpo, findByIds } from "../enrich";
 import type { GuardifyReportModule } from "../types";
 import { manualesPuestoForm } from "./manualesPuestoForm";
+import { asignadosDelManual, asignadosPorPuesto } from "./manualesAsignados";
 
 const txt = (v: unknown): string | null => {
     const s = String(v ?? "").trim();
@@ -28,7 +29,7 @@ const personas = (v: unknown, pred: (x: any) => boolean = () => true): number =>
 };
 
 /** Datos que se resuelven en lote: ejecutivo de cuenta de la sucursal, división del contrato (si la fila no trae una) y nombre de los puestos vinculados que la consulta no hidrató. */
-export type ManualExtra = { ejecutivo?: string | null; division?: string | null; puestos?: Map<number, string> };
+export type ManualExtra = { ejecutivo?: string | null; division?: string | null; puestos?: Map<number, string>; /** Ids de los empleados asignados a los puestos del manual (`c_empleado_plaza`): a todos les llega, lo hayan abierto o no. */ asignados?: number[] };
 
 /**
  * Fila cruda de `queryManualesPuestoRows` → fila plana (un manual por fila, con conteos de vínculos y visualizaciones).
@@ -41,7 +42,12 @@ export function mapManualPuestoRow(r: any, extra: ManualExtra = {}): OutRow {
         .filter((x): x is string => !!x && !/^\d+$/.test(x));
     const vis = r.e_empleado_visualizacion_manual_puesto;
     // A quién le llegó: los empleados vinculados al manual y también los que lo abrieron aunque no estén vinculados (les llega por su puesto).
-    const enviados = personas([...(Array.isArray(r.e_empleados_manual_puesto) ? r.e_empleados_manual_puesto : []), ...(Array.isArray(vis) ? vis : [])]);
+    // Y los que ocupan los puestos del manual (`asignados`), aunque nunca lo hayan abierto: son los «no vistos» del reporte.
+    const filas = [...(Array.isArray(r.e_empleados_manual_puesto) ? r.e_empleados_manual_puesto : []), ...(Array.isArray(vis) ? vis : [])];
+    const ids = new Set<number>(extra.asignados ?? []);
+    let sinId = 0;
+    for (const x of filas) { const n = Number(x?.empleado_id); if (Number.isFinite(n) && n > 0) ids.add(n); else sinId++; }
+    const enviados = ids.size + sinId;
     const vistos = personas(vis);
     return {
         id: Number(r.id),
@@ -85,7 +91,10 @@ export async function loadManualesPuesto(db: ReportDataAccess, p: ReportParams, 
         const faltan = kept.flatMap((r: any) => (Array.isArray(r.e_puestos_manual_puesto) ? r.e_puestos_manual_puesto : [])).filter((l: any) => !l?.e_estructura_puesto).map((l: any) => l?.puesto_id);
         const found = faltan.length ? await findByIds<any>(db as any, "e_estructura_puesto", faltan, { nombre: true, codigo: true }) : new Map<number, any>();
         const puestos = new Map([...found].map(([id, x]) => [id, puestoLabel(x)] as const).filter((e): e is [number, string] => !!e[1]));
-        return kept.map((r: any) => mapManualPuestoRow(r, { ejecutivo: ejecutivos.get(Number(r.corpo_id)), division: divisiones.get(Number(r.contrato_id)), puestos }));
+        // Empleados asignados a los puestos de cada manual (una consulta en lote para todos los manuales de la página).
+        const vinculados = (r: any): number[] => (Array.isArray(r.e_puestos_manual_puesto) ? r.e_puestos_manual_puesto.map((l: any) => Number(l?.puesto_id)) : []);
+        const porPuesto = await asignadosPorPuesto(db, kept.flatMap((r: any) => [r.puesto_id, ...vinculados(r)]));
+        return kept.map((r: any) => mapManualPuestoRow(r, { ejecutivo: ejecutivos.get(Number(r.corpo_id)), division: divisiones.get(Number(r.contrato_id)), puestos, asignados: asignadosDelManual(porPuesto, r.puesto_id, vinculados(r)) }));
     };
     if (!scope) return finish(rows);
     const linked = (r: any): number[] => (Array.isArray(r.e_puestos_manual_puesto) ? r.e_puestos_manual_puesto.map((l: any) => Number(l.puesto_id)) : []);

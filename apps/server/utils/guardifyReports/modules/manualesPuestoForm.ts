@@ -2,6 +2,7 @@ import type { ReportDataAccess } from "../../reportDynamicPrisma";
 import { divisionPorContrato, findByIds, ubicacionTextos } from "../enrich";
 import type { FormRecord, GuardifyFormModule } from "../forms";
 import { fmtDt } from "../mappers";
+import { asignadosDelManual, asignadosPorPuesto } from "./manualesAsignados";
 
 /**
  * Manual de trabajo como formulario (un solo formato). No hay generador individual: el papel sale del consolidado (hojas «Manuales», «Quices»,
@@ -126,9 +127,12 @@ export const manualesPuestoForm: GuardifyFormModule = {
                 select: { id: true, manual_puesto_id: true, empleado_id: true, nombre_empleado: true, approved: true, firma_empleado_manual: true, created_at: true, updated_at: true },
             }) as Promise<any[]>,
         ]);
+        // Los empleados asignados a los puestos de cada manual: a todos les llega; los que no lo han abierto salen como «No visto».
+        const porPuesto = await asignadosPorPuesto(d, [...manuales.map((m) => m.puesto_id), ...linkPuestos.map((l) => l.puesto_id)]);
+        const asignadosDe = (m: any) => asignadosDelManual(porPuesto, m.puesto_id, linkPuestos.filter((l) => Number(l.manual_puesto_id) === Number(m.id)).map((l) => l.puesto_id));
         const [ubic, empleados, puestos, divisiones] = await Promise.all([
             ubicacionTextos(d, manuales.map((m) => ({ empresa: m.empresa_id, cliente: m.cliente_id, division: m.division_id, contrato: m.contrato_id, corpo: m.corpo_id, puesto: m.puesto_id }))),
-            findByIds<any>(d, "c_empleado", [...linkEmpleados.map((l) => l.empleado_id), ...visuales.map((v) => v.empleado_id), ...manuales.map((m) => m.created_by)], { codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true }),
+            findByIds<any>(d, "c_empleado", [...linkEmpleados.map((l) => l.empleado_id), ...visuales.map((v) => v.empleado_id), ...manuales.map((m) => m.created_by), ...manuales.flatMap(asignadosDe)], { codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true }),
             findByIds<any>(d, "e_estructura_puesto", linkPuestos.map((l) => l.puesto_id), { codigo: true, nombre: true }),
             divisionPorContrato(d, manuales.map((m) => m.contrato_id)),
         ]);
@@ -149,6 +153,8 @@ export const manualesPuestoForm: GuardifyFormModule = {
                         ...vis.map((v) => ({ empleado: empleadoTxt(empleados.get(Number(v.empleado_id))) ?? txt(v.nombre_empleado), visto: true, firma: txt(v.firma_empleado_manual), approved: v.approved ?? null, fechaVisto: fmtDt(v.created_at), fechaFirma: fmtDt(v.updated_at) })),
                         // Igual que el consolidado: cada empleado vinculado que aún no tiene visualización sale como «No visto».
                         ...(ePor.get(id) ?? []).filter((l) => !vistos.has(Number(l.empleado_id))).map((l) => ({ empleado: empleadoTxt(empleados.get(Number(l.empleado_id))), visto: false, firma: null, approved: null })),
+                        // Y los que ocupan los puestos del manual y no están vinculados ni lo han abierto.
+                        ...asignadosDe(m).filter((e) => !vistos.has(e) && !(ePor.get(id) ?? []).some((l) => Number(l.empleado_id) === e)).map((e) => ({ empleado: empleadoTxt(empleados.get(e)), visto: false, firma: null, approved: null })),
                     ],
                     creadoPor: empleadoGuion(creador),
                     puestoPrincipal: u.puesto,
