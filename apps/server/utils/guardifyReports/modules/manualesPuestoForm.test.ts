@@ -89,6 +89,7 @@ describe("manuales de trabajo como formulario", () => {
             e_estructura_puesto: t("pue", [{ id: 70, codigo: "P70", nombre: "Recepción" }, { id: 6, codigo: "P1", nombre: "Misceláneo" }]),
             e_estructura_empresa: t("empr", [{ id: 9, codigo: "CH", nombre: "Empresa" }]), e_estructura_cliente: t("cli", [{ id: 2, nombre: "Municipalidad" }]), n_division: t("div", [{ id: 9, nombre: "Seguridad" }]),
             e_estructura_contrato: t("con", [{ id: 4, nro_contrato: "C1", nombre: "Contrato", division_id: 9 }]), e_estructura_sucursal: t("suc", [{ id: 5, nro_sucursal: "S1", nombre: "Sede" }]),
+            c_empleado_plaza: t("pla", []),
         };
         const out = await manualesPuestoForm.loadRecords(db, [9, 8], { firmas: false });
         assert.deepEqual(out.map((r) => r.id), [9, 8]);
@@ -127,7 +128,7 @@ describe("manuales de trabajo como formulario", () => {
             e_manual_puesto: { findMany: async () => [manual()] }, e_puestos_manual_puesto: { findMany: async () => [] }, e_empleados_manual_puesto: { findMany: async () => [] },
             e_empleado_visualizacion_manual_puesto: { findMany: async () => [{ id: 5, manual_puesto_id: 8, empleado_id: 1, nombre_empleado: "Ana Mora Soto", approved: true, firma_empleado_manual: SAMPLE_PNG }] },
             c_empleado: { findMany: async () => [] }, e_estructura_puesto: { findMany: async () => [] }, e_estructura_empresa: { findMany: async () => [] }, e_estructura_cliente: { findMany: async () => [] },
-            n_division: { findMany: async () => [] }, e_estructura_contrato: { findMany: async () => [] }, e_estructura_sucursal: { findMany: async () => [] },
+            n_division: { findMany: async () => [] }, e_estructura_contrato: { findMany: async () => [] }, e_estructura_sucursal: { findMany: async () => [] }, c_empleado_plaza: { findMany: async () => [] },
         };
         const [m] = await manualesPuestoForm.loadRecords(db, [8], { firmas: true });
         assert.equal(m!.listas.visualizacion![0]!.firma, SAMPLE_PNG);
@@ -144,5 +145,19 @@ describe("manuales de trabajo como formulario", () => {
         const completo = armarRegistro(rawArmado({ manual: manual({ quiz: JSON.stringify(quizCompleto) }), puestos: ["P1 - Misceláneo", "P2 - Jardinero", "P3 - Bodega"], visualizaciones }), { ...ubic, division: "Aseo" }, true);
         writeFormSample("manuales-de-trabajo", [completo]);
         assert.equal(completo.listas.visualizacion.length, 3);
+    });
+    it("los empleados asignados a los puestos del manual salen como «No visto» aunque no estén vinculados", async () => {
+        const db: any = {
+            e_manual_puesto: { findMany: async () => [manual()] }, e_puestos_manual_puesto: { findMany: async () => [{ id: 1, manual_puesto_id: 8, puesto_id: 70 }] }, e_empleados_manual_puesto: { findMany: async () => [] },
+            e_empleado_visualizacion_manual_puesto: { findMany: async () => [{ id: 5, manual_puesto_id: 8, empleado_id: 1, nombre_empleado: "Ana Mora Soto", approved: null, firma_empleado_manual: null }] },
+            c_empleado_plaza: { findMany: async (a: any) => (a.where.puesto_id.in.includes(70) ? [{ empleado_id: 1, puesto_id: 70 }, { empleado_id: 2, puesto_id: 70 }, { empleado_id: 3, puesto_id: 70 }] : []) },
+            c_empleado: { findMany: async (a: any) => [{ id: 1, codigo: "E1", nombre: "Ana", primer_apellido: "Mora", segundo_apellido: "Soto", estado: "Activo" }, { id: 2, codigo: "E2", nombre: "Luis", primer_apellido: "Vega", segundo_apellido: "", estado: "Activo" }, { id: 3, codigo: "E3", nombre: "Eva", primer_apellido: "Sola", segundo_apellido: "", estado: "Inactivo" }].filter((e) => a.where.id.in.includes(e.id)) },
+            e_estructura_puesto: { findMany: async () => [{ id: 70, codigo: "P70", nombre: "Recepción" }] }, e_estructura_empresa: { findMany: async () => [] }, e_estructura_cliente: { findMany: async () => [] },
+            n_division: { findMany: async () => [] }, e_estructura_contrato: { findMany: async () => [] }, e_estructura_sucursal: { findMany: async () => [] },
+        };
+        const [m] = await manualesPuestoForm.loadRecords(db, [8], { firmas: false });
+        const filas = m!.listas.visualizacion!;
+        // Ana ya lo abrió; Luis lo tiene asignado y no lo ha visto; Eva está dada de baja y no cuenta.
+        assert.deepEqual(filas.map((f) => [f.empleado, f.estado]), [["E1 Ana Mora Soto", "Visto"], ["E2 Luis Vega", "No visto"]]);
     });
 });

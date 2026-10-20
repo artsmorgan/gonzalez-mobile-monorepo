@@ -102,11 +102,26 @@ describe("manuales de trabajo: carga y alcance", () => {
             { ...raw, id: 2, corpo_id: 99, e_puestos_manual_puesto: [{ puesto_id: 10 }] },
         ]);
         assert.deepEqual(rows.map((r) => [r.ejecutivo_cuenta, r.division, r.puestos]), [["Luis Mora", "Seguridad", "P1 - Puesto; P2 - Ronda"], [null, "D - División", "P1 - Puesto; P2 - Ronda"]]);
-        assert.deepEqual(calls.sort(), ["e_estructura_contrato", "e_estructura_puesto", "e_estructura_sucursal", "n_division", "n_ejecutivo_cuenta"]);
+        assert.deepEqual(calls.sort(), ["c_empleado_plaza", "e_estructura_contrato", "e_estructura_puesto", "e_estructura_sucursal", "n_division", "n_ejecutivo_cuenta"]);
     });
     it("declara alcance y sus claves existen en la fila", () => {
         assert.equal(manualesPuesto.supportsScope, true);
         const o = mapManualPuestoRow(raw);
         for (const k of [...manualesPuesto.searchKeys, ...manualesPuesto.filterKeys, ...manualesPuesto.sortKeys, manualesPuesto.defaultSort]) assert.ok(k in o, k);
+    });
+});
+
+describe("manuales de trabajo: empleados asignados a los puestos", () => {
+    it("el manual les llega a todos los que ocupan sus puestos, aunque no lo hayan abierto", () => {
+        // Los 3 ya vinculados/vistos (1, 2, 3) y 5 más que solo ocupan los puestos del manual.
+        const o = mapManualPuestoRow(raw, { asignados: [1, 2, 3, 20, 21, 22, 23, 24] });
+        assert.equal(o.empleados_enviados, 8);
+        assert.equal(o.vistos, 3);
+        assert.equal(o.pendientes, 5);
+        assert.equal(o.firmados, 1);
+    });
+    it("sin asignados conserva el conteo de vinculados y vistos", () => {
+        assert.equal(mapManualPuestoRow(raw).empleados_enviados, 3);
+        assert.equal(mapManualPuestoRow(raw, { asignados: [] }).empleados_enviados, 3);
     });
 });
