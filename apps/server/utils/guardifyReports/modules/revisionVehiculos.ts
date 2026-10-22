@@ -86,7 +86,7 @@ async function ultimosCambios(db: any, tabla: string, ids: unknown[]): Promise<M
  *
  * Columnas para los filtros: `modelo`, `titulo_propiedad`, `rtv` y `marchamo` salen de la «información general» de la
  * revisión y, si ahí no están, del vehículo corporativo vinculado (`veh_*`, que agrega `load`); `vin` solo de la
- * información general; `corporativo` es «Sí» si la revisión está vinculada a un vehículo corporativo; `uso_vehiculo`
+ * información general o, si ahí no está, del vehículo vinculado (`veh_vin`); `titulo_propiedad_num`, `rtv_num` y `marchamo_num` (texto) igual que `vin`; `corporativo` es «Sí» si la revisión está vinculada a un vehículo corporativo; `uso_vehiculo`
  * («conductor - fecha») es el uso vinculado (`uso_txt`); `ejecutivo_cuenta`, `creado_por` (quien hizo la revisión),
  * `modificado`/`modificado_por` (último cambio del historial `c_cambios_apps_modules`) y la ubicación («código - nombre», `ubicacion`) también los agrega `load`.
  */
@@ -116,12 +116,16 @@ export function mapRevisionVehiculoRow(r: any): OutRow {
         movimientos: Number(r.movimientos_count) || 0,
         fotos: countFotos(general, revision),
         modelo: infoValue(general, "modelo") ?? txt(r.veh_modelo),
-        vin: infoValue(general, "vin"),
+        vin: infoValue(general, "vin") ?? txt(r.veh_vin),
         uso_vehiculo: txt(r.uso_txt),
         corporativo: Number(r.vehiculo_id) > 0 ? "Sí" : "No",
         titulo_propiedad: yesNo(infoValue(general, "titulo_propiedad")) ?? yesNo(r.veh_titulo_propiedad),
         rtv: yesNo(infoValue(general, "rtv")) ?? yesNo(r.veh_rtv),
         marchamo: yesNo(infoValue(general, "marchamo")) ?? yesNo(r.veh_marchamo),
+        // Número o dato de cada documento (texto opcional, issue #143): el de la revisión y, si no lo trae, el del vehículo vinculado.
+        titulo_propiedad_num: infoValue(general, "titulo_propiedad_num") ?? txt(r.veh_titulo_propiedad_num),
+        rtv_num: infoValue(general, "rtv_num") ?? txt(r.veh_rtv_num),
+        marchamo_num: infoValue(general, "marchamo_num") ?? txt(r.veh_marchamo_num),
         ejecutivo_cuenta: txt(r.ejecutivo_cuenta),
         creado_por: txt(r.creado_por),
         modificado: (r as any).updated_at ? fmtDt((r as any).updated_at) : (fmtDt(r.modificado_at)),
@@ -158,9 +162,9 @@ export async function usoPorRevision(db: any, revisionIds: unknown[]): Promise<M
 export const revisionVehiculos: GuardifyReportModule = {
     id: "revision_vehiculos",
     supportsScope: true,
-    searchKeys: ["vehiculo", "placa", "marca", "contrato", "sucursal", "puesto", "cliente", "observaciones"],
-    filterKeys: ["tipo", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "vehiculo", "uso_vehiculo", "marca", "modelo", "vin", "corporativo", "titulo_propiedad", "rtv", "marchamo", "ejecutivo_cuenta", "creado_por", "modificado", "modificado_por"],
-    sortKeys: ["creado", "tipo", "vehiculo", "placa", "marca", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "puntos_revisados", "movimientos", "fotos", "creado_por", "modificado", "modificado_por"],
+    searchKeys: ["vehiculo", "placa", "vin", "marca", "contrato", "sucursal", "puesto", "cliente", "observaciones"],
+    filterKeys: ["tipo", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "vehiculo", "uso_vehiculo", "marca", "modelo", "vin", "corporativo", "titulo_propiedad", "rtv", "marchamo", "titulo_propiedad_num", "rtv_num", "marchamo_num", "ejecutivo_cuenta", "creado_por", "modificado", "modificado_por"],
+    sortKeys: ["creado", "tipo", "vehiculo", "placa", "vin", "titulo_propiedad_num", "rtv_num", "marchamo_num", "marca", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "puntos_revisados", "movimientos", "fotos", "creado_por", "modificado", "modificado_por"],
     defaultSort: "creado",
     form: revisionVehiculosForm,
     async load(db, p) {
@@ -171,7 +175,7 @@ export const revisionVehiculos: GuardifyReportModule = {
             : rows.filter((r) => matchesScope({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.sucursal_id, puesto: r.puesto_id }, scope));
         if (!kept.length) return [];
         // Datos para los filtros, en lote (nunca por fila).
-        const vehiculos = await findByIds<any>(db, "c_vehiculos_corporativos", kept.map((r) => r.vehiculo_id), { marca: true, modelo: true, titulo_propiedad: true, rtv: true, marchamo: true });
+        const vehiculos = await findByIds<any>(db, "c_vehiculos_corporativos", kept.map((r) => r.vehiculo_id), { marca: true, modelo: true, titulo_propiedad: true, rtv: true, marchamo: true, vin: true, titulo_propiedad_num: true, rtv_num: true, marchamo_num: true });
         const usos = await usoPorRevision(db, kept.map((r) => r.id));
         const cambios = await ultimosCambios(db, "c_bitacora_vehiculo_detenido", kept.map((r) => r.id));
         const ubicOf = (r: any) => ({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.sucursal_id, puesto: r.puesto_id });
@@ -186,6 +190,7 @@ export const revisionVehiculos: GuardifyReportModule = {
             return mapRevisionVehiculoRow({
                 ...r,
                 veh_marca: v?.marca, veh_modelo: v?.modelo, veh_titulo_propiedad: v?.titulo_propiedad, veh_rtv: v?.rtv, veh_marchamo: v?.marchamo,
+                veh_vin: v?.vin, veh_titulo_propiedad_num: v?.titulo_propiedad_num, veh_rtv_num: v?.rtv_num, veh_marchamo_num: v?.marchamo_num,
                 uso_txt: usos.get(Number(r.id)),
                 ejecutivo_cuenta: ejecutivos.get(Number(r.sucursal_id)),
                 creado_por: usuarioInserta(r.created_by, nombres),

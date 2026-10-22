@@ -61,6 +61,7 @@ export function mapVehiculoCorporativoRow(r: any): OutRow {
         tipo: txt(r.tipo),
         marca: txt(r.marca),
         modelo: txt(r.modelo),
+        vin: txt(r.vin),
         anno: num(r.anno),
         kilometraje: num(r.kilometraje),
         prox_cambio_aceite: num(r.prox_cambio_aceite),
@@ -69,6 +70,10 @@ export function mapVehiculoCorporativoRow(r: any): OutRow {
         titulo_propiedad: txt(r.titulo_propiedad_txt),
         rtv: txt(r.rtv_txt),
         marchamo: txt(r.marchamo_txt),
+        // Número o dato de cada documento (texto opcional; el Sí/No de arriba sigue igual).
+        titulo_propiedad_num: txt(r.titulo_propiedad_num),
+        rtv_num: txt(r.rtv_num),
+        marchamo_num: txt(r.marchamo_num),
         activo: txt(r.activo_txt),
         empresa: txt(r.empresa_txt),
         cliente: txt(r.cliente_txt),
@@ -94,9 +99,9 @@ export function mapVehiculoCorporativoRow(r: any): OutRow {
 export const registroVehiculosCorporativos: GuardifyReportModule = {
     id: "registro_vehiculos_corporativos",
     supportsScope: true,
-    searchKeys: ["placa", "marca", "modelo", "contrato", "sucursal", "puesto", "cliente"],
-    filterKeys: ["tipo", "estado", "tipo_autoria", "activo", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "placa", "marca", "modelo", "anno", "ejecutivo_cuenta", "creado_por", "modificado", "modificado_por"],
-    sortKeys: ["creado", "placa", "tipo", "marca", "modelo", "anno", "kilometraje", "estado", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "usos", "mantenimientos", "creado_por", "modificado", "modificado_por"],
+    searchKeys: ["placa", "vin", "marca", "modelo", "contrato", "sucursal", "puesto", "cliente"],
+    filterKeys: ["tipo", "estado", "tipo_autoria", "activo", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "placa", "vin", "titulo_propiedad_num", "rtv_num", "marchamo_num", "marca", "modelo", "anno", "ejecutivo_cuenta", "creado_por", "modificado", "modificado_por"],
+    sortKeys: ["creado", "placa", "vin", "titulo_propiedad_num", "rtv_num", "marchamo_num", "tipo", "marca", "modelo", "anno", "kilometraje", "estado", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "usos", "mantenimientos", "creado_por", "modificado", "modificado_por"],
     defaultSort: "creado",
     form: registroVehiculosCorporativosForm,
     async load(db, p) {

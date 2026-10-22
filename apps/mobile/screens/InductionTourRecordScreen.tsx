@@ -45,6 +45,7 @@ import { useQRScanner } from '@/hooks/useQRScanner';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { normalizeTipoCapacitacion, TIPOS_CAPACITACION, type TipoCapacitacion } from '@/hooks/tipoCapacitacion';
 
 type InductionTourRecordScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'InductionTourRecord'>;
 
@@ -80,6 +81,8 @@ interface InductionTourRecord {
   plaza_id?: number | null;
   division?: string | null;
   renglon_edificio: string | null;
+  /** Presencial / Virtual; opcional (registros anteriores no lo tienen). */
+  tipo_capacitacion?: string | null;
   supervisor_cliente: string | null;
   supervisor_corporacion: string | null;
   temas_desarrollados: string | null;
@@ -99,6 +102,7 @@ interface EditingInductionTourRecord {
   fecha: string;
   division: string;
   renglon_edificio: string;
+  tipo_capacitacion: string;
   supervisor_cliente: string;
   supervisor_corporacion: string;
   temas_desarrollados: TemaDesarrollado[];
@@ -397,6 +401,7 @@ export default function InductionTourRecordScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [division, setDivision] = useState<string>('Otros');
   const [renglonEdificio, setRenglonEdificio] = useState('');
+  const [tipoCapacitacion, setTipoCapacitacion] = useState<TipoCapacitacion | ''>('');
   const [supervisorCliente, setSupervisorCliente] = useState('');
   const [supervisorCorporacion, setSupervisorCorporacion] = useState('');
   const [temasDesarrollados, setTemasDesarrollados] = useState<TemaDesarrollado[]>([]);
@@ -1104,6 +1109,7 @@ export default function InductionTourRecordScreen() {
     setFecha(new Date(horaAccion));
     setDivision('Otros');
     setRenglonEdificio('');
+    setTipoCapacitacion('');
     setSupervisorCliente('');
     setSupervisorCorporacion('');
     // Resetear jerarquía del formulario
@@ -1275,6 +1281,7 @@ export default function InductionTourRecordScreen() {
       fecha: record.fecha || '',
       division: divisionName,
       renglon_edificio: record.renglon_edificio || '',
+      tipo_capacitacion: record.tipo_capacitacion || '',
       supervisor_cliente: record.supervisor_cliente || '',
       supervisor_corporacion: record.supervisor_corporacion || '',
       temas_desarrollados: temasArray,
@@ -1285,6 +1292,7 @@ export default function InductionTourRecordScreen() {
     });
 
     setRenglonEdificio(record.renglon_edificio || '');
+    setTipoCapacitacion(normalizeTipoCapacitacion(record.tipo_capacitacion));
     setSupervisorCliente(record.supervisor_cliente || '');
     setSupervisorCorporacion(record.supervisor_corporacion || '');
     if (record.fecha) {
@@ -1555,6 +1563,7 @@ export default function InductionTourRecordScreen() {
         fecha: formatDateForRequest(fecha) || null,
         division: division.trim(),
         renglon_edificio: renglonEdificio.trim() || null,
+        tipo_capacitacion: tipoCapacitacion || null,
         supervisor_cliente: supervisorCliente.trim() || null,
         supervisor_corporacion: supervisorCorporacion.trim() || null,
         temas_desarrollados: temasDesarrollados.length > 0 ? JSON.stringify(temasDesarrollados) : null,
@@ -1661,6 +1670,7 @@ export default function InductionTourRecordScreen() {
           fecha: formatDateForRequest(fecha) || null,
           division: division.trim(),
           renglon_edificio: renglonEdificio.trim() || null,
+          tipo_capacitacion: tipoCapacitacion || null,
           supervisor_cliente: supervisorCliente.trim() || null,
           supervisor_corporacion: supervisorCorporacion.trim() || null,
           temas_desarrollados: temasDesarrollados.length > 0 ? JSON.stringify(temasDesarrollados) : null,
@@ -1745,6 +1755,7 @@ export default function InductionTourRecordScreen() {
         fecha: formatDateForRequest(fecha) || null,
         division: division.trim(),
         renglon_edificio: renglonEdificio.trim() || null,
+        tipo_capacitacion: tipoCapacitacion || null,
         supervisor_cliente: supervisorCliente.trim() || null,
         supervisor_corporacion: supervisorCorporacion.trim() || null,
         temas_desarrollados: temasDesarrollados.length > 0 ? JSON.stringify(temasDesarrollados) : null,
@@ -2215,6 +2226,11 @@ export default function InductionTourRecordScreen() {
                   <ThemedText style={styles.listItemSubtitle}>
                     División: {record.division || 'N/A'}
                   </ThemedText>
+                  {record.tipo_capacitacion ? (
+                    <ThemedText style={styles.listItemSubtitle}>
+                      Tipo de capacitación: {record.tipo_capacitacion}
+                    </ThemedText>
+                  ) : null}
                   <ThemedText style={styles.listItemSubtitle}>
                     Supervisor (Cliente): {record.supervisor_cliente || 'N/A'}
                   </ThemedText>
@@ -2656,6 +2672,27 @@ export default function InductionTourRecordScreen() {
                 />
               </ThemedView>
 
+              {/* Tipo de capacitación (opcional): tocar de nuevo la opción elegida la quita */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Tipo de capacitación</ThemedText>
+                <ThemedView style={styles.tipoCapacitacionRow}>
+                  {TIPOS_CAPACITACION.map((option) => {
+                    const selected = tipoCapacitacion === option;
+                    return (
+                      <TouchableOpacity
+                        key={option}
+                        style={[styles.tipoCapacitacionOption, selected && styles.tipoCapacitacionOptionSelected]}
+                        onPress={() => setTipoCapacitacion(selected ? '' : option)}
+                        accessibilityRole="radio"
+                        accessibilityState={{ selected }}
+                      >
+                        <ThemedText style={[styles.tipoCapacitacionText, selected && styles.tipoCapacitacionTextSelected]}>{option}</ThemedText>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ThemedView>
+              </ThemedView>
+
               {/* Supervisor del cliente (si aplica) */}
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Supervisor del cliente (si aplica)</ThemedText>
@@ -3062,6 +3099,19 @@ const styles = StyleSheet.create({
     marginBottom: 5,
     color: '#000000',
   },
+  tipoCapacitacionRow: { flexDirection: 'row', gap: 12 },
+  tipoCapacitacionOption: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    paddingVertical: 12,
+    alignItems: 'center',
+    backgroundColor: '#F9F9F9',
+  },
+  tipoCapacitacionOptionSelected: { borderColor: '#007AFF', backgroundColor: '#E8F2FF' },
+  tipoCapacitacionText: { fontSize: 16, color: '#333333' },
+  tipoCapacitacionTextSelected: { color: '#007AFF', fontWeight: '600' },
   formInput: {
     borderWidth: 1,
     borderColor: '#E0E0E0',

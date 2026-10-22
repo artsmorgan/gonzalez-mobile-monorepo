@@ -9,6 +9,7 @@ import { mapActaEntregaImagesForClient } from './mapActaEntregaImagesForClient';
 import { reportError } from '../../../utils/reportError';
 
 import { auditCreateFields } from "../../../utils/auditFields";
+import { crearConConsecutivo, formatConsecutivoActa, siguienteConsecutivoActa } from "../../../utils/consecutivoActa";
 export const runtime = 'nodejs';
 
 type ActaImageInput = {
@@ -80,6 +81,7 @@ export async function GET(req: NextRequest) {
       const { c_imagenes_acta_entrega_producto: _img, ...rest } = record;
       return {
         ...rest,
+        consecutivo_formato: formatConsecutivoActa(record.consecutivo),
         id_local: '',
         images: mapActaEntregaImagesForClient(Number(record.id), record.c_imagenes_acta_entrega_producto, baseUrl),
       };
@@ -187,7 +189,10 @@ export async function POST(req: NextRequest) {
     const fechaEntregaDate = new Date(String(fecha_entrega));
     const fechaRecibeDate = new Date(String(fecha_recibe));
 
-    const newRecord = await callDynamicPrisma({
+    // El consecutivo es por empresa y lo asigna el servidor al crear (también al sincronizar un acta hecha sin conexión).
+    const newRecord = await crearConConsecutivo({
+      siguiente: () => siguienteConsecutivoActa(req, Number(empresa_id)),
+      crear: (consecutivo) => callDynamicPrisma({
       req,
       data: {
         action: "POST",
@@ -195,6 +200,7 @@ export async function POST(req: NextRequest) {
         operation: "create",
         data: {
             ...auditCreateFields(payload, ["created_at", "created_by"]),
+          consecutivo,
           empresa_id: Number(empresa_id),
           cliente_id: Number(cliente_id),
           division_id: Number(division_id),
@@ -219,6 +225,7 @@ export async function POST(req: NextRequest) {
         },
         include: { c_imagenes_acta_entrega_producto: true },
       },
+    }),
     });
     const newRecordObj = newRecord as any;
 
@@ -237,6 +244,7 @@ export async function POST(req: NextRequest) {
             before: null,
             after: {
               id: newRecordObj.id,
+              consecutivo: newRecordObj.consecutivo,
               empresa_id: newRecordObj.empresa_id,
               cliente_id: newRecordObj.cliente_id,
               division_id: newRecordObj.division_id,
@@ -351,6 +359,7 @@ export async function POST(req: NextRequest) {
         message: 'Acta creada correctamente',
         data: {
           ...actaRest,
+          consecutivo_formato: formatConsecutivoActa(actaRest.consecutivo),
           id_local: '',
           images: mapActaEntregaImagesForClient(aid, fullRecordObj?.c_imagenes_acta_entrega_producto, baseUrl),
           created_by: payload?.id?.toString() || '',

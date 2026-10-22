@@ -354,12 +354,34 @@ export async function downloadAndShareLargeAuthedFile(params: {
   logout: () => Promise<unknown>;
 }): Promise<DownloadAndShareResult> {
   const { url, mimeType, dialogTitle, refreshAccessToken, logout } = params;
-  const fileName = sanitizeFileName(params.fileName);
 
   const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
   if (!token) {
     return { ok: false, cancelled: false, message: 'Sesión no válida' };
   }
+
+  return downloadAndShareLargeFile({
+    url,
+    fileName: params.fileName,
+    mimeType,
+    dialogTitle,
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+/**
+ * Misma descarga y entrega que `downloadAndShareLargeAuthedFile`, con las cabeceras de autorización que indique quien llama.
+ * La usa la actualización desde el catálogo de APK de Guardify (`Authorization: Device …`), que no depende de la sesión de la app.
+ */
+export async function downloadAndShareLargeFile(params: {
+  url: string;
+  fileName: string;
+  mimeType: string;
+  dialogTitle?: string;
+  headers: Record<string, string>;
+}): Promise<DownloadAndShareResult> {
+  const { url, mimeType, dialogTitle } = params;
+  const fileName = sanitizeFileName(params.fileName);
 
   const destFile = new File(Paths.document, fileName);
 
@@ -368,25 +390,25 @@ export async function downloadAndShareLargeAuthedFile(params: {
       destFile.delete();
     }
     await File.downloadFileAsync(url, destFile, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: params.headers,
       idempotent: true,
     });
 
     if (Platform.OS === 'android') {
       try {
         const contentUri = await getContentUriAsync(destFile.uri);
-        console.log('[downloadAndShareLargeAuthedFile] contentUri:', contentUri, 'mimeType:', mimeType);
+        console.log('[downloadAndShareLargeFile] contentUri:', contentUri, 'mimeType:', mimeType);
         const intentResult = await IntentLauncher.startActivityAsync('android.intent.action.INSTALL_PACKAGE', {
           data: contentUri,
           flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
           type: mimeType,
         });
-        console.log('[downloadAndShareLargeAuthedFile] INSTALL_PACKAGE result:', JSON.stringify(intentResult));
+        console.log('[downloadAndShareLargeFile] INSTALL_PACKAGE result:', JSON.stringify(intentResult));
         return { ok: true, fileUri: destFile.uri };
       } catch (error) {
         // Ningún componente registra ACTION_INSTALL_PACKAGE (poco común) u otro fallo: cae a compartir.
         console.warn(
-          '[downloadAndShareLargeAuthedFile] ACTION_INSTALL_PACKAGE failed, falling back to share:',
+          '[downloadAndShareLargeFile] ACTION_INSTALL_PACKAGE failed, falling back to share:',
           JSON.stringify(error, Object.getOwnPropertyNames(error instanceof Object ? error : {})),
           error,
         );

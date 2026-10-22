@@ -6,6 +6,7 @@ import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByPlaza, sendNotificationByEmployee } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { reportError } from "../../../utils/reportError";
+import { archivosDeVersion } from "../../../utils/documentos/service";
 
 type ManualFileInput = {
     type: string; // 'image' | 'audio' | 'video' | 'document' | etc
@@ -163,6 +164,15 @@ export async function GET(req: NextRequest) {
             empleadosVinculadosByManualId.set(mid, arr);
         });
 
+        // Cuándo se le entregó cada documento al solicitante y qué versión (issue #154).
+        const misEntregasLinks = Number.isFinite(employeeId)
+            ? await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "e_empleados_manual_puesto", operation: "findMany", where: { empleado_id: employeeId, manual_puesto_id: { in: manualIds } } },
+            })
+            : [];
+        const misEntregas = new Map<number, any>((Array.isArray(misEntregasLinks) ? misEntregasLinks : []).map((l: any) => [Number(l.manual_puesto_id), l]));
+
         const manuals = await callDynamicPrisma({
             req,
             data: {
@@ -219,14 +229,20 @@ export async function GET(req: NextRequest) {
                         include: { e_empleado_visualizacion_archivos: true },
                     },
                 });
-                const visualizacionesArray = (Array.isArray(visualizaciones) ? visualizaciones : []).filter(
+                const todasVisualizaciones = (Array.isArray(visualizaciones) ? visualizaciones : []).filter(
                     (v: any) => v?.isActive !== false
                 );
-                const filesArray = Array.isArray(files) ? files : [];
+                // Documentos con versiones (issue #155): el estatus (visto / firmado / nota) es por versión. `visualizaciones` trae solo la vigente;
+                // las firmas de versiones anteriores siguen guardadas y se informan aparte (`mis_versiones_firmadas`).
+                const versionVigente = Number(manual.version ?? 1);
+                const visualizacionesArray = todasVisualizaciones.filter((v: any) => Number(v?.version ?? 1) === versionVigente);
+                const filesArray = archivosDeVersion(Array.isArray(files) ? files : [], versionVigente);
 
                 const currentEmployeeSigned = visualizacionesArray.some(
                     (v: any) => v.empleado_id === employeeId
                 );
+                const misVersionesFirmadas = [...new Set(todasVisualizaciones.filter((v: any) => v.empleado_id === employeeId).map((v: any) => Number(v?.version ?? 1)))].sort((a, b) => a - b);
+                const miEntrega = misEntregas.get(Number(manual.id)) ?? null;
 
                 const filesMapped = filesArray.map((file: any) => {
                     const fileName = file.name;
@@ -292,6 +308,10 @@ export async function GET(req: NextRequest) {
                     quiz: manual.quiz ?? null,
                     firma: manual.firma,
                     isActive: manual.isActive !== false,
+                    version: versionVigente,
+                    sello: manual.sello ?? null,
+                    mis_versiones_firmadas: misVersionesFirmadas,
+                    mi_entrega: miEntrega ? { entregado_en: miEntrega.entregado_en ?? null, created_at: miEntrega.created_at ?? null, version: Number(miEntrega.version ?? 1) } : null,
                     empresa_id: manual.empresa_id ?? null,
                     cliente_id: manual.cliente_id ?? null,
                     corpo_id: manual.corpo_id ?? null,
@@ -315,6 +335,13 @@ export async function GET(req: NextRequest) {
                         firma_empleado_manual: v.firma_empleado_manual ?? null,
                         quiz_answear: v.quiz_answear ?? null,
                         approved: v.approved ?? null,
+                        version: Number(v.version ?? 1),
+                        // Nota consolidada del quiz (issue #156): se calcula una vez al calificar y no cambia aunque luego se edite el quiz.
+                        nota: v.nota ?? null,
+                        nota_puntos: v.nota_puntos ?? null,
+                        nota_total: v.nota_total ?? null,
+                        nota_minimo: v.nota_minimo ?? null,
+                        nota_fecha: v.nota_fecha ?? null,
                         created_at: v.created_at,
                         updated_at: v.updated_at,
                         isActive: v.isActive !== false,

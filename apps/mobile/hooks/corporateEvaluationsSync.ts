@@ -70,6 +70,10 @@ type CorporateVehicleRequestBody = {
   titulo_propiedad?: boolean | null;
   rtv?: boolean | null;
   marchamo?: boolean | null;
+  vin?: string | null;
+  titulo_propiedad_num?: string | null;
+  rtv_num?: string | null;
+  marchamo_num?: string | null;
   firma_responsable?: string;
   imagenes?: Array<{ extension: string; file_base64: string; original_name?: string }>;
 };

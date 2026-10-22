@@ -11,6 +11,7 @@ import {
     formatDateTimeDMY,
 } from "./reportConsolidadoBanner";
 import { attachAuditoriaPropia } from "./auditoriaPropia";
+import { formatConsecutivoActa } from "../consecutivoActa";
 
 export type ActaEntregaModuleFilters = {
     creadoDesde?: string | null;
@@ -338,7 +339,8 @@ export async function buildActaEntregaExcelBufferByType(
             ws.mergeCells("A1:B3");
             ws.mergeCells("C1:I3");
             ws.mergeCells("J1:K3");
-            ws.getCell("C1").value = "Acta de entrega de producto";
+            const consecutivoActa = formatConsecutivoActa(r.consecutivo);
+            ws.getCell("C1").value = consecutivoActa ? `Acta de entrega de producto N.º ${consecutivoActa}` : "Acta de entrega de producto";
             ws.getCell("C1").font = { bold: true, size: 14, color: { argb: "FFFFFFFF" } };
             ws.getCell("C1").alignment = { vertical: "middle", horizontal: "center" };
             ws.getCell("C1").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2A3A" } };
@@ -557,6 +559,7 @@ export async function buildActaEntregaExcelBufferByType(
 
     const mainHeaders = [
         "ID Acta",
+        "Consecutivo",
         "Empresa",
         "Cliente",
         "Division ID",
@@ -605,6 +608,7 @@ export async function buildActaEntregaExcelBufferByType(
     main.columns = [
         { width: 3 },
         { width: 12 },
+        { width: 14 },
         { width: 38 },
         { width: 36 },
         { width: 16 },
@@ -732,6 +736,7 @@ export async function buildActaEntregaExcelBufferByType(
 
         const rootRow = addMainRow(main, [
             r.id,
+            formatConsecutivoActa(r.consecutivo) ?? "",
             r.empresa_nombre,
             r.cliente_nombre,
             r.division_id,

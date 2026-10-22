@@ -23,7 +23,6 @@ import {
   releaseLunchTimerCompletionLock,
   tryAcquireLunchTimerCompletionLock,
 } from '../hooks/lunchTimeMarcaHierarchy';
-import { fromZonedTime } from 'date-fns-tz';
 import {
   extractHorarioIdFromMarca,
   fetchLunchMinutesByMarcaId,
@@ -34,6 +33,8 @@ import {
 } from '../hooks/lunchTimeHorarioApi';
 import * as Network from 'expo-network';
 import getHoraAccion from '../hooks/getHoraAccion';
+import { removeCurrentMarcaIfExpired } from '@/hooks/currentMarcaExpiry';
+import { formatNaive, FORMATO_HORA_CR_RELOJ, resolveManualLunch } from '@/hooks/lunchManualTimes';
 import {
   isStoredPlanillasTokenValid,
   readStoredPlanillasToken,
@@ -110,10 +111,14 @@ export default function LunchTimeScreen() {
   const [isManualModalVisible, setIsManualModalVisible] = useState(false);
   const [manualStartHour, setManualStartHour] = useState('');
   const [manualStartMinute, setManualStartMinute] = useState('');
+  const [manualEndHour, setManualEndHour] = useState('');
+  const [manualEndMinute, setManualEndMinute] = useState('');
   const [manualInactivities, setManualInactivities] = useState<ManualInactivityData[]>([]);
   // Time picker state for manual start
   const [showStartTimePicker, setShowStartTimePicker] = useState(false);
   const [startTimePickerValue, setStartTimePickerValue] = useState(new Date());
+  const [showEndTimePicker, setShowEndTimePicker] = useState(false);
+  const [endTimePickerValue, setEndTimePickerValue] = useState(new Date());
   // Time picker state for pauses (one at a time)
   const [activeInactivityPicker, setActiveInactivityPicker] = useState<null | { index: number; type: 'start' | 'end' }>(null);
   const [inactivityPickerValue, setInactivityPickerValue] = useState(new Date());
@@ -138,18 +143,6 @@ export default function LunchTimeScreen() {
   const [showPlanillasRevalidationModal, setShowPlanillasRevalidationModal] = useState(false);
   const pendingPlanillasActionRef = useRef<{ minutos: number; marcaObj: Record<string, unknown> } | null>(null);
   const saveLunchMinutesRef = useRef<(parsed: number) => Promise<void>>(async () => {});
-
-  const parseCostaRicaLocalDateTime = (
-    year: string,
-    month: string,
-    day: string,
-    hours: string,
-    minutes: string
-  ): Date => {
-    const pad = (v: string) => v.padStart(2, '0');
-    const localIso = `${year}-${month}-${pad(day)}T${pad(hours)}:${pad(minutes)}:00`;
-    return fromZonedTime(localIso, 'America/Costa_Rica');
-  };
 
   const restorePausedTimerFromTempState = async (temp_state_obj: any) => {
     if (temp_state_obj.inactivities) {
@@ -805,6 +798,12 @@ export default function LunchTimeScreen() {
 
   const fetchTimerConfig = async () => {
 
+    if (await removeCurrentMarcaIfExpired()) {
+      setIsLoadingConfig(false);
+      setError('Tu último turno ya terminó. Marca el ingreso del turno que corresponda para usar el tiempo de alimentación.');
+      return;
+    }
+
     if (!employee) return;
 
     setIsLoadingConfig(true);
@@ -896,6 +895,7 @@ export default function LunchTimeScreen() {
 
   const handleStart = async () => {
     if (!timerConfig || timeRemaining <= 0) return;
+    if (await blockIfMarcaExpired()) return;
 
     if (lunchAlreadyCompleted || (await isLunchTimeCompleted())) {
       setLunchAlreadyCompleted(true);
@@ -1078,80 +1078,18 @@ export default function LunchTimeScreen() {
     return `${initial_time} - ${final_time}`;
   };
 
-  const validateTimeConflicts = (startTime: Date, inactivities: InactivityData[], availableMinutes: number): string[] => {
-    const errors: string[] = [];
-
-    // Validar que las inactividades no empiecen antes del tiempo de inicio
-    inactivities.forEach((inactivity, index) => {
-      if (inactivity.startTime < startTime) {
-        errors.push(`La pausa #${index + 1} no puede empezar antes del tiempo de inicio de alimentación`);
-      }
-
-      // Validar que la hora de inicio no sea mayor a la hora de fin
-      if (inactivity.startTime >= inactivity.endTime) {
-        errors.push(`La pausa #${index + 1} no puede tener una hora de inicio mayor o igual a la hora de fin`);
-      }
-    });
-
-    // Validar conflictos entre inactividades
-    for (let i = 0; i < inactivities.length; i++) {
-      for (let j = i + 1; j < inactivities.length; j++) {
-        const inactivity1 = inactivities[i];
-        const inactivity2 = inactivities[j];
-
-        // Verificar si hay solapamiento
-        if ((inactivity1.startTime < inactivity2.endTime && inactivity1.endTime > inactivity2.startTime)) {
-          errors.push(`Las pausas #${i + 1} y #${j + 1} tienen horarios que se solapan`);
-        }
-      }
-    }
-
-    // Validar que el tiempo efectivo de almuerzo no exceda los minutos disponibles
-    if (inactivities.length > 0) {
-      // Ordenar las pausas por hora de inicio
-      const sortedInactivities = [...inactivities].sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
-
-      // Calcular el tiempo entre el inicio del almuerzo y la primera pausa
-      const timeToFirstPause = (sortedInactivities[0].startTime.getTime() - startTime.getTime()) / (1000 * 60);
-
-      // Calcular el tiempo entre pausas consecutivas (de fin de una pausa al inicio de la siguiente)
-      let timeBetweenPauses = 0;
-      for (let i = 0; i < sortedInactivities.length - 1; i++) {
-        const timeBetween = (sortedInactivities[i + 1].startTime.getTime() - sortedInactivities[i].endTime.getTime()) / (1000 * 60);
-        timeBetweenPauses += timeBetween;
-      }
-
-      // Calcular el tiempo total efectivo de almuerzo (sin contar las pausas)
-      const totalEffectiveLunchTime = timeToFirstPause + timeBetweenPauses;
-
-      // Verificar que el tiempo efectivo no exceda los minutos disponibles
-      if (totalEffectiveLunchTime > availableMinutes) {
-        errors.push(`El tiempo efectivo de alimentación (${totalEffectiveLunchTime.toFixed(1)} minutos) excede los ${availableMinutes} minutos disponibles`);
-      }
-
-      // Verificar que el tiempo entre el inicio y la primera pausa no sea negativo
-      if (timeToFirstPause < 0) {
-        errors.push(`La primera pausa no puede empezar antes del tiempo de inicio de alimentación`);
-      }
-    }
-
-    return errors;
-  };
-
-  const calculateEndTime = (startTime: Date, inactivities: InactivityData[]): Date => {
-    const totalInactivityMinutes = inactivities.reduce((total, inactivity) => {
-      const diffMs = inactivity.endTime.getTime() - inactivity.startTime.getTime();
-      return total + (diffMs / (1000 * 60)); // Convertir a minutos
-    }, 0);
-
-    // Agregar 30 minutos de almuerzo + tiempo de inactividades
-    const lunchMinutes = timerConfig?.minutos || 30;
-    const totalMinutes = lunchMinutes + totalInactivityMinutes;
-
-    return new Date(startTime.getTime() + (totalMinutes * 60 * 1000));
+  /** Un turno que terminó hace más de N horas (nomenclador) ya no admite acciones: se elimina y se pide marcar el turno que corresponda. */
+  const blockIfMarcaExpired = async (): Promise<boolean> => {
+    const removed = await removeCurrentMarcaIfExpired();
+    if (!removed) return false;
+    Alert.alert('Sin turno activo', 'Tu último turno ya terminó. Marca el ingreso del turno que corresponda para continuar.', [
+      { text: 'OK', onPress: () => navigation.navigate('MarcarIngresoSalida') },
+    ]);
+    return true;
   };
 
   const handleManualLunchTime = async () => {
+    if (await blockIfMarcaExpired()) return;
     if (lunchAlreadyCompleted || (await isLunchTimeCompleted())) {
       setLunchAlreadyCompleted(true);
       Alert.alert('No disponible', 'Ya registraste un tiempo de alimentación en este turno.');
@@ -1161,8 +1099,11 @@ export default function LunchTimeScreen() {
     setIsManualModalVisible(true);
     setManualStartHour('');
     setManualStartMinute('');
+    setManualEndHour('');
+    setManualEndMinute('');
     setManualInactivities([]);
     setShowStartTimePicker(false);
+    setShowEndTimePicker(false);
     setActiveInactivityPicker(null);
   };
 
@@ -1179,18 +1120,46 @@ export default function LunchTimeScreen() {
     }
   };
 
+  /** Valor inicial de un selector de hora: la ya elegida o, si no hay, la hora de reloj de CR de `getHoraAccion` (sus campos UTC), como hora local del selector. */
+  const pickerDateFromClock = (horaAccion: number, hour?: string, minute?: string): Date => {
+    const ref = new Date(horaAccion);
+    const d = new Date();
+    if (hour && minute) d.setHours(parseInt(hour, 10), parseInt(minute, 10), 0, 0);
+    else d.setHours(ref.getUTCHours(), ref.getUTCMinutes(), 0, 0);
+    return d;
+  };
+
   const openStartTimePicker = async () => {
     const horaAccion = await getHoraAccion();
     if (!horaAccion) {
       Alert.alert('Error', 'No se pudo obtener la hora');
       return;
     }
-    const baseDate = new Date(horaAccion);
-    if (manualStartHour && manualStartMinute) {
-      baseDate.setHours(parseInt(manualStartHour, 10), parseInt(manualStartMinute, 10), 0, 0);
-    }
-    setStartTimePickerValue(baseDate);
+    setShowEndTimePicker(false);
+    setStartTimePickerValue(pickerDateFromClock(horaAccion, manualStartHour, manualStartMinute));
     setShowStartTimePicker(true);
+  };
+
+  const openEndTimePicker = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    setShowStartTimePicker(false);
+    setEndTimePickerValue(pickerDateFromClock(horaAccion, manualEndHour, manualEndMinute));
+    setShowEndTimePicker(true);
+  };
+
+  const handleEndTimePickerChange = (event: any, selectedTime?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowEndTimePicker(false);
+    }
+    if (selectedTime) {
+      setEndTimePickerValue(selectedTime);
+      setManualEndHour(selectedTime.getHours().toString().padStart(2, '0'));
+      setManualEndMinute(selectedTime.getMinutes().toString().padStart(2, '0'));
+    }
   };
 
   const openInactivityPicker = async (index: number, type: 'start' | 'end') => {
@@ -1199,18 +1168,11 @@ export default function LunchTimeScreen() {
       Alert.alert('Error', 'No se pudo obtener la hora');
       return;
     }
-    const baseDate = new Date(horaAccion);
     const inactivity = manualInactivities[index];
-
-    if (type === 'start') {
-      if (inactivity.startHour && inactivity.startMinute) {
-        baseDate.setHours(parseInt(inactivity.startHour, 10), parseInt(inactivity.startMinute, 10), 0, 0);
-      }
-    } else {
-      if (inactivity.endHour && inactivity.endMinute) {
-        baseDate.setHours(parseInt(inactivity.endHour, 10), parseInt(inactivity.endMinute, 10), 0, 0);
-      }
-    }
+    const baseDate =
+      type === 'start'
+        ? pickerDateFromClock(horaAccion, inactivity.startHour, inactivity.startMinute)
+        : pickerDateFromClock(horaAccion, inactivity.endHour, inactivity.endMinute);
 
     setInactivityPickerValue(baseDate);
     setActiveInactivityPicker({ index, type });
@@ -1283,18 +1245,12 @@ export default function LunchTimeScreen() {
   };
 
   const handleManualSubmit = async () => {
-    // Validar hora de inicio
-    if (!manualStartHour || !manualStartMinute) {
-      Alert.alert('Error', 'Por favor ingresa la hora de inicio del tiempo de alimentación');
-      return;
-    }
+    if (await blockIfMarcaExpired()) return;
 
     if (!timerConfig) {
       Alert.alert('Error', 'No se pudo obtener la configuración del temporizador');
       return;
     }
-
-    const errors: string[] = [];
 
     const current_marca = await AsyncStorage.getItem('current_marca');
     if (!current_marca) {
@@ -1307,117 +1263,30 @@ export default function LunchTimeScreen() {
       return;
     }
 
-    // Validar que las pausas tengan todos los campos llenos
-    manualInactivities.forEach((inactivity, index) => {
-      if (!inactivity.startHour || !inactivity.startMinute || !inactivity.endHour || !inactivity.endMinute) {
-        errors.push(`La pausa #${index + 1} tiene campos vacíos`);
-      }
+    // Inicio y fin los escribe la persona: se guardan tal cual, como hora de reloj de CR (mismo convenio que el temporizador). Ver lunchManualTimes.
+    const result = resolveManualLunch({
+      marca: current_marca_parsed,
+      inicio: { hour: manualStartHour, minute: manualStartMinute },
+      fin: { hour: manualEndHour, minute: manualEndMinute },
+      pausas: manualInactivities,
+      minutosDisponibles: timerConfig.minutos,
     });
-
-    if (errors.length > 0) {
-      Alert.alert('Error de validación', errors.join('\n'));
+    if (!result.ok) {
+      Alert.alert('Error de validación', result.errors.join('\n'));
       return;
     }
 
-    const dateArray = current_marca_parsed.fecha.split('T')[0].split('-');
-    const year = dateArray[0];
-    const month = dateArray[1];
-    const day = dateArray[2];
-
-    const init_time_array = current_marca_parsed.hora_inicio.split('T')[1].split(':');
-    const marca_init_hours = init_time_array[0];
-    const marca_init_minutes = init_time_array[1];
-
-    const end_time_array = current_marca_parsed.hora_fin.split('T')[1].split(':');
-    const marca_end_hours = end_time_array[0];
-    const marca_end_minutes = end_time_array[1];
-
-    let end_day = day;
-    if (parseInt(marca_end_hours, 10) > parseInt(marca_init_hours, 10)) {
-      end_day = (parseInt(day, 10) + 1).toString().padStart(2, '0');
-    }
-
-    const marca_end_time = parseCostaRicaLocalDateTime(
-      year,
-      month,
-      end_day,
-      marca_end_hours,
-      marca_end_minutes
-    );
-
-    // Crear fecha de hoy con la hora especificada
-    const startHours = manualStartHour;
-    const startMinutes = manualStartMinute;
-
-    let final_day = day;
-    if (parseInt(marca_init_hours, 10) > parseInt(startHours, 10)) {
-      final_day = (parseInt(day, 10) + 1).toString().padStart(2, '0');
-    }
-
-    const startTime = parseCostaRicaLocalDateTime(
-      year,
-      month,
-      final_day,
-      startHours,
-      startMinutes
-    );
-
-    const initial_string = `${year}-${month}-${final_day} ${startHours}:${startMinutes}:00`;
-
-    console.log('manualInactivities', manualInactivities);
-
-    const inactivitiesWithToday: InactivityData[] = [];
-    for (const inactivity of manualInactivities) {
-
-      let startDay = final_day;
-      if (parseInt(startHours, 10) > parseInt(inactivity.startHour, 10)) {
-        startDay = (parseInt(final_day, 10) + 1).toString().padStart(2, '0');
-      }
-
-      let endDay = final_day;
-      if (parseInt(startHours, 10) > parseInt(inactivity.endHour, 10)) {
-        endDay = (parseInt(final_day, 10) + 1).toString().padStart(2, '0');
-      }
-
-      const activityStartTime = parseCostaRicaLocalDateTime(
-        year,
-        month,
-        startDay,
-        inactivity.startHour,
-        inactivity.startMinute
-      );
-      const activityEndTime = parseCostaRicaLocalDateTime(
-        year,
-        month,
-        endDay,
-        inactivity.endHour,
-        inactivity.endMinute
-      );
-      inactivitiesWithToday.push({
-        startTime: activityStartTime,
-        endTime: activityEndTime,
-        reason: inactivity.reason || 'Sin razón determinada'
-      });
-    }
-
-    const validationErrors = validateTimeConflicts(startTime, inactivitiesWithToday, timerConfig.minutos);
-
-    const endTime = calculateEndTime(startTime, inactivitiesWithToday);
-    const endTime_split = endTime.toISOString().split('T');
-    const endTime_string = `${endTime_split[0]} ${endTime_split[1].split('.')[0]}`;
-
-    if (endTime > marca_end_time) {
-      validationErrors.push('El tiempo de fin de alimentación no puede ser mayor a la hora de fin de la marca actual');
-    }
-
-    if (validationErrors.length > 0) {
-      Alert.alert('Error de validación', validationErrors.join('\n'));
-      return;
-    }
+    const startTime = new Date(result.inicioMs);
+    const endTime = new Date(result.finMs);
+    const inactivitiesWithToday: InactivityData[] = result.pausas.map((p) => ({
+      startTime: new Date(p.startMs),
+      endTime: new Date(p.endMs),
+      reason: p.reason,
+    }));
 
     Alert.alert(
       'Confirmar Registro Manual',
-      `¿Estás seguro de que deseas registrar este tiempo de alimentación?\n\nInicio: ${initial_string}\nFin: ${endTime_string}\nPausas: ${inactivitiesWithToday.length}`,
+      `¿Estás seguro de que deseas registrar este tiempo de alimentación?\n\nInicio: ${formatNaive(result.inicioMs)}\nFin: ${formatNaive(result.finMs)}\nTiempo efectivo: ${Math.round(result.minutosAlmuerzo)} min\nPausas: ${inactivitiesWithToday.length}`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -1438,6 +1307,7 @@ export default function LunchTimeScreen() {
               fin: endTime,
               pausas: JSON.stringify(inactivitiesWithToday),
               es_manual: true,
+              formato_hora: FORMATO_HORA_CR_RELOJ,
               firma_empleado: firmaToUse
             };
 
@@ -1733,6 +1603,27 @@ export default function LunchTimeScreen() {
                         mode="time"
                         display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                         onChange={handleStartTimePickerChange}
+                      />
+                    </View>
+                  )}
+                </ThemedView>
+
+                {/* End Time Input */}
+                <ThemedView style={styles.inputGroup}>
+                  <ThemedText style={[styles.inputLabel, { color: '#000000' }]}>Hora de fin del tiempo de alimentación:</ThemedText>
+                  <TouchableOpacity style={styles.timePickerButton} onPress={() => openEndTimePicker()}>
+                    <ThemedText style={styles.timePickerButtonText}>
+                      {manualEndHour && manualEndMinute ? `${manualEndHour}:${manualEndMinute}` : 'Seleccionar hora'}
+                    </ThemedText>
+                    <Ionicons name="time-outline" size={20} color="#007AFF" />
+                  </TouchableOpacity>
+                  {showEndTimePicker && (
+                    <View style={styles.inlinePickerContainer}>
+                      <DateTimePicker
+                        value={endTimePickerValue}
+                        mode="time"
+                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                        onChange={handleEndTimePickerChange}
                       />
                     </View>
                   )}

@@ -173,12 +173,17 @@ module.exports = ({ config }) => {
           process.env.NEXT_PUBLIC_API_SERVER ||
           // test https://api-gonzalez-mobile-monorepo-production.up.railway.app
           // prod https://gonzalez-mobile-app-production.up.railway.app
-          "https://gonzalez-mobile-app-production.up.railway.app",
+          "https://endless-rec-latter-done.trycloudflare.com",
         /** Debe coincidir con `MOBILE_ACCESS_TOKEN` del servidor (query en `/api/main-structure`). */
         MOBILE_ACCESS_TOKEN:
           process.env.EXPO_PUBLIC_MOBILE_ACCESS_TOKEN ||
           process.env.MOBILE_ACCESS_TOKEN ||
           "",
+        /** Guardify (registro de equipos, órdenes y catálogo de APK). Sin URL la integración queda apagada. */
+        GUARDIFY_URL: process.env.EXPO_PUBLIC_GUARDIFY_URL || process.env.GUARDIFY_URL || "https://falls-gamecube-rendering-program.trycloudflare.com",
+        GUARDIFY_APP_KEY: process.env.EXPO_PUBLIC_GUARDIFY_APP_KEY || process.env.GUARDIFY_APP_KEY || "monitoreapp",
+        /** Código de empresa embebido (producción). En lite/full se deja vacío y se escribe al registrar el equipo. */
+        GUARDIFY_COMPANY_CODE: process.env.EXPO_PUBLIC_GUARDIFY_COMPANY_CODE || process.env.GUARDIFY_COMPANY_CODE || "corporacion-gonzalez",
         /** Variante con la que se evaluó esta configuración (la app usa la real, del paquete nativo: ver hooks/appVariant.ts). */
         APP_VARIANT: variant,
         /** Información de versión de la build según el entorno de construcción. */

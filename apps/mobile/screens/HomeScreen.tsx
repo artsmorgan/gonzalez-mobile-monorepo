@@ -33,6 +33,7 @@ import {
 import * as Location from 'expo-location';
 import { downloadAndShareLargeAuthedFile } from '@/hooks/downloadReportFileToDevice';
 import { getEmbeddedAppVersionInfo } from '@/hooks/appVariant';
+import { getGuardifySnapshot, installGuardifyUpdate } from '@/hooks/guardifyClient';
 
 type HomeScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 
@@ -408,6 +409,12 @@ export default function HomeScreen() {
       if (!version) {
         Alert.alert('Error', 'No se encontró la versión a descargar.');
         return;
+      }
+      // Catálogo de APK de Guardify (issue #148): si ofrece esta misma versión se descarga de ahí con la credencial del equipo.
+      if (getGuardifySnapshot().update?.apk?.version === version) {
+        const fromGuardify = await installGuardifyUpdate();
+        if (fromGuardify.ok || fromGuardify.cancelled) return;
+        console.warn('[guardify] descarga desde el catálogo falló, se usa el servidor:', fromGuardify.message);
       }
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) {

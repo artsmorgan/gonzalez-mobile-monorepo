@@ -19,7 +19,7 @@ NodeModule._load = function (request: string, ...rest: unknown[]) {
     }
 };
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { articulosPuesto, buildArticulosPuestoRows, mapArticuloPuestoRow } = require("./articulosPuesto") as typeof import("./articulosPuesto");
+const { articulosPuesto, buildArticulosPuestoRows, mapArticuloPuestoRow, cargarUltimoMantenimiento, aplicarUltimoMantenimiento } = require("./articulosPuesto") as typeof import("./articulosPuesto");
 
 const art = (o: Record<string, any> = {}) => ({
     puesto_id: 40, puesto_txt: "P40 - Recepción", origen: "Asignado", registro_id: 11, articulo_nombre: "Radio", cantidad: 1,
@@ -87,5 +87,58 @@ describe("articulos_puesto: periodo y alcance", () => {
     it("declara claves que existen en la fila", () => {
         const keys = Object.keys(mapArticuloPuestoRow(puesto(), puesto().articulos[0]));
         for (const k of [...articulosPuesto.searchKeys, ...articulosPuesto.filterKeys, ...articulosPuesto.sortKeys, articulosPuesto.defaultSort]) assert.ok(keys.includes(k), k);
+    });
+});
+
+describe("articulos_puesto: estado y acción del último mantenimiento (issue #140)", () => {
+    const mantenimientos = [
+        { id: 1, articulo_plan_id: null, articulo_asignado_id: 11, estado: "Dañado", accion: "Reparar" },
+        { id: 5, articulo_plan_id: null, articulo_asignado_id: 11, estado: "Bueno", accion: null }, // el más reciente del asignado 11
+        { id: 3, articulo_plan_id: 12, articulo_asignado_id: null, estado: "En mantenimiento", accion: "Cambiar" },
+        { id: 4, articulo_plan_id: 11, articulo_asignado_id: null, estado: "Malo", accion: "Reemplazar" }, // plan 11 ≠ asignado 11
+    ];
+    const consultas: any[] = [];
+    const db = {
+        c_articulo_mantenimiento: {
+            findMany: async (args: any) => {
+                consultas.push(args);
+                const plan: number[] | undefined = args.where.articulo_plan_id?.in;
+                const asig: number[] | undefined = args.where.articulo_asignado_id?.in;
+                return mantenimientos.filter((m) => (plan && m.articulo_plan_id != null && plan.includes(m.articulo_plan_id)) || (asig && m.articulo_asignado_id != null && asig.includes(m.articulo_asignado_id)));
+            },
+        },
+    } as any;
+    const rows = buildArticulosPuestoRows([puesto()], "2026-09-01", "2026-10-01", null); // asignado 11, plan 12
+
+    it("la fila trae estado y acción vacíos hasta que se completan", () => {
+        const o = mapArticuloPuestoRow(puesto(), puesto().articulos[0]);
+        assert.deepEqual([o.estado, o.accion], [null, null]);
+    });
+    it("toma el mantenimiento de id mayor de cada artículo y distingue plan de asignado con el mismo id", async () => {
+        consultas.length = 0;
+        const out = aplicarUltimoMantenimiento(rows, await cargarUltimoMantenimiento(db, rows));
+        const asignado = out.find((r) => r.id === 11)!, plan = out.find((r) => r.id === 12)!;
+        assert.deepEqual([asignado.estado, asignado.accion], ["Bueno", null]);
+        assert.deepEqual([plan.estado, plan.accion], ["En mantenimiento", "Cambiar"]);
+    });
+    it("sin mantenimiento el artículo queda con estado y acción vacíos", async () => {
+        const solo = buildArticulosPuestoRows([puesto({ articulos: [art({ registro_id: 99 })] })], "2026-09-01", "2026-10-01", null);
+        const out = aplicarUltimoMantenimiento(solo, await cargarUltimoMantenimiento(db, solo));
+        assert.deepEqual([out[0]!.estado, out[0]!.accion], [null, null]);
+    });
+    it("carga en lote: una consulta por tipo de artículo, no una por artículo", async () => {
+        consultas.length = 0;
+        await cargarUltimoMantenimiento(db, rows);
+        assert.equal(consultas.length, 2); // plan + asignado
+        const muchos = Array.from({ length: 2500 }, (_, i) => ({ id: i + 1, origen: "Plan" })) as any[];
+        consultas.length = 0;
+        await cargarUltimoMantenimiento(db, muchos);
+        assert.equal(consultas.length, 3); // 2500 artículos del plan en tandas de 1000
+    });
+    it("estado y acción están declaradas para filtrar y ordenar", () => {
+        for (const k of ["estado", "accion"]) {
+            assert.ok(articulosPuesto.filterKeys.includes(k), k);
+            assert.ok(articulosPuesto.sortKeys.includes(k), k);
+        }
     });
 });

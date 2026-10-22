@@ -107,7 +107,21 @@ describe("revisión de vehículos", () => {
         assert.deepEqual([o.id, o.creado], [1, "2026-09-08T11:00:00"]);
         const sin = mapRevisionVehiculoRow({ id: 2, vehiculo_id: 9, informacion_general: "[]", veh_marca: "Toyota", veh_modelo: "Hilux", veh_titulo_propiedad: true, veh_rtv: false, veh_marchamo: null });
         assert.deepEqual([sin.marca, sin.modelo, sin.titulo_propiedad, sin.rtv, sin.marchamo], ["Toyota", "Hilux", "Sí", "No", null]);
-        assert.deepEqual(Object.keys(o).slice(-11), ["modelo", "vin", "uso_vehiculo", "corporativo", "titulo_propiedad", "rtv", "marchamo", "ejecutivo_cuenta", "creado_por", "modificado", "modificado_por"]);
+        assert.deepEqual(Object.keys(o).slice(-14), ["modelo", "vin", "uso_vehiculo", "corporativo", "titulo_propiedad", "rtv", "marchamo", "titulo_propiedad_num", "rtv_num", "marchamo_num", "ejecutivo_cuenta", "creado_por", "modificado", "modificado_por"]);
+    });
+    it("VIN y datos de los documentos (texto): los de la revisión y, si faltan, los del vehículo vinculado (issues #139 y #143)", () => {
+        const general = JSON.stringify([
+            { key: "vin", label: "VIN", kind: "text", value: "" },
+            { key: "rtv_num", label: "RTV (dato)", kind: "text", value: "RTV-77" },
+        ]);
+        const o = mapRevisionVehiculoRow({ id: 3, vehiculo_id: 9, informacion_general: general, veh_vin: "VINVEH", veh_titulo_propiedad_num: "TP-1", veh_rtv_num: "RTV-OTRO", veh_marchamo_num: null });
+        assert.deepEqual([o.vin, o.titulo_propiedad_num, o.rtv_num, o.marchamo_num], ["VINVEH", "TP-1", "RTV-77", null]);
+        const sin = mapRevisionVehiculoRow({ id: 4, informacion_general: "[]" });
+        assert.deepEqual([sin.vin, sin.titulo_propiedad_num, sin.rtv_num, sin.marchamo_num], [null, null, null, null]);
+        for (const k of ["vin", "titulo_propiedad_num", "rtv_num", "marchamo_num"]) {
+            assert.ok(revisionVehiculos.filterKeys.includes(k), k);
+            assert.ok(revisionVehiculos.sortKeys.includes(k), k);
+        }
     });
     it("uso del vehículo vinculado, en lote; si la base falla la revisión queda sin uso", async () => {
         const db = fakeDb({

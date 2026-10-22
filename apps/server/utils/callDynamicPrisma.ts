@@ -2,6 +2,43 @@
 import { NextRequest } from "next/server";
 import axios from "axios";
 import { resolveUserAccessToken } from "./resolveUserAccessToken";
+import { actorFromRequest } from "./auditFields";
+import { llaveroDesdeEntorno, registrarEvidencia, TABLAS_CON_EVIDENCIA } from "./evidencia";
+
+const EVIDENCE_HEADERS = ["x-guardify-device", "x-device-uid", "x-evidence-lat", "x-evidence-lng", "x-evidence-at", "x-evidence-perm"] as const;
+
+/**
+ * Evidencia de la acción (issue #153): tras un alta o edición correcta en una tabla con evidencia deja una fila de solo inserción en
+ * `c_evidencia_registro`. Se hace aquí, en el único punto por donde pasan todas las escrituras de las rutas, en vez de repetirlo en cada módulo.
+ * Solo para peticiones de un usuario autenticado; nunca hace fallar la acción ya guardada.
+ */
+async function registrarEvidenciaDeEscritura(req: NextRequest, data: Record<string, any>, resultado: unknown, shouldVerifyAccessToken: boolean) {
+    try {
+    if (!shouldVerifyAccessToken || !TABLAS_CON_EVIDENCIA.has(String(data?.table ?? ""))) return;
+    const llavero = llaveroDesdeEntorno(); // clave del sello; sin ella se registra igual, solo con la huella
+    const actor = actorFromRequest(req as any);
+    if (!actor) return;
+    const headers: Record<string, string | undefined> = {};
+    for (const h of EVIDENCE_HEADERS) headers[h] = req.headers.get(h) ?? undefined;
+    await registrarEvidencia({
+        tabla: String(data.table),
+        action: String(data.action ?? ""),
+        operation: data.operation,
+        where: data.where,
+        data: (data.data ?? data.body ?? null) as Record<string, unknown> | null,
+        resultado,
+        headers,
+        actor: actor as any,
+        llavero,
+        escribir: async (fila) => {
+            await callDynamicPrisma({ req, shouldVerifyAccessToken: false, data: { action: "POST", table: "c_evidencia_registro", operation: "create", data: fila, returning: false } });
+        },
+        onError: (e) => console.error("[evidencia] no se pudo registrar:", e instanceof Error ? e.message : e),
+    });
+    } catch (e) {
+        console.error("[evidencia] error preparando la evidencia:", e instanceof Error ? e.message : e);
+    }
+}
 
 type CallDynamicPrismaParams = {
     req: NextRequest;
@@ -85,7 +122,9 @@ export async function callDynamicPrisma({
         if (!payloadData?.status) {
             throw new Error(payloadData?.message || "Error en consulta dinámica");
         }
-        return payloadData.data;
+        const resultado = payloadData.data;
+        await registrarEvidenciaDeEscritura(req, data, resultado, shouldVerifyAccessToken);
+        return resultado;
     } catch (error: any) {
         // Manejar errores de axios
         if (error.response) {

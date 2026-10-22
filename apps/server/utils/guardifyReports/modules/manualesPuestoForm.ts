@@ -62,7 +62,9 @@ export type ManualRaw = {
     /** Empleados vinculados ya con su texto. */
     empleados: (string | null)[];
     /** Una por visualización: { empleado (texto), firma (la manual tal como se guardó), approved } y los vinculados que aún no la ven: { empleado, visto: false }. */
-    visualizaciones: { empleado: string | null; visto: boolean; firma: string | null; approved: boolean | null; /** Cuándo la vio/firmó (creación de la visualización) y la última vez que se tocó (cuando se guardó la firma manual). */ fechaVisto?: string | null; fechaFirma?: string | null }[];
+    visualizaciones: { empleado: string | null; visto: boolean; firma: string | null; approved: boolean | null; /** Cuándo la vio/firmó (creación de la visualización) y la última vez que se tocó (cuando se guardó la firma manual). */ fechaVisto?: string | null; fechaFirma?: string | null; /** Cuándo se le entregó el documento (vínculo con el empleado) y la nota consolidada del quiz (0-100). */ fechaEntrega?: string | null; nota?: number | null }[];
+    /** Firmas y notas de VERSIONES ANTERIORES del documento: se conservan y el detalle las muestra aparte. */
+    anteriores?: { empleado: string | null; version: number; firma: string | null; approved: boolean | null; fechaVisto?: string | null; fechaFirma?: string | null; nota?: number | null }[];
     creadoPor: string | null;
     puestoPrincipal: string | null;
 };
@@ -78,7 +80,7 @@ export function armarRegistro(raw: ManualRaw, ubic: FormRecord["estructura"], fi
     const firma = clasificarFirma(m.firma);
     return {
         id: Number(m.id), variante: null, creado: fmtDt(m.created_at), estructura: ubic,
-        valores: { titulo: txt(m.title), descripcion: txt(m.description), clasificacion: txt(m.classification), creado_por: raw.creadoPor, porcentaje_minimo: minimo },
+        valores: { titulo: txt(m.title), descripcion: txt(m.description), clasificacion: txt(m.classification), creado_por: raw.creadoPor, porcentaje_minimo: minimo, version: Number(m.version ?? 1) },
         listas: {
             puestos: puestos.map((p) => ({ puesto: p })),
             empleados: [...new Set(raw.empleados.filter((x): x is string => !!x))].map((e) => ({ empleado: e })),
@@ -94,6 +96,12 @@ export function armarRegistro(raw: ManualRaw, ubic: FormRecord["estructura"], fi
                 visto: v.visto ? "Sí" : "No", fecha_visto: v.visto ? v.fechaVisto ?? null : null,
                 firmado: txt(v.firma) ? "Sí" : "No", fecha_firma: txt(v.firma) ? v.fechaFirma ?? null : null,
                 firma: celdaFirma(v.firma, firmas), aprobado: estadoAprobado(v),
+                version: Number(m.version ?? 1), fecha_entrega: v.fechaEntrega ?? null, nota: v.nota ?? null,
+            })),
+            // Versiones anteriores del documento: no se pierden al publicar una nueva.
+            visualizacion_anteriores: (raw.anteriores ?? []).map((v) => ({
+                empleado: v.empleado, version: v.version, estado: txt(v.firma) ? "Firmado" : "Visto", fecha_visto: v.fechaVisto ?? null, fecha_firma: txt(v.firma) ? v.fechaFirma ?? null : null,
+                firma: celdaFirma(v.firma, firmas), aprobado: v.approved === true ? "Aprobado" : v.approved === false ? "Reprobado" : hayQuiz ? "Pendiente" : null, nota: v.nota ?? null,
             })),
         },
         firmas: firma ? { firma_responsable: firmas ? firma.imagen : null } : {},
@@ -124,7 +132,7 @@ export const manualesPuestoForm: GuardifyFormModule = {
             d.e_empleados_manual_puesto.findMany({ where: { manual_puesto_id: { in: mids } } }) as Promise<any[]>,
             d.e_empleado_visualizacion_manual_puesto.findMany({
                 where: { manual_puesto_id: { in: mids } },
-                select: { id: true, manual_puesto_id: true, empleado_id: true, nombre_empleado: true, approved: true, firma_empleado_manual: true, created_at: true, updated_at: true },
+                select: { id: true, manual_puesto_id: true, empleado_id: true, nombre_empleado: true, approved: true, firma_empleado_manual: true, created_at: true, updated_at: true, version: true, nota: true },
             }) as Promise<any[]>,
         ]);
         // Los empleados asignados a los puestos de cada manual: a todos les llega; los que no lo han abierto salen como «No visto».
@@ -141,7 +149,14 @@ export const manualesPuestoForm: GuardifyFormModule = {
         return ids.filter((id) => porId.has(id)).map((id) => {
             const m = porId.get(id)!;
             const u = ubic({ empresa: m.empresa_id, cliente: m.cliente_id, division: m.division_id, contrato: m.contrato_id, corpo: m.corpo_id, puesto: m.puesto_id });
-            const vis = vPor.get(id) ?? [];
+            const todasVis = vPor.get(id) ?? [];
+            const versionVigente = Number(m.version ?? 1);
+            const vis = todasVis.filter((v) => Number(v.version ?? 1) === versionVigente);
+            const visAnteriores = todasVis.filter((v) => Number(v.version ?? 1) !== versionVigente);
+            const entregaDe = (empleadoId: unknown) => {
+                const l = (ePor.get(id) ?? []).find((x) => Number(x.empleado_id) === Number(empleadoId));
+                return l ? fmtDt(l.entregado_en ?? l.created_at) : null;
+            };
             const vistos = new Set(vis.map((v) => Number(v.empleado_id)));
             const creador = empleados.get(Number(m.created_by));
             return armarRegistro(
@@ -150,12 +165,13 @@ export const manualesPuestoForm: GuardifyFormModule = {
                     puestos: (pPor.get(id) ?? []).map((l) => puestoTxt(puestos.get(Number(l.puesto_id)))),
                     empleados: (ePor.get(id) ?? []).map((l) => empleadoTxt(empleados.get(Number(l.empleado_id)))),
                     visualizaciones: [
-                        ...vis.map((v) => ({ empleado: empleadoTxt(empleados.get(Number(v.empleado_id))) ?? txt(v.nombre_empleado), visto: true, firma: txt(v.firma_empleado_manual), approved: v.approved ?? null, fechaVisto: fmtDt(v.created_at), fechaFirma: fmtDt(v.updated_at) })),
+                        ...vis.map((v) => ({ empleado: empleadoTxt(empleados.get(Number(v.empleado_id))) ?? txt(v.nombre_empleado), visto: true, firma: txt(v.firma_empleado_manual), approved: v.approved ?? null, fechaVisto: fmtDt(v.created_at), fechaFirma: fmtDt(v.updated_at), fechaEntrega: entregaDe(v.empleado_id), nota: v.nota ?? null })),
                         // Igual que el consolidado: cada empleado vinculado que aún no tiene visualización sale como «No visto».
-                        ...(ePor.get(id) ?? []).filter((l) => !vistos.has(Number(l.empleado_id))).map((l) => ({ empleado: empleadoTxt(empleados.get(Number(l.empleado_id))), visto: false, firma: null, approved: null })),
+                        ...(ePor.get(id) ?? []).filter((l) => !vistos.has(Number(l.empleado_id))).map((l) => ({ empleado: empleadoTxt(empleados.get(Number(l.empleado_id))), visto: false, firma: null, approved: null, fechaEntrega: fmtDt(l.entregado_en ?? l.created_at) })),
                         // Y los que ocupan los puestos del manual y no están vinculados ni lo han abierto.
                         ...asignadosDe(m).filter((e) => !vistos.has(e) && !(ePor.get(id) ?? []).some((l) => Number(l.empleado_id) === e)).map((e) => ({ empleado: empleadoTxt(empleados.get(e)), visto: false, firma: null, approved: null })),
                     ],
+                    anteriores: visAnteriores.map((v) => ({ empleado: empleadoTxt(empleados.get(Number(v.empleado_id))) ?? txt(v.nombre_empleado), version: Number(v.version ?? 1), firma: txt(v.firma_empleado_manual), approved: v.approved ?? null, fechaVisto: fmtDt(v.created_at), fechaFirma: fmtDt(v.updated_at), nota: v.nota ?? null })),
                     creadoPor: empleadoGuion(creador),
                     puestoPrincipal: u.puesto,
                 },

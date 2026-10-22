@@ -35,14 +35,14 @@ describe("manuales de trabajo como formulario", () => {
         const r = armarRegistro(rawArmado(), ubic, false);
         assert.equal(r.variante, null);
         assert.equal(r.creado, "2026-03-10T13:20:00");
-        assert.deepEqual(r.valores, { titulo: "Manual de limpieza", descripcion: "Procedimientos de limpieza diaria.", clasificacion: "Operativo", creado_por: "A1 - Marta Rojas", porcentaje_minimo: 70 });
+        assert.deepEqual(r.valores, { titulo: "Manual de limpieza", descripcion: "Procedimientos de limpieza diaria.", clasificacion: "Operativo", creado_por: "A1 - Marta Rojas", porcentaje_minimo: 70, version: 1 });
         assert.deepEqual(r.listas.puestos, [{ puesto: "P1 - Misceláneo" }, { puesto: "P2 - Jardinero" }]);
         assert.deepEqual(r.listas.cuestionario, [
             { numero: "1", enunciado: "¿Cuál es el horario de entrada?", tipo: "Respuesta corta", puntos: 5, opciones: null },
             { numero: "2", enunciado: "¿Qué equipo se usa para químicos?", tipo: "Selección múltiple", puntos: 10, opciones: "Guantes | Mascarilla | Sandalias" },
         ]);
         assert.deepEqual(r.listas.visualizacion, [
-            { empleado: "E1 Ana Mora Soto", estado: "Firmado", visto: "Sí", fecha_visto: null, firmado: "Sí", fecha_firma: null, firma: "Firmada", aprobado: "Aprobado" }, { empleado: "E3 Eva Soto", estado: "Visto", visto: "Sí", fecha_visto: null, firmado: "No", fecha_firma: null, firma: null, aprobado: "Reprobado" }, { empleado: "E2 Luis Vega Díaz", estado: "No visto", visto: "No", fecha_visto: null, firmado: "No", fecha_firma: null, firma: null, aprobado: "Pendiente" },
+            { empleado: "E1 Ana Mora Soto", estado: "Firmado", visto: "Sí", fecha_visto: null, firmado: "Sí", fecha_firma: null, firma: "Firmada", aprobado: "Aprobado", version: 1, fecha_entrega: null, nota: null }, { empleado: "E3 Eva Soto", estado: "Visto", visto: "Sí", fecha_visto: null, firmado: "No", fecha_firma: null, firma: null, aprobado: "Reprobado", version: 1, fecha_entrega: null, nota: null }, { empleado: "E2 Luis Vega Díaz", estado: "No visto", visto: "No", fecha_visto: null, firmado: "No", fecha_firma: null, firma: null, aprobado: "Pendiente", version: 1, fecha_entrega: null, nota: null },
         ]);
         assert.deepEqual(r.hier, { empresa: 9, cliente: 2, division: 0, contrato: 4, corpo: 5, puesto: 6 });
     });
@@ -101,7 +101,7 @@ describe("manuales de trabajo como formulario", () => {
         assert.deepEqual(m8.listas.puestos, [{ puesto: "P1 - Misceláneo" }, { puesto: "P70 - Recepción" }]);
         assert.deepEqual(m8.listas.empleados, [{ empleado: "E1 Ana Mora Soto" }, { empleado: "E2 Luis Vega" }]);
         assert.deepEqual(m8.listas.visualizacion, [
-            { empleado: "E1 Ana Mora Soto", estado: "Firmado", visto: "Sí", fecha_visto: null, firmado: "Sí", fecha_firma: null, firma: "Firmada", aprobado: "Aprobado" }, { empleado: "E2 Luis Vega", estado: "No visto", visto: "No", fecha_visto: null, firmado: "No", fecha_firma: null, firma: null, aprobado: "Pendiente" },
+            { empleado: "E1 Ana Mora Soto", estado: "Firmado", visto: "Sí", fecha_visto: null, firmado: "Sí", fecha_firma: null, firma: "Firmada", aprobado: "Aprobado", version: 1, fecha_entrega: null, nota: null }, { empleado: "E2 Luis Vega", estado: "No visto", visto: "No", fecha_visto: null, firmado: "No", fecha_firma: null, firma: null, aprobado: "Pendiente", version: 1, fecha_entrega: null, nota: null },
         ]);
         assert.equal(m8.valores.creado_por, "A1 - Marta Rojas");
         assert.equal(out[0]!.listas.visualizacion.length, 0); // las visualizaciones son del manual 8
@@ -159,5 +159,34 @@ describe("manuales de trabajo como formulario", () => {
         const filas = m!.listas.visualizacion!;
         // Ana ya lo abrió; Luis lo tiene asignado y no lo ha visto; Eva está dada de baja y no cuenta.
         assert.deepEqual(filas.map((f) => [f.empleado, f.estado]), [["E1 Ana Mora Soto", "Visto"], ["E2 Luis Vega", "No visto"]]);
+    });
+});
+
+describe("detalle por versión, fecha de entrega y nota (issues #154, #155 y #156)", () => {
+    it("cada empleado trae la fecha de entrega, la versión y su nota consolidada", () => {
+        const r = armarRegistro(
+            rawArmado({
+                manual: { ...manual(), version: 3 },
+                visualizaciones: [
+                    { empleado: "E1", visto: true, firma: SAMPLE_PNG, approved: true, fechaVisto: "2026-10-02T08:00:00", fechaFirma: "2026-10-02T08:05:00", fechaEntrega: "2026-10-01T06:00:00", nota: 92.5 },
+                    { empleado: "E2", visto: false, firma: null, approved: null, fechaEntrega: "2026-10-01T06:00:00" },
+                ],
+            }),
+            ubic,
+            false,
+        );
+        assert.equal(r.valores.version, 3);
+        assert.deepEqual(r.listas.visualizacion!.map((v) => [v.empleado, v.version, v.fecha_entrega, v.nota]), [["E1", 3, "2026-10-01T06:00:00", 92.5], ["E2", 3, "2026-10-01T06:00:00", null]]);
+    });
+    it("las firmas y notas de versiones anteriores se conservan en su propia lista, con su versión", () => {
+        const r = armarRegistro(
+            rawArmado({ manual: { ...manual(), version: 2 }, anteriores: [{ empleado: "E1", version: 1, firma: SAMPLE_PNG, approved: true, fechaVisto: "2026-09-01T08:00:00", fechaFirma: "2026-09-01T08:05:00", nota: 88 }] }),
+            ubic,
+            true,
+        );
+        const ant = r.listas.visualizacion_anteriores!;
+        assert.deepEqual(ant.map((a) => [a.empleado, a.version, a.estado, a.aprobado, a.nota, a.fecha_firma]), [["E1", 1, "Firmado", "Aprobado", 88, "2026-09-01T08:05:00"]]);
+        assert.equal(ant[0]!.firma, SAMPLE_PNG);
+        assert.deepEqual(armarRegistro(rawArmado(), ubic, false).listas.visualizacion_anteriores, []);
     });
 });

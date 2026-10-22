@@ -292,6 +292,11 @@ export type RegistroVehiculoCorporativoReportRow = {
     titulo_propiedad_txt: string;
     rtv_txt: string;
     marchamo_txt: string;
+    /** VIN o chasis y datos (texto) de los documentos; vacíos si no se capturaron. */
+    vin: string;
+    titulo_propiedad_num: string;
+    rtv_num: string;
+    marchamo_num: string;
     activo_txt: string;
     created_at_txt: string;
     /** Valor crudo de `created_at` (sin formatear) — usado solo en la hoja principal para separar fecha/hora. */
@@ -522,6 +527,10 @@ async function queryRegistroVehiculosCorporativosRowsInner(
             titulo_propiedad_txt: fmtBool(v.titulo_propiedad),
             rtv_txt: fmtBool(v.rtv),
             marchamo_txt: fmtBool(v.marchamo),
+            vin: v.vin ?? "",
+            titulo_propiedad_num: v.titulo_propiedad_num ?? "",
+            rtv_num: v.rtv_num ?? "",
+            marchamo_num: v.marchamo_num ?? "",
             activo_txt: fmtBool(v.isActive),
             created_at_txt: fmtDateTime(v.created_at),
             created_at: v.created_at,
@@ -667,6 +676,7 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
         "Tipo de vehículo",
         "Marca",
         "Modelo",
+        "VIN o chasis",
         "Año",
         "Kilometraje",
         "Próximo cambio de aceite",
@@ -676,6 +686,9 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
         "Título de propiedad",
         "RTV",
         "Marchamo",
+        "Título de propiedad (dato)",
+        "RTV (dato)",
+        "Marchamo (dato)",
         "Activo",
         "Fecha de creación",
         "Hora de creación",
@@ -771,6 +784,7 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
             [mainHeaders.indexOf("Tipo de vehículo") + 1]: r.tipo,
             [mainHeaders.indexOf("Marca") + 1]: excelCellString(r.marca),
             [mainHeaders.indexOf("Modelo") + 1]: excelCellString(r.modelo),
+            [mainHeaders.indexOf("VIN o chasis") + 1]: excelCellString(r.vin),
             [mainHeaders.indexOf("Año") + 1]: fmtInt(r.anno),
             [mainHeaders.indexOf("Kilometraje") + 1]: fmtInt(r.kilometraje),
             [mainHeaders.indexOf("Próximo cambio de aceite") + 1]: fmtInt(r.prox_cambio_aceite),
@@ -780,6 +794,9 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
             [mainHeaders.indexOf("Título de propiedad") + 1]: r.titulo_propiedad_txt,
             [mainHeaders.indexOf("RTV") + 1]: r.rtv_txt,
             [mainHeaders.indexOf("Marchamo") + 1]: r.marchamo_txt,
+            [mainHeaders.indexOf("Título de propiedad (dato)") + 1]: excelCellString(r.titulo_propiedad_num),
+            [mainHeaders.indexOf("RTV (dato)") + 1]: excelCellString(r.rtv_num),
+            [mainHeaders.indexOf("Marchamo (dato)") + 1]: excelCellString(r.marchamo_num),
             [mainHeaders.indexOf("Activo") + 1]: r.activo_txt,
             [mainHeaders.indexOf("Fecha de creación") + 1]: formatDateOnlyDMY(r.created_at),
             [mainHeaders.indexOf("Hora de creación") + 1]: formatTimeOnlyHMS(r.created_at),
@@ -843,7 +860,7 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
         ...[
             12,
             28, 24, 22, 28, 24, 28,
-            14, 14, 14, 16, 8, 12, 14, 12, 14, 24, 12, 8, 10, 8,
+            14, 14, 14, 16, 20, 8, 12, 14, 12, 14, 24, 12, 8, 10, 18, 18, 18, 8,
             14, 12, 16, 16, 20,
             16, 22,
             22, 18, 14, 12, 14, 12, 14, 12, 12, 12, 22, 18, 18,

@@ -6,6 +6,8 @@ import { reportError } from "../../../utils/reportError";
 
 
 import { auditCreateFields } from "../../../utils/auditFields";
+import { corregirHorasManualLegado, esManualLegado } from "../../../utils/lunchManualLegacy";
+import { whereAlmuerzoDuplicado } from "../../../utils/lunchDuplicate";
 export async function POST(req: NextRequest) {
     try {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -18,6 +20,7 @@ export async function POST(req: NextRequest) {
             fin,
             pausas,
             es_manual,
+            formato_hora,
             firma_empleado,
             marca_id: bodyMarcaId,
             empresa_id: bodyEmpresaId,
@@ -93,8 +96,20 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
         }
 
-        const inicioDate = new Date(inicio);
-        const finDate = new Date(fin);
+        // Un almuerzo manual sin la marca de formato viene de la versión anterior de la app (o de una acción que quedó en cola sin conexión):
+        // sus horas llegan 6 horas adelantadas (ver utils/lunchManualLegacy.ts).
+        let pausasToSave = String(pausas || "[]");
+        let inicioToUse: string | Date = inicio;
+        let finToUse: string | Date = fin;
+        if (esManualLegado(es_manual, formato_hora)) {
+            const fixed = corregirHorasManualLegado({ inicio, fin, pausas: pausasToSave });
+            inicioToUse = fixed.inicio;
+            finToUse = fixed.fin;
+            pausasToSave = fixed.pausas;
+        }
+
+        const inicioDate = new Date(inicioToUse);
+        const finDate = new Date(finToUse);
         if (isNaN(inicioDate.getTime()) || isNaN(finDate.getTime())) {
             await reportError(req, "api/lunch-time", "POST", 400, "Fechas de inicio/fin inválidas");
             return NextResponse.json({ status: false, message: "Fechas de inicio/fin inválidas" }, { status: 400 });
@@ -102,7 +117,7 @@ export async function POST(req: NextRequest) {
 
         let minutosPausas = 0;
         try {
-            const pausasParsed = JSON.parse(String(pausas || "[]"));
+            const pausasParsed = JSON.parse(pausasToSave);
             const pausasArray = Array.isArray(pausasParsed) ? pausasParsed : [];
             for (const p of pausasArray) {
                 const startRaw = (p.startTime ?? p.inicio ?? p.start) as unknown;
@@ -124,6 +139,21 @@ export async function POST(req: NextRequest) {
         const empleadoNombre = `${empleado.nombre || ""} ${empleado.primer_apellido || ""} ${empleado.segundo_apellido || ""}`.trim();
         const cedulaEmpleado = String(empleado.cedula || "");
 
+        // Idempotencia: si ya está este mismo almuerzo (la app reenvió la acción), se responde bien sin crear otro.
+        const yaRegistrado = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_empleado_almuerzo",
+                operation: "findFirst",
+                where: whereAlmuerzoDuplicado({ empleadoId: empleadoIdToUse, marcaId, inicio: inicioDate, fin: finDate }),
+                select: { id: true },
+            },
+        });
+        if (yaRegistrado) {
+            return NextResponse.json({ status: true, message: "Almuerzo registrado correctamente", duplicado: true }, { status: 200 });
+        }
+
         await callDynamicPrisma({
             req,
             data: {
@@ -138,7 +168,7 @@ export async function POST(req: NextRequest) {
                     firma_empleado,
                     inicio: inicioDate.toISOString(),
                     fin: finDate.toISOString(),
-                    pausas: String(pausas || "[]"),
+                    pausas: pausasToSave,
                     es_manual: Boolean(es_manual),
                     marca_id: marcaId,
                     empresa_id: empresaId,
@@ -149,7 +179,8 @@ export async function POST(req: NextRequest) {
                     puesto_id: puestoId,
                     isActive: true,
                 },
-                returning: false
+                // Solo el id: lo necesita la evidencia de la acción (utils/evidencia.ts) y evita devolver la firma completa.
+                select: { id: true },
             }
         });
         return NextResponse.json({ status: true, message: "Almuerzo registrado correctamente" }, { status: 200 });

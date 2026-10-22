@@ -6,6 +6,9 @@ import path from "path";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { reportError } from "../../../../utils/reportError";
 import { auditUpdateFields } from "../../../../utils/auditFields";
+import { toZonedTime } from "date-fns-tz";
+import { dynDesdeRequest } from "../../../../utils/documentos/dyn";
+import { publicarNuevaVersion } from "../../../../utils/documentos/service";
 
 type ManualFileInput = {
     type: string;
@@ -60,8 +63,38 @@ export async function PUT(
             description,
             firma_responsable,
             filesToDelete,
-            newFiles
+            newFiles,
+            nueva_version,
+            quiz,
         } = await req.json();
+
+        // Versión nueva (issue #155): NO borra nada. La versión vigente pasa al histórico con sus firmas y notas, los archivos quitados se retiran desde la
+        // versión nueva (siguen guardados) y los empleados deben firmar la nueva. Sin `nueva_version` es una corrección menor de la misma versión.
+        if (nueva_version === true) {
+            let nuevosArchivos: ManualFileInput[] = [];
+            if (newFiles) {
+                try {
+                    nuevosArchivos = JSON.parse(newFiles) as ManualFileInput[];
+                } catch {
+                    await reportError(req, "api/job-manuals/[id]", "PUT", 400, "Formato de archivos inválido");
+                    return NextResponse.json({ status: false, message: "Formato de archivos inválido" }, { status: 400 });
+                }
+            }
+            const subidos = nuevosArchivos.length > 0
+                ? await uploadDynamicFiles({ req, folderPath: `job-manuals/${id}`, files: nuevosArchivos.map((file) => ({ type: file.type, extension: file.extension, file_base64: file.file_base64 })), shouldVerifyAccessToken: true })
+                : null;
+            const resultado = await publicarNuevaVersion(dynDesdeRequest(req), manualObj, {
+                title: title ?? undefined,
+                description: description ?? undefined,
+                ...(typeof quiz === "string" ? { quiz: quiz.trim() ? quiz : null } : {}),
+                archivosRetirar: Array.isArray(filesToDelete) ? filesToDelete.map(Number) : [],
+                archivosNuevos: (Array.isArray(subidos?.files) ? subidos.files : []).map((u: any) => ({ name: u.name, type: u.type, original_name: u.original_name || u.name, extension: u.extension })),
+                publicadoPor: String(payload?.id ?? ""),
+                ahoraIso: (toZonedTime(new Date(), "America/Costa_Rica") as Date).toISOString(),
+            });
+            await callDynamicPrisma({ req, data: { action: "UPDATE", table: "e_manual_puesto", operation: "update", where: { id }, data: { ...(firma_responsable ? { firma: firma_responsable } : {}), ...auditUpdateFields(payload) } } });
+            return NextResponse.json({ status: true, message: "Versión nueva publicada", version: resultado.version }, { status: 200 });
+        }
 
         await callDynamicPrisma({
             req,

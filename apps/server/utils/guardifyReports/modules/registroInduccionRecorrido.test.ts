@@ -45,7 +45,7 @@ const P = { from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: n
 const registro = (id: number, contrato: number) => ({
     id, empresa_id: 1, cliente_id: 5, division_id: 3, contrato_id: contrato, corpo_id: 10, puesto_id: 100 + id, plaza_id: null,
     fecha: new Date("2026-09-10T08:30:00Z"), created_at: new Date("2026-09-10T09:00:00Z"), created_by: "7", isActive: true,
-    renglon_edificio: "Torre A", supervisor_cliente: "Pedro", supervisor_corporacion: "Luis",
+    renglon_edificio: "Torre A", tipo_capacitacion: "Presencial", supervisor_cliente: "Pedro", supervisor_corporacion: "Luis",
     temas_desarrollados: JSON.stringify([{ tema: "Limpieza", respuesta: "Sí" }, { tema: "Seguridad", respuesta: "No" }]),
     aspectos_especificos: JSON.stringify([{ aspecto: "Extintores" }]),
     firma_supervisor: "data:image/png;base64,AAAA", firma_responsable: "BBBB",
@@ -69,6 +69,7 @@ describe("registro de inducción y recorrido", () => {
         assert.equal(o.temas, "Limpieza; Seguridad");
         assert.equal(o.aspectos, "Extintores");
         assert.equal(o.participantes, 2);
+        assert.equal(o.tipo_capacitacion, "Presencial");
         assert.equal(o.nombres_participantes, "Juan Pérez (1-111); Sin cédula");
         const json = JSON.stringify(o);
         assert.equal(json.includes("base64"), false);
@@ -121,6 +122,25 @@ describe("registro de inducción y recorrido", () => {
         const grande = await codigosPorCedula(db, Array.from({ length: 2500 }, (_, i) => String(i + 1)));
         assert.equal(grande.size, 2);
         assert.deepEqual(calls.slice(1), [1000, 1000, 500]);
+    });
+    it("el tipo de capacitación se filtra y ordena, y es nulo en registros anteriores", () => {
+        assert.ok(registroInduccionRecorrido.filterKeys.includes("tipo_capacitacion"));
+        assert.ok(registroInduccionRecorrido.sortKeys.includes("tipo_capacitacion"));
+        assert.equal(mapInduccionRecorridoRow({ ...registro(3, 20), tipo_capacitacion: "  Virtual " }).tipo_capacitacion, "Virtual");
+        assert.equal(mapInduccionRecorridoRow({ ...registro(4, 20), tipo_capacitacion: undefined }).tipo_capacitacion, null);
+        assert.equal(mapInduccionRecorridoRow({ ...registro(5, 20), tipo_capacitacion: "" }).tipo_capacitacion, null);
+    });
+    it("«empleado» son los participantes: mismo texto que nombres_participantes, filtrable, buscable y ordenable", () => {
+        const o = mapInduccionRecorridoRow(
+            { ...registro(6, 20), participantes: JSON.stringify([{ nombre_completo: "Juan Pérez", cedula: "1-111" }, { nombre_completo: "Ana Mora", cedula: "2-222" }]) },
+            new Map([["1-111", "E5"]]),
+        );
+        assert.equal(o.empleado, "E5 - Juan Pérez (1-111); Ana Mora (2-222)");
+        assert.equal(o.empleado, o.nombres_participantes);
+        assert.ok(registroInduccionRecorrido.filterKeys.includes("empleado"));
+        assert.ok(registroInduccionRecorrido.searchKeys.includes("empleado"));
+        assert.ok(registroInduccionRecorrido.sortKeys.includes("empleado"));
+        assert.equal(mapInduccionRecorridoRow({ ...registro(7, 20), participantes: null }).empleado, null);
     });
     it("una fila casi vacía no rompe y recorta los textos largos", () => {
         const o = mapInduccionRecorridoRow({ id: 2, empresa_nombre: "1", empresa_id: 1, temas_desarrollados: null, participantes: "no es json", renglon_edificio: "x".repeat(900) });

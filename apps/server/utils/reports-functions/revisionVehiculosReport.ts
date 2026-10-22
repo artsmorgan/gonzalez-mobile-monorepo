@@ -391,7 +391,7 @@ async function appendKvRows(
         }
         const label = excelCellString(item.label ?? item.key ?? "");
         const key = String(item.key ?? "").toLowerCase();
-        if (bicicleta && (key === "kilometraje" || key === "prox_cambio_aceite" || key === "rtv" || key === "marchamo")) {
+        if (bicicleta && (key === "kilometraje" || key === "prox_cambio_aceite" || key === "rtv" || key === "marchamo" || key === "titulo_propiedad_num" || key === "rtv_num" || key === "marchamo_num")) {
             continue;
         }
         if (item.kind === "signature") {

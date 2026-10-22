@@ -198,6 +198,9 @@ import {
   pendingActionsRequirePlanillasToken,
 } from './hooks/planillasPendingActions';
 import getHoraAccion from './hooks/getHoraAccion';
+import { removeCurrentMarcaIfExpired } from './hooks/currentMarcaExpiry';
+import DeviceStatusModal from './components/DeviceStatusModal';
+import GuardifyGate from './components/GuardifyGate';
 import authedFetch from './hooks/authedFetch';
 import updateServerTime from './hooks/updateServerTime';
 import { fetchAndPersistModulesRelease } from './hooks/getModulesRelease';
@@ -681,6 +684,13 @@ function RootNavigator() {
  */
 const SYNC_CACHES_GLOBAL_KEY = '__MONITOREAPP_SYNC_CACHES_SLOT__' as const;
 type SyncCachesSlot = { inFlight: Promise<void> | null };
+/**
+ * Corrida en curso de la sincronización de `lunchtime_actions`. Esa cola la sincronizan DOS caminos que no se esperan entre sí: la sincronización
+ * global (`syncPendingActionsIfOnline`, protegida por `getSyncCachesSlot`) y el temporizador de almuerzo (`check_conection_time`, que reintenta la
+ * cola por su cuenta). Sin este candado ambos leían la misma acción antes de que el primero la quitara y la enviaban dos veces (almuerzos duplicados).
+ */
+let lunchQueueSyncInFlight: Promise<void> | null = null;
+
 function getSyncCachesSlot(): SyncCachesSlot {
   const g = globalThis as unknown as Record<string, SyncCachesSlot>;
   if (!g[SYNC_CACHES_GLOBAL_KEY]) {
@@ -1472,6 +1482,8 @@ function AppContent() {
             quizAnswear: action.quizAnswear ?? null,
             files: filesHydrated,
             firmaEmpleadoManual: firmaEmpleadoManualForSign,
+            // Versión que el empleado vio al firmar (una acción en cola anterior a las versiones no la trae: el servidor usa la vigente).
+            version: (action as any).version ?? null,
             refreshAccessToken,
             logout,
             marcaId: action.marcaId,
@@ -1575,6 +1587,7 @@ function AppContent() {
             quizAnswear: null,
             files: null,
             firmaEmpleadoManual: firmaEmpleadoManualForAuto,
+            version: (action as any).version ?? null,
             refreshAccessToken,
             logout,
             marcaId: action.marcaId,
@@ -1652,6 +1665,7 @@ function AppContent() {
             marcaId: action.marcaId,
             field: action.field,
             value: action.value ?? null,
+            version: (action as any).version ?? null,
             refreshAccessToken,
             logout,
           });
@@ -1768,6 +1782,9 @@ function AppContent() {
             marcaId: action.marcaId,
             empleadoId: action.empleadoId,
             approved: action.approved,
+            // La nota se guarda con el desglose con que se calificó (también si la calificación se hizo sin conexión).
+            score: (action as any).score ?? null,
+            version: (action as any).version ?? null,
             refreshAccessToken,
             logout,
           });
@@ -4044,9 +4061,11 @@ function AppContent() {
     }
   };
 
-  const checkLunchTimeActionsCache = async () => {
+  const checkLunchTimeActionsCache = async (): Promise<void> => {
     if (!employee) return;
-
+    // Si ya hay una corrida en curso (de la sincronización global o del temporizador) esa misma sirve: no se vuelve a leer ni a enviar la cola.
+    if (lunchQueueSyncInFlight) return lunchQueueSyncInFlight;
+    lunchQueueSyncInFlight = (async () => {
     const actionsStr = await AsyncStorage.getItem('lunchtime_actions');
     if (!actionsStr) return;
 
@@ -4081,6 +4100,10 @@ function AppContent() {
     if (actions.length === 0) {
       await AsyncStorage.removeItem('lunchtime_actions');
     }
+    })().finally(() => {
+      lunchQueueSyncInFlight = null;
+    });
+    return lunchQueueSyncInFlight;
   }
 
   const checkNotesActionsCache = async () => {
@@ -9537,6 +9560,8 @@ function AppContent() {
     // Si no existe marca activa, forzar flujo de marcado de ingreso/salida.
     // Se evita redirigir cuando ya estamos en esa pantalla.
     try {
+      // Turno que terminó hace más de N horas (nomenclador, hora de getHoraAccion): se elimina del almacenamiento.
+      await removeCurrentMarcaIfExpired();
       const currentMarca = await AsyncStorage.getItem('current_marca');
       if (!currentMarca && navigationRef.current && employee?.id != null) {
         const currentRoute = navigationRef.current?.getCurrentRoute?.()?.name;
@@ -10034,6 +10059,8 @@ function AppContent() {
           onRequestClose={dismissHierarchyUpdateOverlayOnly}
           message="Actualizando jerarquía, no cierre la aplicación"
         />
+        <DeviceStatusModal logout={logout} />
+        <GuardifyGate logout={logout} isAuthenticated={!!accessToken} cedula={employee?.cedula ? String(employee.cedula) : null} />
         <PlanillasPasswordRevalidationModal
           visible={showPlanillasRevalidationModal}
           refreshAccessToken={refreshAccessToken}

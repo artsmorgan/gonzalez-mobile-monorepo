@@ -27,6 +27,16 @@ export type FormRecord = {
     firmas: Record<string, string | null>;
     /** Claves de las firmas que el registro SÍ tiene (se informa aunque no se pidan las imágenes). */
     firmasPresentes: string[];
+    /** Evidencia de la acción (issue #153), opcional: `contenido` es lo que se firmó, tal cual, y Guardify recalcula la huella y la compara con `firma`. */
+    evidencia?: {
+        dispositivo: string | null;
+        latitud: number | null;
+        longitud: number | null;
+        firma: string;
+        cedula: string | null;
+        fecha: string;
+        contenido: Record<string, unknown>;
+    };
     /** Ubicación por ids para aplicar el alcance; no sale en la respuesta. */
     hier: Hierarchy;
 };

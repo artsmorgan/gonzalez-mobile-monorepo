@@ -69,6 +69,15 @@ export function mapInduccionRecorridoRow(r: any, codigos?: Map<string, string>):
     const temas = parseArr(r.temas_desarrollados);
     const aspectos = parseArr(r.aspectos_especificos);
     const participantes = parseArr(r.participantes);
+    const nombresParticipantes = joinTxt(
+        participantes.map((p: any) => {
+            const n = txt(p?.nombre_completo);
+            const c = txt(p?.cedula);
+            const cod = c ? codigos?.get(c) : undefined;
+            const base = n && c ? `${n} (${c})` : n ?? c;
+            return base && cod ? `${cod} - ${base}` : base;
+        }),
+    );
     return {
         id: Number(r.id),
         creado: fmtDt(r.created_at),
@@ -81,21 +90,16 @@ export function mapInduccionRecorridoRow(r: any, codigos?: Map<string, string>):
         puesto: place(r.puesto_nombre, r.puesto_id),
         plaza: place(r.plaza_nombre, r.plaza_id),
         renglon_edificio: clip(r.renglon_edificio),
+        tipo_capacitacion: txt(r.tipo_capacitacion),
         supervisor_cliente: clip(r.supervisor_cliente),
         supervisor_corporacion: clip(r.supervisor_corporacion),
         responsable: txt(r.created_by_nombre),
         temas: joinTxt(temas.map((t: any) => t?.tema)),
         aspectos: joinTxt(aspectos.map((a: any) => a?.aspecto)),
         participantes: participantes.length,
-        nombres_participantes: joinTxt(
-            participantes.map((p: any) => {
-                const n = txt(p?.nombre_completo);
-                const c = txt(p?.cedula);
-                const cod = c ? codigos?.get(c) : undefined;
-                const base = n && c ? `${n} (${c})` : n ?? c;
-                return base && cod ? `${cod} - ${base}` : base;
-            }),
-        ),
+        nombres_participantes: nombresParticipantes,
+        // «Empleado» del filtro del cliente (issue #142) son los participantes: mismo texto que `nombres_participantes`, con el nombre que pide el filtro.
+        empleado: nombresParticipantes,
         ejecutivo_cuenta: txt(r.ejecutivo_cuenta),
         creado_por: txt(r.creado_por),
         modificado: fmtDt(r.modificado),
@@ -111,9 +115,9 @@ export function mapInduccionRecorridoRow(r: any, codigos?: Map<string, string>):
 export const registroInduccionRecorrido: GuardifyReportModule = {
     id: "registro_induccion_recorrido",
     supportsScope: true,
-    searchKeys: ["responsable", "nombres_participantes", "supervisor_cliente", "supervisor_corporacion", "contrato", "sucursal", "puesto", "cliente"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "responsable", "nombres_participantes", "ejecutivo_cuenta", "creado_por", "modificado_por"],
-    sortKeys: ["creado", "fecha_visita", "empresa", "cliente", "contrato", "sucursal", "puesto", "responsable", "participantes"],
+    searchKeys: ["responsable", "nombres_participantes", "empleado", "supervisor_cliente", "supervisor_corporacion", "contrato", "sucursal", "puesto", "cliente"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "responsable", "tipo_capacitacion", "empleado", "nombres_participantes", "ejecutivo_cuenta", "creado_por", "modificado_por"],
+    sortKeys: ["creado", "fecha_visita", "empresa", "cliente", "contrato", "sucursal", "puesto", "responsable", "tipo_capacitacion", "empleado", "participantes"],
     defaultSort: "creado",
     form: registroInduccionRecorridoForm,
     async load(db, p) {

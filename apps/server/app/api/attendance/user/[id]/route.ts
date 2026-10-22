@@ -8,6 +8,8 @@ import { getMonitoringPreviousMinutes } from "../../../../../utils/getMonitoring
 import { getMonitoringPostMinutes } from "../../../../../utils/getMonitoringPostMinutes";
 import { getTiempoGraciaMarcarSalida } from "../../../../../utils/getTiempoGraciaMarcarSalida";
 import { getValidateGpsSalida } from "../../../../../utils/getValidateGpsSalida";
+import { getHorasEliminarMarcaTrasSalida } from "../../../../../utils/getHorasEliminarMarcaTrasSalida";
+import { marcaCaducada } from "../../../../../utils/marcaCaducada";
 import { reportError } from "../../../../../utils/reportError";
 import { buildMarcaCandidata, resolverConflictoDeMarcas } from "../../../../../utils/resolveMarcaConflicto";
 import dotenv from "dotenv";
@@ -55,6 +57,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const monitoringPostMinutes = await getMonitoringPostMinutes(req);
         const tiempoGraciaMarcarSalida = await getTiempoGraciaMarcarSalida(req);
         const validateGpsSalida = await getValidateGpsSalida(req);
+        const horasEliminarMarca = await getHorasEliminarMarcaTrasSalida(req);
         const nowPlusMonitoringWindow = new Date(now.getTime() + monitoringPreviousMinutes * 60 * 1000);
         const currentDate = new Date(now.toISOString().split("T")[0]);
         const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
@@ -238,6 +241,25 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         marcaDia = await resolverConflictoMarcaDia(marcaDia);
 
+        // Turno que se inició y terminó hace más de N horas (nomenclador «horas_eliminar_marca_tras_salida», hora de CR): ya no es el turno
+        // actual. Sin esto, un turno sin cerrar seguiría siendo «la última marca» y la app ofrecería almuerzo y demás acciones del día anterior.
+        if (marcaCaducada(marcaDia, now.getTime(), horasEliminarMarca)) {
+            return NextResponse.json(
+                {
+                    status: false,
+                    no_active_marca: true,
+                    current_time: currentTime,
+                    monitoring_previous_minutes: monitoringPreviousMinutes,
+                    monitoring_post_minutes: monitoringPostMinutes,
+                    tiempo_gracia_marcar_salida: tiempoGraciaMarcarSalida,
+                    validate_gps_salida: validateGpsSalida,
+                    horas_eliminar_marca_tras_salida: horasEliminarMarca,
+                    message: `No tienes un turno activo: tu último turno terminó hace más de ${horasEliminarMarca} hora(s).`,
+                },
+                { status: 200 }
+            );
+        }
+
         if (!marcaDia.empresa_id) {
             await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró la empresa");
             return NextResponse.json({ status: false, message: "No se encontró la empresa" }, { status: 404 });
@@ -402,6 +424,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     monitoring_post_minutes: monitoringPostMinutes,
                     tiempo_gracia_marcar_salida: tiempoGraciaMarcarSalida,
                     validate_gps_salida: validateGpsSalida,
+                    horas_eliminar_marca_tras_salida: horasEliminarMarca,
                     is_salida_anticipada: isSalidaAnticipada,
                     message,
                     ...extra,
@@ -547,6 +570,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             monitoring_post_minutes: monitoringPostMinutes,
             tiempo_gracia_marcar_salida: tiempoGraciaMarcarSalida,
             validate_gps_salida: validateGpsSalida,
+            horas_eliminar_marca_tras_salida: horasEliminarMarca,
             change_available,
             is_late,
             is_salida_anticipada: isSalidaAnticipada,

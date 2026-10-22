@@ -9,6 +9,7 @@ import { mapActaEntregaImagesForClient } from '../mapActaEntregaImagesForClient'
 import { reportError } from '../../../../utils/reportError';
 
 import { auditUpdateFields } from "../../../../utils/auditFields";
+import { crearConConsecutivo, formatConsecutivoActa, siguienteConsecutivoActa } from "../../../../utils/consecutivoActa";
 export const runtime = 'nodejs';
 
 type ActaImageInput = {
@@ -127,17 +128,25 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       }
     }
 
-    const updated = await callDynamicPrisma({
+    const actualizar = (extra: Record<string, unknown> = {}) => callDynamicPrisma({
       req,
       data: {
         action: "UPDATE",
         table: "c_acta_entre_producto",
         operation: "update",
         where: { id: actaId },
-        data: { ...updateData, ...auditUpdateFields(payload, ["updated_at", "updated_by"]) },
+        data: { ...updateData, ...extra, ...auditUpdateFields(payload, ["updated_at", "updated_by"]) },
         include: { c_imagenes_acta_entrega_producto: true },
       },
     });
+    // El consecutivo es por empresa y no cambia al editar; solo si el acta pasa a OTRA empresa recibe el siguiente número de esa empresa.
+    const cambiaEmpresa = updateData.empresa_id !== undefined && Number(existingObj.empresa_id) !== updateData.empresa_id;
+    const updated = cambiaEmpresa
+      ? await crearConConsecutivo({
+          siguiente: () => siguienteConsecutivoActa(req, updateData.empresa_id),
+          crear: (consecutivo) => actualizar({ consecutivo }),
+        })
+      : await actualizar();
     const updatedObj = updated as any;
 
     if (cambiosArr.length > 0) {
@@ -214,6 +223,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         message: 'Acta actualizada correctamente',
         data: {
           ...actaRest,
+          consecutivo_formato: formatConsecutivoActa(actaRest.consecutivo),
           id_local: '',
           images: mapActaEntregaImagesForClient(aid, fullRecordObj?.c_imagenes_acta_entrega_producto, baseUrl),
         },

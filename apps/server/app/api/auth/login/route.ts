@@ -7,6 +7,7 @@ import { prisma } from "../../../../utils/prismaClient";
 import { resolveServerBaseUrl } from "../../../../utils/resolveServerBaseUrl";
 import { createTokenPlanillas } from "../../../../utils/createTokenPlanillas";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { guardifyDeviceGate } from "../../../../utils/guardifyDevices";
 import dotenv from "dotenv";
 dotenv.config();
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -76,6 +77,10 @@ export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
         const { cedula, password, deviceName } = body;
+        // Equipo (Guardify, issue #150): `guardifyDeviceId` es el id del equipo en Guardify (`guardify.deviceId` del SDK; el que figura en su lista de
+        // revocaciones) y, si ya existe, `guardifySessionId` el de su sesión. `deviceUid` (UUID propio de la instalación) solo sirve de respaldo.
+        const guardifyDeviceId = String(body.guardifyDeviceId ?? "").trim() || undefined;
+        const guardifySessionId = String(body.guardifySessionId ?? "").trim() || undefined;
 
         if (!cedula || !password) {
             return NextResponse.json(
@@ -115,6 +120,12 @@ export async function POST(request: NextRequest) {
             );
         }
         
+        // Equipo no aprobado en Guardify: 403 device_not_approved antes de pedir nada a Planillas (en `off` y `observe` nunca corta).
+        const deviceDenied = await guardifyDeviceGate({ payload: { id: empleado.id, gdev: guardifyDeviceId, gsid: guardifySessionId }, route: "/api/auth/login", method: "POST", stage: "login", appVersion: request.headers.get("x-app-version") });
+        if (deviceDenied) {
+            return NextResponse.json({ status: false, message: deviceDenied }, { status: 403 });
+        }
+
         const planillasUrl = process.env.PLANILLAS_URL;
         if (!planillasUrl) {
             return NextResponse.json({ status: false, message: "URL de Planillas no configurada" }, { status: 500 });
@@ -170,13 +181,13 @@ export async function POST(request: NextRequest) {
         const sessionId = uuidv4();
 
         const accessToken = jwt.sign(
-            { id: empleado.id, cedula: empleado.cedula, sessionId },
+            { id: empleado.id, cedula: empleado.cedula, sessionId, ...(guardifyDeviceId ? { gdev: guardifyDeviceId } : {}), ...(guardifySessionId ? { gsid: guardifySessionId } : {}) },
             process.env.JWT_SECRET!,
             { expiresIn: "1d" },
         );
 
         const refreshToken = jwt.sign(
-            { id: empleado.id, sessionId },
+            { id: empleado.id, sessionId, ...(guardifyDeviceId ? { gdev: guardifyDeviceId } : {}), ...(guardifySessionId ? { gsid: guardifySessionId } : {}) },
             process.env.JWT_REFRESH_SECRET!,
             { expiresIn: "7d" },
         );

@@ -2,6 +2,7 @@ import type { ReportDataAccess } from "../../reportDynamicPrisma";
 import { ubicacionTextos } from "../enrich";
 import type { FormRecord, GuardifyFormModule } from "../forms";
 import { fmtDt } from "../mappers";
+import { formatConsecutivoActa } from "../../consecutivoActa";
 
 /**
  * Acta de entrega de producto como formulario (`c_acta_entre_producto`). El papel del generador individual: fecha y tipo de entrega, cliente y
@@ -42,7 +43,7 @@ export function armarRegistro(raw: Record<string, any>, ubic: FormRecord["estruc
     return {
         id: Number(raw.id), variante: null, creado: fmtDt(raw.fecha), estructura: ubic,
         valores: {
-            fecha, tipo_entrega: txt(raw.tipo_entrega), mensual: txt(raw.mensual), observaciones: txt(raw.observaciones),
+            consecutivo: formatConsecutivoActa(raw.consecutivo), fecha, tipo_entrega: txt(raw.tipo_entrega), mensual: txt(raw.mensual), observaciones: txt(raw.observaciones),
             nombre_entrega: txt(raw.nombre_entrega), cedula_entrega: txt(raw.cedula_entrega), nombre_recibe: txt(raw.nombre_recibe), cedula_recibe: txt(raw.cedula_recibe),
         },
         listas: { productos },
@@ -58,7 +59,7 @@ export const actaEntregaProductosForm: GuardifyFormModule = {
         const rows: any[] = await (db as any).c_acta_entre_producto.findMany({
             where: { id: { in: ids }, isActive: true },
             select: {
-                id: true, empresa_id: true, cliente_id: true, division_id: true, contrato_id: true, corpo_id: true, puesto_id: true,
+                id: true, consecutivo: true, empresa_id: true, cliente_id: true, division_id: true, contrato_id: true, corpo_id: true, puesto_id: true,
                 fecha: true, tipo_entrega: true, mensual: true, detalle: true, observaciones: true,
                 nombre_entrega: true, cedula_entrega: true, firma_entrega: true, nombre_recibe: true, cedula_recibe: true, firma_recibe: true,
             },

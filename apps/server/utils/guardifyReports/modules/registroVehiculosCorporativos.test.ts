@@ -49,6 +49,16 @@ const vehiculo = (id: number, contrato: number, extra: Record<string, unknown> =
 });
 
 describe("registro de vehículos corporativos", () => {
+    it("VIN y datos de los documentos salen como texto y vacíos como null (issues #139 y #143)", () => {
+        const o = mapVehiculoCorporativoRow({ id: 5, vin: " 9BWZZZ377VT004251 ", titulo_propiedad_num: "TP-9", rtv_num: "", marchamo_num: undefined, titulo_propiedad_txt: "Sí" });
+        assert.deepEqual([o.vin, o.titulo_propiedad_num, o.rtv_num, o.marchamo_num], ["9BWZZZ377VT004251", "TP-9", null, null]);
+        assert.equal(o.titulo_propiedad, "Sí"); // el Sí/No sigue como estaba
+        for (const k of ["vin", "titulo_propiedad_num", "rtv_num", "marchamo_num"]) {
+            assert.ok(registroVehiculosCorporativos.filterKeys.includes(k), k);
+            assert.ok(registroVehiculosCorporativos.sortKeys.includes(k), k);
+        }
+        assert.ok(registroVehiculosCorporativos.searchKeys.includes("vin"));
+    });
     it("mapea una fila representativa, con nulos", () => {
         const o = mapVehiculoCorporativoRow({
             id: 4, created_at: new Date("2026-09-05T10:00:00Z"), placa: "ABC-4", tipo: "Moto", marca: "Honda", modelo: "", anno: null, kilometraje: 1200, prox_cambio_aceite: null,

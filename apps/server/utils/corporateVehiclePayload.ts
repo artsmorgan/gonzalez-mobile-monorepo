@@ -19,6 +19,16 @@ export function optionalVehicleBool(v: unknown): boolean | null {
   return Boolean(v);
 }
 
+/** Largos de las columnas de texto opcionales de `c_vehiculos_corporativos` (VIN y datos de documentos). */
+export const VEHICLE_VIN_MAX = 40;
+export const VEHICLE_DOC_NUM_MAX = 100;
+
+/** Texto opcional recortado y limitado al largo de la columna (vacío → null): un dato largo no debe romper el guardado. */
+export function optionalVehicleText(v: unknown, max: number): string | null {
+  const s = optionalVehicleString(v);
+  return s == null ? null : s.slice(0, max);
+}
+
 export function normalizeMarca(marca: unknown): string {
   return String(marca ?? "").trim();
 }
@@ -33,6 +43,12 @@ export type CorporateVehicleOptionalFields = {
   titulo_propiedad: boolean | null;
   rtv: boolean | null;
   marchamo: boolean | null;
+  /** VIN o chasis (issue #139). */
+  vin: string | null;
+  /** Número o dato de cada documento, como texto opcional (issue #143); el Sí/No sigue en los booleanos. */
+  titulo_propiedad_num: string | null;
+  rtv_num: string | null;
+  marchamo_num: string | null;
 };
 
 /** Datos mínimos para crear vehículo desde bitácora (POST/PUT register_vehicle). */
@@ -69,6 +85,10 @@ export function buildCorporateVehicleCreateFromBitacora(
     titulo_propiedad: register_vehicle.titulo_propiedad,
     rtv: register_vehicle.rtv,
     marchamo: register_vehicle.marchamo,
+    vin: register_vehicle.vin,
+    titulo_propiedad_num: register_vehicle.titulo_propiedad_num,
+    rtv_num: register_vehicle.rtv_num,
+    marchamo_num: register_vehicle.marchamo_num,
   });
   return {
     empresa_id: extras.empresa_id,
@@ -97,6 +117,10 @@ export function buildCorporateVehicleOptionalFields(body: {
   titulo_propiedad?: unknown;
   rtv?: unknown;
   marchamo?: unknown;
+  vin?: unknown;
+  titulo_propiedad_num?: unknown;
+  rtv_num?: unknown;
+  marchamo_num?: unknown;
 }): CorporateVehicleOptionalFields {
   const esBicicleta = isTipoBicicleta(body.tipo);
   if (esBicicleta) {
@@ -110,6 +134,10 @@ export function buildCorporateVehicleOptionalFields(body: {
       titulo_propiedad: null,
       rtv: null,
       marchamo: null,
+      vin: null,
+      titulo_propiedad_num: null,
+      rtv_num: null,
+      marchamo_num: null,
     };
   }
   return {
@@ -122,5 +150,9 @@ export function buildCorporateVehicleOptionalFields(body: {
     titulo_propiedad: optionalVehicleBool(body.titulo_propiedad),
     rtv: optionalVehicleBool(body.rtv),
     marchamo: optionalVehicleBool(body.marchamo),
+    vin: optionalVehicleText(body.vin, VEHICLE_VIN_MAX),
+    titulo_propiedad_num: optionalVehicleText(body.titulo_propiedad_num, VEHICLE_DOC_NUM_MAX),
+    rtv_num: optionalVehicleText(body.rtv_num, VEHICLE_DOC_NUM_MAX),
+    marchamo_num: optionalVehicleText(body.marchamo_num, VEHICLE_DOC_NUM_MAX),
   };
 }

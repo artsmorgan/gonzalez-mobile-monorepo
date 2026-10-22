@@ -196,6 +196,11 @@ type VehicleRecord = {
   titulo_propiedad: boolean | null;
   rtv: boolean | null;
   marchamo: boolean | null;
+  /** VIN o chasis y número/dato de cada documento (texto opcional). */
+  vin?: string | null;
+  titulo_propiedad_num?: string | null;
+  rtv_num?: string | null;
+  marchamo_num?: string | null;
 
   firma_responsable: string;
   created_by?: number;
@@ -358,6 +363,10 @@ function clearCamposNoAplicanBicicleta(setters: {
   setTituloPropiedad: (v: boolean) => void;
   setRtv: (v: boolean) => void;
   setMarchamo: (v: boolean) => void;
+  setVin: (v: string) => void;
+  setTituloPropiedadNum: (v: string) => void;
+  setRtvNum: (v: string) => void;
+  setMarchamoNum: (v: string) => void;
 }) {
   setters.setPlaca('');
   setters.setKilometraje('');
@@ -367,6 +376,10 @@ function clearCamposNoAplicanBicicleta(setters: {
   setters.setTituloPropiedad(false);
   setters.setRtv(false);
   setters.setMarchamo(false);
+  setters.setVin('');
+  setters.setTituloPropiedadNum('');
+  setters.setRtvNum('');
+  setters.setMarchamoNum('');
 }
 type ReviewStatus = 'Bueno' | 'Malo' | 'No existe';
 type YesNo = 'Sí' | 'No';
@@ -918,6 +931,10 @@ export default function CorporateVehiclesScreen() {
   const [tituloPropiedad, setTituloPropiedad] = useState(true);
   const [rtv, setRtv] = useState(true);
   const [marchamo, setMarchamo] = useState(true);
+  const [vin, setVin] = useState('');
+  const [tituloPropiedadNum, setTituloPropiedadNum] = useState('');
+  const [rtvNum, setRtvNum] = useState('');
+  const [marchamoNum, setMarchamoNum] = useState('');
 
   // firma responsable (QR/generar)
   const [firmaResponsable, setFirmaResponsable] = useState<FirmaData | null>(null);
@@ -1544,6 +1561,10 @@ export default function CorporateVehiclesScreen() {
                         'titulo_propiedad',
                         'rtv',
                         'marchamo',
+                        'vin',
+                        'titulo_propiedad_num',
+                        'rtv_num',
+                        'marchamo_num',
                         'firma_responsable',
                         'created_by',
                         'created_at',
@@ -1993,6 +2014,10 @@ export default function CorporateVehiclesScreen() {
     setTituloPropiedad(true);
     setRtv(true);
     setMarchamo(true);
+    setVin('');
+    setTituloPropiedadNum('');
+    setRtvNum('');
+    setMarchamoNum('');
     setFirmaResponsable(null);
     setImageFiles([]);
     setSelectedPuestoId(null);
@@ -3648,6 +3673,10 @@ export default function CorporateVehiclesScreen() {
         setTituloPropiedad,
         setRtv,
         setMarchamo,
+        setVin,
+        setTituloPropiedadNum,
+        setRtvNum,
+        setMarchamoNum,
       });
     } else {
       setPlaca(r.placa ?? '');
@@ -3658,6 +3687,10 @@ export default function CorporateVehiclesScreen() {
       setTituloPropiedad(!!r.titulo_propiedad);
       setRtv(!!r.rtv);
       setMarchamo(!!r.marchamo);
+      setVin(r.vin ?? '');
+      setTituloPropiedadNum(r.titulo_propiedad_num ?? '');
+      setRtvNum(r.rtv_num ?? '');
+      setMarchamoNum(r.marchamo_num ?? '');
     }
     setFirmaResponsable(decodeFirmaHash(r.firma_responsable) as any);
 
@@ -3924,6 +3957,10 @@ export default function CorporateVehiclesScreen() {
       titulo_propiedad: esBicicleta ? null : tituloPropiedad,
       rtv: esBicicleta ? null : rtv,
       marchamo: esBicicleta ? null : marchamo,
+      vin: esBicicleta ? null : strOrNull(vin),
+      titulo_propiedad_num: esBicicleta ? null : strOrNull(tituloPropiedadNum),
+      rtv_num: esBicicleta ? null : strOrNull(rtvNum),
+      marchamo_num: esBicicleta ? null : strOrNull(marchamoNum),
       firma_responsable: firmaHash,
     };
   };
@@ -3941,6 +3978,10 @@ export default function CorporateVehiclesScreen() {
         setTituloPropiedad,
         setRtv,
         setMarchamo,
+        setVin,
+        setTituloPropiedadNum,
+        setRtvNum,
+        setMarchamoNum,
       });
     }
   };
@@ -4086,6 +4127,10 @@ export default function CorporateVehiclesScreen() {
             titulo_propiedad: requestData.titulo_propiedad,
             rtv: requestData.rtv,
             marchamo: requestData.marchamo,
+            vin: requestData.vin,
+            titulo_propiedad_num: requestData.titulo_propiedad_num,
+            rtv_num: requestData.rtv_num,
+            marchamo_num: requestData.marchamo_num,
             firma_responsable: requestData.firma_responsable,
             created_at: new Date(horaAccion).toISOString(),
             images: imagesPayload,
@@ -4645,6 +4690,9 @@ export default function CorporateVehiclesScreen() {
                   <ThemedText style={styles.label}>Modelo</ThemedText>
                   <TextInput value={modelo} onChangeText={setModelo} style={styles.input} placeholder="Modelo" placeholderTextColor="#999" />
 
+                  <ThemedText style={styles.label}>VIN o chasis (opcional)</ThemedText>
+                  <TextInput value={vin} onChangeText={setVin} style={styles.input} placeholder="VIN o chasis" placeholderTextColor="#999" autoCapitalize="characters" maxLength={40} />
+
                   <ThemedText style={styles.label}>Año</ThemedText>
                   <TextInput value={anno} onChangeText={setAnno} style={styles.input} placeholder="2026" keyboardType="numeric" placeholderTextColor="#999" />
                 </>
@@ -4680,6 +4728,12 @@ export default function CorporateVehiclesScreen() {
                       <ThemedText style={styles.switchText}>Marchamo</ThemedText>
                     </TouchableOpacity>
                   </ThemedView>
+                  <ThemedText style={styles.label}>Título de propiedad - número o dato (opcional)</ThemedText>
+                  <TextInput value={tituloPropiedadNum} onChangeText={setTituloPropiedadNum} style={styles.input} placeholder="Número o dato del título" placeholderTextColor="#999" maxLength={100} />
+                  <ThemedText style={styles.label}>RTV - número o dato (opcional)</ThemedText>
+                  <TextInput value={rtvNum} onChangeText={setRtvNum} style={styles.input} placeholder="Número o dato de la RTV" placeholderTextColor="#999" maxLength={100} />
+                  <ThemedText style={styles.label}>Marchamo - número o dato (opcional)</ThemedText>
+                  <TextInput value={marchamoNum} onChangeText={setMarchamoNum} style={styles.input} placeholder="Número o dato del marchamo" placeholderTextColor="#999" maxLength={100} />
                 </>
               ) : null}
 

@@ -19,7 +19,7 @@ NodeModule._load = function (request: string, ...rest: unknown[]) {
     }
 };
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { cambiosUbicacionPuesto, mapCambioUbicacionPuestoRow } = require("./cambiosUbicacionPuesto") as typeof import("./cambiosUbicacionPuesto");
+const { cambiosUbicacionPuesto, mapCambioUbicacionPuestoRow, coordenada } = require("./cambiosUbicacionPuesto") as typeof import("./cambiosUbicacionPuesto");
 
 const tables: Record<string, any[]> = {
     c_ubicacion_puesto_registro_cambios: [
@@ -46,7 +46,7 @@ const db = new Proxy({}, {
 const P = { from: "2026-09-01", to: "2026-10-01", page: 1, pageSize: 50, sort: null, dir: "desc" as const, q: null, filters: [], scope: null };
 
 describe("cambios de ubicación del puesto", () => {
-    it("mapea la fila sin coordenadas y con nulos", () => {
+    it("mapea la fila con nulos", () => {
         const o = mapCambioUbicacionPuestoRow({ id: 2, created_at: new Date("2026-09-15T08:30:00Z"), empresa_nombre: "—", cliente_nombre: "Cliente 8", division_nombre: "—", contrato_nombre: "C - X", corpo_nombre: "S - Y", puesto_nombre: "77", puesto_id: 77, responsable_nombre: "99", created_by: 99, latitud_anterior: null, longitud_anterior: null, latitud_nueva: "10.0", longitud_nueva: "-84.0" });
         assert.equal(o.creado, "2026-09-15T08:30:00");
         assert.equal("fecha" in o || "responsable" in o, false);
@@ -55,11 +55,24 @@ describe("cambios de ubicación del puesto", () => {
         assert.equal(o.creado_por, null);
         assert.equal(o.tenia_ubicacion, "No");
         assert.equal(o.metros, null);
-        const s = JSON.stringify(o);
-        assert.equal(/10\.0|-84|lat|lng/i.test(s), false);
-        assert.deepEqual(Object.keys(o).filter((k) => /lat|lng|long/i.test(k)), []);
+        // la ubicación nueva sí viaja, como número; la anterior no existe
+        assert.deepEqual([o.latitud, o.longitud, o.latitud_anterior, o.longitud_anterior], [10, -84, null, null]);
     });
-    it("calcula cuántos metros se movió el puesto, sin exponer coordenadas", () => {
+    it("expone latitud y longitud (nuevas y anteriores) como números", () => {
+        const o = mapCambioUbicacionPuestoRow({ id: 5, latitud_anterior: "9.9300", longitud_anterior: "-84.0800", latitud_nueva: "9.9390", longitud_nueva: " -84.0700 " });
+        assert.deepEqual([o.latitud, o.longitud, o.latitud_anterior, o.longitud_anterior], [9.939, -84.07, 9.93, -84.08]);
+        for (const k of ["latitud", "longitud"]) assert.equal(typeof o[k], "number", k);
+    });
+    it("coordenada: vacío, no numérico o fuera de rango salen como null", () => {
+        assert.equal(coordenada(null, 90), null);
+        assert.equal(coordenada("", 90), null);
+        assert.equal(coordenada("abc", 90), null);
+        assert.equal(coordenada("91", 90), null);
+        assert.equal(coordenada("-181", 180), null);
+        assert.equal(coordenada("0", 90), 0);
+        assert.equal(coordenada(-84.1, 180), -84.1);
+    });
+    it("calcula cuántos metros se movió el puesto", () => {
         const o = mapCambioUbicacionPuestoRow({ id: 3, created_at: new Date("2026-09-10T14:00:00Z"), latitud_anterior: "9.9300", longitud_anterior: "-84.0800", latitud_nueva: "9.9390", longitud_nueva: "-84.0800", responsable_nombre: "E50 - Ana Soto", created_by: 50 });
         assert.equal(o.tenia_ubicacion, "Sí");
         assert.ok(Math.abs(Number(o.metros) - 1000) < 10, String(o.metros));
@@ -74,12 +87,14 @@ describe("cambios de ubicación del puesto", () => {
         const v = mapCambioUbicacionPuestoRow({ id: 4, empresa_nombre: "—", cliente_nombre: "—", division_nombre: "—", contrato_nombre: "—", corpo_nombre: "—", puesto_nombre: "9", puesto_id: 9, responsable_nombre: "5", created_by: 5 });
         for (const k of ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "creado_por", "modificado", "modificado_por"]) assert.equal(v[k], null, k);
     });
-    it("trae el periodo [from, to) con la ubicación completa y sin coordenadas", async () => {
+    it("trae el periodo [from, to) con la ubicación completa y las coordenadas", async () => {
         const rows = await cambiosUbicacionPuesto.load(db, P);
         assert.deepEqual(rows.map((r) => r.id).sort(), [2, 3]); // el 1 es del 1 de octubre: fuera (to exclusivo)
         const r3 = rows.find((r) => r.id === 3)!;
         assert.deepEqual([r3.empresa, r3.cliente, r3.division, r3.contrato, r3.sucursal, r3.puesto], ["G - Gonzalez", "Cliente 7", "Seguridad", "C1 - Contrato A", "S1 - Central", "P1 - Entrada"]);
-        assert.equal(JSON.stringify(rows).includes("9.93"), false);
+        assert.deepEqual([r3.latitud, r3.longitud], [9.939, -84.08]);
+        const r2 = rows.find((r) => r.id === 2)!;
+        assert.deepEqual([r2.latitud, r2.longitud, r2.latitud_anterior], [10, -84, null]);
     });
     it("alcance: filtra por los ids de estructura de cada cambio", async () => {
         const byContrato = await cambiosUbicacionPuesto.load(db, { ...P, scope: [{ nivel: "contrato", id: 101 }] });

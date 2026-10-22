@@ -312,6 +312,7 @@ export async function queryInduccionRecorridoRows(
             plaza_id: true,
             fecha: true,
             renglon_edificio: true,
+            tipo_capacitacion: true,
             supervisor_cliente: true,
             supervisor_corporacion: true,
             temas_desarrollados: true,
@@ -720,6 +721,7 @@ export async function buildInduccionRecorridoExcelConsolidado(
         "Fecha (visita)",
         "Hora (visita)",
         "Renglón / edificio",
+        "Tipo de capacitación",
         "Supervisor cliente",
         "Supervisor corporación",
         "División (texto)",
@@ -766,7 +768,7 @@ export async function buildInduccionRecorridoExcelConsolidado(
     wsMain.columns = [
         { width: 3 },
         ...headers.map((lab) => {
-            if (lab.includes("Renglón") || lab.includes("Supervisor")) return { width: 28 };
+            if (lab.includes("Renglón") || lab.includes("Supervisor") || lab === "Tipo de capacitación") return { width: 28 };
             if (lab.startsWith("Ver")) return { width: 16 };
             if (lab === "Usuario modifica") return { width: 16 };
             if (lab === "Fecha y hora modifica") return { width: 20 };
@@ -804,6 +806,7 @@ export async function buildInduccionRecorridoExcelConsolidado(
             [headers.indexOf("Fecha (visita)") + 1]: formatDateOnlyDMY(r.fecha),
             [headers.indexOf("Hora (visita)") + 1]: formatTimeOnlyHMS(r.fecha),
             [headers.indexOf("Renglón / edificio") + 1]: excelCellString(r.renglon_edificio),
+            [headers.indexOf("Tipo de capacitación") + 1]: excelCellString(r.tipo_capacitacion),
             [headers.indexOf("Supervisor cliente") + 1]: excelCellString(r.supervisor_cliente),
             [headers.indexOf("Supervisor corporación") + 1]: excelCellString(r.supervisor_corporacion),
             [headers.indexOf("División (texto)") + 1]: excelCellString(r.division),

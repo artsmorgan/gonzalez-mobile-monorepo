@@ -6,6 +6,7 @@ import { addDays } from "../params";
 import { matchesScope } from "../scope";
 import type { GuardifyReportModule } from "../types";
 import { actaEntregaProductosForm } from "./actaEntregaProductosForm";
+import { formatConsecutivoActa } from "../../consecutivoActa";
 import { auditoriaPorHistorial, type AuditoriaHistorial } from "./auditoriaCambios";
 
 const txt = (v: unknown): string | null => {
@@ -45,6 +46,8 @@ export function mapActaEntregaRow(r: any, ejecutivo: string | null = null, audit
     const descripcion = items.map((i) => txt(i?.descripcion)).filter(Boolean).join("; ");
     return {
         id: Number(r.id),
+        // Por empresa, desde 0001 (issue #138); null en actas que aún no se han numerado.
+        consecutivo: formatConsecutivoActa(r.consecutivo),
         fecha: fmtDt(r.fecha),
         tipo_entrega: txt(r.tipo_entrega),
         mensual: txt(r.mensual),
@@ -71,14 +74,14 @@ export function mapActaEntregaRow(r: any, ejecutivo: string | null = null, audit
 }
 
 /**
- * Acta de entrega de productos. Periodo: `fecha` (la fecha del acta). La tabla no guarda consecutivo ni auditoría propia: `creado*` y `modificado*` salen del historial de cambios (null en actas anteriores al historial).
+ * Acta de entrega de productos. Periodo: `fecha` (la fecha del acta). `consecutivo` es el número del acta dentro de su empresa (0001, 0002…). `creado*` y `modificado*` salen de las columnas propias o, en actas anteriores a ellas, del historial de cambios (null si tampoco hay historial).
  * Cada fila trae empresa, cliente, división, contrato, sucursal y puesto: admite alcance. */
 export const actaEntregaProductos: GuardifyReportModule = {
     id: "acta_entrega_productos",
     supportsScope: true,
-    searchKeys: ["nombre_entrega", "cedula_entrega", "nombre_recibe", "cedula_recibe", "puesto", "sucursal", "descripcion"],
-    filterKeys: ["tipo_entrega", "mensual", "empresa", "cliente", "division", "contrato", "sucursal", "puesto"],
-    sortKeys: ["fecha", "tipo_entrega", "nombre_entrega", "cedula_entrega", "nombre_recibe", "cedula_recibe", "empresa", "cliente", "contrato", "sucursal", "puesto", "articulos"],
+    searchKeys: ["consecutivo", "nombre_entrega", "cedula_entrega", "nombre_recibe", "cedula_recibe", "puesto", "sucursal", "descripcion"],
+    filterKeys: ["consecutivo", "tipo_entrega", "mensual", "empresa", "cliente", "division", "contrato", "sucursal", "puesto"],
+    sortKeys: ["fecha", "consecutivo", "tipo_entrega", "nombre_entrega", "cedula_entrega", "nombre_recibe", "cedula_recibe", "empresa", "cliente", "contrato", "sucursal", "puesto", "articulos"],
     defaultSort: "fecha",
     form: actaEntregaProductosForm,
     async load(db, p) {

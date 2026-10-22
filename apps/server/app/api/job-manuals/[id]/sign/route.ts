@@ -74,7 +74,7 @@ export async function POST(
             );
         }
 
-        const { firma_empleado, marca_id, quiz_answear, files, firma_empleado_manual } = await req.json();
+        const { firma_empleado, marca_id, quiz_answear, files, firma_empleado_manual, version: bodyVersion } = await req.json();
         if (!firma_empleado || !marca_id) {
             await reportError(req, "api/job-manuals/[id]/sign", "POST", 400, "Firma del empleado requerida");
             return NextResponse.json(
@@ -139,7 +139,8 @@ export async function POST(
 
         const empleadoObj = empleado as any;
         const puesto = await prisma.e_estructura_puesto.findUnique({
-            where: { id: manualObj.puesto_id },
+            // Los documentos que publica Guardify no tienen puesto propio (puesto_id 0): se usa el de la marca de quien firma.
+            where: { id: Number(manualObj.puesto_id) > 0 ? manualObj.puesto_id : marcaObj.puesto_id ?? 0 },
         });
         if (!puesto) {
             await reportError(req, "api/job-manuals/[id]/sign", "POST", 404, "Puesto no encontrado");
@@ -162,7 +163,21 @@ export async function POST(
         }
 
         const corpoObj = corpo as any;
-        // Upsert: reutiliza la visualización existente del mismo empleado para el mismo manual
+        // Versión que se firma (issue #155): la que la app mostraba. Una firma hecha sin conexión sobre una versión anterior se guarda como firma de
+        // ESA versión (no de la vigente): el empleado deberá firmar la nueva. Sin versión (app anterior) o inválida, la vigente.
+        const versionVigente = Number(manualObj.version ?? 1);
+        let versionFirmada = Number(bodyVersion);
+        if (!Number.isInteger(versionFirmada) || versionFirmada < 1 || versionFirmada > versionVigente) versionFirmada = versionVigente;
+        let selloVersion: string | null = manualObj.sello ?? null;
+        if (versionFirmada !== versionVigente) {
+            const anterior = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "e_manual_puesto_version", operation: "findFirst", where: { manual_puesto_id: id, version: versionFirmada } },
+            });
+            selloVersion = (anterior as any)?.sello ?? null;
+        }
+
+        // Upsert: reutiliza la visualización existente del mismo empleado para el mismo manual y la misma versión
         // en lugar de borrarla y recrearla (evita perder firma_empleado_manual, archivos u otros
         // datos guardados por una llamada anterior, p. ej. la visualización automática al abrir el manual).
         const existing = await callDynamicPrisma({
@@ -174,6 +189,7 @@ export async function POST(
                 where: {
                     empleado_id: empleadoId,
                     manual_puesto_id: id,
+                    version: versionFirmada,
                 }
             },
         });
@@ -221,6 +237,8 @@ export async function POST(
                     data: {
                         empleado_id: empleadoId,
                         manual_puesto_id: id,
+                        version: versionFirmada,
+                        sello_version: selloVersion,
                         nombre_empleado: `${empleadoObj.nombre} ${empleadoObj.primer_apellido} ${empleadoObj.segundo_apellido}`,
                         firma_empleado,
                         quiz_answear: quizAnswearToStore,
@@ -277,9 +295,11 @@ export async function POST(
             console.warn("Fallo enviando notificación por rol (no bloquea la firma):", err);
         }
 
-        const creator = await prisma.c_empleado.findUnique({
-            where: { id: parseInt(manualObj.created_by) },
-        });
+        // `created_by` de un documento publicado desde Guardify es un correo, no un id de empleado: no hay a quién notificar.
+        const creatorId = parseInt(manualObj.created_by);
+        const creator = Number.isFinite(creatorId) && creatorId > 0 && String(creatorId) === String(manualObj.created_by).trim()
+            ? await prisma.c_empleado.findUnique({ where: { id: creatorId } })
+            : null;
 
         if (creator) {
             const creatorObj = creator as any;
