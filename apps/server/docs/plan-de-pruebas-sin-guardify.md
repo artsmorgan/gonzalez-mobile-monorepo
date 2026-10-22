@@ -8,7 +8,7 @@ Marca cada casilla al probarla y anota lo que falle (pantalla, pasos, mensaje).
 
 - [ ] **Base de datos.** Correr `verificar_columnas_antes_de_migrar.sql` (dynamic-api): sus resultados deben estar vacíos. Luego `npm run db:migrate` y comprobar que están las 6 migraciones: `20261020120001`, `20261020120002`, `20261021120001`, `20261021130001`, `20261021140001`, `20261022120001`.
 - [ ] **Servidor** (`apps/server/.env`): `GUARDIFY_DEVICE_ENFORCE=observe` (o sin variable), sin `GUARDIFY_URL`; `EVIDENCE_SIGNING_KEY` definida; para la sección 2, `GUARDIFY_REPORTS_API_KEY` con una llave aleatoria de 24+ caracteres que generas tú (no depende de Guardify).
-- [ ] **App** (`apps/mobile/.env`, una variable por línea): `EXPO_PUBLIC_API_SERVER`, `EXPO_PUBLIC_MOBILE_ACCESS_TOKEN`, `APP_VARIANT=lite`. **Sin** `EXPO_PUBLIC_GUARDIFY_URL`: así la integración queda apagada y la app se comporta como antes.
+- [ ] **App** (`apps/mobile/.env`, una variable por línea): `EXPO_PUBLIC_API_SERVER`, `EXPO_PUBLIC_MOBILE_ACCESS_TOKEN`, `APP_VARIANT=lite`. **Sin** `EXPO_PUBLIC_GUARDIFY_ENABLED` (Guardify está bloqueado por defecto): la app se comporta como antes aunque haya URL. Para el simulacro (sección 4) hay que encenderlo.
 - [ ] **APK nuevo** de la variante `lite` (módulos nativos nuevos: `expo-secure-store`, `expo-battery`). Probar primero **actualizando sobre el APK anterior** (sección 3.1) y después con una instalación limpia.
 - [ ] Servicio dinámico en `:3001`, servidor en `:3000`, túnel hacia el servidor.
 

@@ -25,16 +25,17 @@ GUARDIFY_APP_CLIENT_SECRET=mock-secret
 GUARDIFY_DEVICE_ENFORCE=observe
 ```
 
-**App** (`apps/mobile/.env`):
+**App** (`apps/mobile/.env`). Guardify está **bloqueado por defecto** en la app: hay que encender el interruptor además de poner la URL.
 
 ```
+EXPO_PUBLIC_GUARDIFY_ENABLED=true
 EXPO_PUBLIC_GUARDIFY_URL=<URL del simulacro alcanzable desde el teléfono>
 EXPO_PUBLIC_GUARDIFY_COMPANY_CODE=corporacion-gonzalez
 ```
 
 El teléfono no ve `localhost`. Opciones: un túnel (`ngrok http 4010` → usar la URL `https://…`) o la IP de tu red local con una **compilación de depuración** (Android bloquea `http://` en las compilaciones de release). Hay que recompilar la app después de cambiar el `.env`.
 
-Para volver a no usar Guardify: quita `EXPO_PUBLIC_GUARDIFY_URL`, recompila, y deja el servidor en `GUARDIFY_DEVICE_ENFORCE=off` o sin `GUARDIFY_URL`.
+Para volver a no usar Guardify: quita `EXPO_PUBLIC_GUARDIFY_ENABLED` (o ponlo en `false`), recompila, y deja el servidor en `GUARDIFY_DEVICE_ENFORCE=off` u `observe`. Con el interruptor apagado el código se conserva pero la app no lo usa.
 
 ## Escenarios
 

@@ -2,7 +2,8 @@
  * Cliente de Guardify en la app (issues #145, #147 y #148): registro del equipo, sesión de acceso, latidos, órdenes de la consola y
  * catálogo de APK. Envuelve el SDK de `vendor/guardify-sdk` y expone un estado observable para `GuardifyGate`.
  *
- * Apagado si la build no trae `GUARDIFY_URL` (las builds anteriores siguen funcionando igual). Las reglas puras están en `guardifyLogic.ts`.
+ * **Apagado por defecto**: solo funciona si la build trae `GUARDIFY_ENABLED` encendido Y `GUARDIFY_URL`; apagado no hace nada y no puede impedir el uso de la app
+ * (el código se conserva para reactivarlo). Las reglas puras están en `guardifyLogic.ts`.
  * El canal en tiempo real (SSE) no existe en React Native (`fetch` no entrega el cuerpo en streaming): las órdenes se consultan con
  * `pollCommands()` cada pocos segundos mientras la app está abierta.
  */

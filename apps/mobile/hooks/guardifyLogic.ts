@@ -41,16 +41,26 @@ export function normalizeCompanyCode(value: unknown): string {
   return String(value ?? '').trim().toLowerCase();
 }
 
-export type GuardifyConfig = { enabled: boolean; baseUrl: string; appKey: string; companyCode: string; variant: string };
+/** Interruptor de texto de la build: `true`, `1`, `on`, `yes` o `si` (sin distinguir mayúsculas). Cualquier otra cosa, o vacío, es apagado. */
+export function isTruthyFlag(value: unknown): boolean {
+  if (value === true) return true;
+  return /^(true|1|on|yes|si|sí)$/i.test(String(value ?? '').trim());
+}
+
+export type GuardifyConfig = { enabled: boolean; /** El interruptor general está encendido (aunque falte la URL). */ switchedOn: boolean; baseUrl: string; appKey: string; companyCode: string; variant: string };
 
 /**
- * Configuración desde `extra` de la app. Sin `GUARDIFY_URL` la integración queda apagada (las builds anteriores siguen funcionando).
+ * Configuración desde `extra` de la app. **Interruptor general `GUARDIFY_ENABLED`: apagado por defecto.** Con él apagado Guardify no hace nada en la app
+ * (no registra el equipo, no bloquea con pantallas, no consulta órdenes ni catálogo) aunque haya URL; el código se conserva para reactivarlo.
+ * Para activarlo hacen falta el interruptor Y `GUARDIFY_URL`.
  * `GUARDIFY_COMPANY_CODE` viene embebido en producción; en lite/full queda vacío y se escribe al registrar el equipo.
  */
 export function resolveGuardifyConfig(extra: Record<string, unknown> | null | undefined, variant: string): GuardifyConfig {
   const baseUrl = String(extra?.GUARDIFY_URL ?? '').trim().replace(/\/+$/, '');
+  const switchedOn = isTruthyFlag(extra?.GUARDIFY_ENABLED);
   return {
-    enabled: !!baseUrl,
+    enabled: switchedOn && !!baseUrl,
+    switchedOn,
     baseUrl,
     appKey: String(extra?.GUARDIFY_APP_KEY ?? '').trim() || 'monitoreapp',
     companyCode: normalizeCompanyCode(extra?.GUARDIFY_COMPANY_CODE),

@@ -8,6 +8,7 @@ import {
     decideUpdate,
     gateScreenFor,
     isGateOpen,
+    isTruthyFlag,
     normalizeCompanyCode,
     renewDue,
     resolveGuardifyConfig,
@@ -44,8 +45,23 @@ describe("configuración", () => {
     it("queda apagada sin URL y toma valores por defecto", () => {
         assert.equal(resolveGuardifyConfig({}, "lite").enabled, false);
         assert.equal(resolveGuardifyConfig(undefined, "prod").enabled, false);
-        const c = resolveGuardifyConfig({ GUARDIFY_URL: "https://guardify.test///", GUARDIFY_COMPANY_CODE: "  Corporacion-Gonzalez " }, "prod");
+        const c = resolveGuardifyConfig({ GUARDIFY_ENABLED: "true", GUARDIFY_URL: "https://guardify.test///", GUARDIFY_COMPANY_CODE: "  Corporacion-Gonzalez " }, "prod");
         assert.deepEqual([c.enabled, c.baseUrl, c.appKey, c.companyCode, c.variant], [true, "https://guardify.test", "monitoreapp", "corporacion-gonzalez", "prod"]);
+    });
+    it("Guardify está BLOQUEADO por defecto: con URL pero sin el interruptor no se activa, y el interruptor sin URL tampoco", () => {
+        const conUrl = { GUARDIFY_URL: "https://guardify.test", GUARDIFY_COMPANY_CODE: "corporacion-gonzalez" };
+        for (const apagado of [undefined, "", "false", "0", "off", "no", "talvez", false, null]) {
+            const c = resolveGuardifyConfig({ ...conUrl, GUARDIFY_ENABLED: apagado }, "prod");
+            assert.deepEqual([c.enabled, c.switchedOn], [false, false], String(apagado));
+        }
+        assert.equal(resolveGuardifyConfig(conUrl, "prod").enabled, false); // sin la variable: apagado
+        const sinUrl = resolveGuardifyConfig({ GUARDIFY_ENABLED: "true" }, "prod");
+        assert.deepEqual([sinUrl.enabled, sinUrl.switchedOn], [false, true]);
+        for (const encendido of ["true", "TRUE", " 1 ", "on", "yes", "si", "sí", true]) assert.equal(resolveGuardifyConfig({ ...conUrl, GUARDIFY_ENABLED: encendido }, "prod").enabled, true, String(encendido));
+    });
+    it("el interruptor reconoce solo valores afirmativos", () => {
+        for (const v of ["true", "1", "on", "Yes", "SI", true]) assert.equal(isTruthyFlag(v), true, String(v));
+        for (const v of ["false", "0", "", "off", "no", "2", undefined, null, 0, {}]) assert.equal(isTruthyFlag(v), false, String(v));
     });
     it("normaliza el código de empresa", () => {
         assert.equal(normalizeCompanyCode("  ABC "), "abc");
