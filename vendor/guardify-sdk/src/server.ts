@@ -24,13 +24,16 @@ export function createVerifier(o: VerifierOptions) {
   const revoked = new Set<string>();
   /** Equipos que dejaron de estar activos (bloqueados, rechazados, retirados); uno que vuelve a `ACTIVE` sale de aquí. */
   const revokedDevices = new Set<string>();
+  /** Versión mínima de la app que exige la empresa (la última que informó Guardify); `null` si no hay mínima o aún no se consultó. */
+  let minAppVersion: string | null = null;
   let since = new Date(0).toISOString();
 
   /** Trae las revocaciones nuevas. Llamar periódicamente (o antes de cada verificación en modo estricto). */
   async function refreshRevocations() {
     const r = await f(`${o.baseUrl}/api/v1/revocations?since=${encodeURIComponent(since)}`, { headers: { authorization: basic } });
     if (!r.ok) throw new Error(`revocations ${r.status}`);
-    const d = (await r.json()) as { sessions: { sid: string }[]; devices?: { id: string; status: string }[]; serverTime: string };
+    const d = (await r.json()) as { sessions: { sid: string }[]; devices?: { id: string; status: string }[]; minAppVersion?: string | null; serverTime: string };
+    if (d.minAppVersion !== undefined) minAppVersion = d.minAppVersion;
     d.sessions.forEach((s) => revoked.add(s.sid));
     for (const x of d.devices ?? []) { if (x.status === "ACTIVE") revokedDevices.delete(x.id); else revokedDevices.add(x.id); }
     since = new Date(new Date(d.serverTime).getTime() - 2000).toISOString();
@@ -52,5 +55,5 @@ export function createVerifier(o: VerifierOptions) {
 
   const can = (c: Claims, permission: string) => c.grants.includes(permission);
 
-  return { verify, can, refreshRevocations, isRevoked: (sid: string) => revoked.has(sid), isDeviceRevoked: (id: string) => revokedDevices.has(id) };
+  return { verify, can, refreshRevocations, isRevoked: (sid: string) => revoked.has(sid), isDeviceRevoked: (id: string) => revokedDevices.has(id), minAppVersion: () => minAppVersion };
 }
