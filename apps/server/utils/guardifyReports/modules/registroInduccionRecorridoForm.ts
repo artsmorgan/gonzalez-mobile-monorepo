@@ -51,7 +51,7 @@ export function armarRegistro(raw: any, ubic: FormRecord["estructura"], firmas: 
     const presentes = firmasFila.filter(([, f]) => f);
     return {
         id: Number(raw.id), variante: null, creado: fmtDt(raw.created_at), estructura: ubic,
-        valores: { fecha: dia(raw.fecha), renglon_edificio: txt(raw.renglon_edificio), supervisor_cliente: txt(raw.supervisor_cliente), supervisor_corporacion: txt(raw.supervisor_corporacion) },
+        valores: { fecha: dia(raw.fecha), renglon_edificio: txt(raw.renglon_edificio), tipo_capacitacion: txt(raw.tipo_capacitacion), supervisor_cliente: txt(raw.supervisor_cliente), supervisor_corporacion: txt(raw.supervisor_corporacion) },
         listas: {
             temas: parseArr(raw.temas_desarrollados).filter((t) => t && typeof t === "object").map(fila("tema")),
             aspectos: parseArr(raw.aspectos_especificos).filter((a) => a && typeof a === "object").map(fila("aspecto")),
@@ -70,7 +70,7 @@ export const registroInduccionRecorridoForm: GuardifyFormModule = {
         const rows: any[] = await (db as any).c_registro_induccion_recorrido.findMany({
             where: { id: { in: ids }, isActive: true },
             select: {
-                id: true, empresa_id: true, cliente_id: true, contrato_id: true, corpo_id: true, puesto_id: true, plaza_id: true, fecha: true, renglon_edificio: true,
+                id: true, empresa_id: true, cliente_id: true, contrato_id: true, corpo_id: true, puesto_id: true, plaza_id: true, fecha: true, renglon_edificio: true, tipo_capacitacion: true,
                 supervisor_cliente: true, supervisor_corporacion: true, temas_desarrollados: true, aspectos_especificos: true, firma_supervisor: true,
                 created_at: true, created_by: true, division: true, firma_responsable: true, isActive: true, division_id: true,
             },

@@ -9,6 +9,7 @@ import {
     createParticipantesForRegistro,
     hydrateParticipantesForRecords,
     INDUCTION_TOUR_SAFE_SELECT,
+    normalizeTipoCapacitacion,
 } from "./participantesHelpers";
 
 export async function GET(req: NextRequest) {
@@ -155,6 +156,7 @@ export async function POST(req: NextRequest) {
             fecha,
             division,
             renglon_edificio,
+            tipo_capacitacion,
             supervisor_cliente,
             supervisor_corporacion,
             temas_desarrollados,
@@ -215,6 +217,7 @@ export async function POST(req: NextRequest) {
             isActive: true,
             division: (division && String(division).trim()) ? String(division).trim() : "Otros",
             renglon_edificio: renglon_edificio ? String(renglon_edificio) : "",
+            tipo_capacitacion: normalizeTipoCapacitacion(tipo_capacitacion),
             supervisor_cliente: supervisor_cliente !== undefined && supervisor_cliente !== null ? String(supervisor_cliente) : null,
             supervisor_corporacion: supervisor_corporacion ? String(supervisor_corporacion) : "",
             temas_desarrollados: temas_desarrollados ? String(temas_desarrollados) : "[]",
@@ -270,6 +273,7 @@ export async function POST(req: NextRequest) {
                             fecha: fechaParsed ? fechaParsed.toISOString() : null,
                             division: newRecordObj.division,
                             renglon_edificio: newRecordObj.renglon_edificio,
+                            tipo_capacitacion: newRecordObj.tipo_capacitacion ?? null,
                             supervisor_cliente: newRecordObj.supervisor_cliente,
                             supervisor_corporacion: newRecordObj.supervisor_corporacion,
                             temas_desarrollados: newRecordObj.temas_desarrollados,
@@ -343,6 +347,7 @@ export async function POST(req: NextRequest) {
                 plaza_id: newRecordObj.plaza_id,
                 fecha: newRecordObj.fecha,
                 renglon_edificio: newRecordObj.renglon_edificio,
+                tipo_capacitacion: newRecordObj.tipo_capacitacion ?? null,
                 supervisor_cliente: newRecordObj.supervisor_cliente,
                 supervisor_corporacion: newRecordObj.supervisor_corporacion,
                 temas_desarrollados: newRecordObj.temas_desarrollados,

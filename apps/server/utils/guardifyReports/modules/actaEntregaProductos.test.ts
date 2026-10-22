@@ -23,6 +23,7 @@ const { actaEntregaProductos, mapActaEntregaRow } = require("./actaEntregaProduc
 
 const raw = (o: Record<string, any> = {}) => ({
     id: 4,
+    consecutivo: 3,
     empresa_id: 1, cliente_id: 5, division_id: 9, contrato_id: 20, corpo_id: 30, puesto_id: 40,
     fecha: new Date("2026-09-15T10:20:30Z"),
     tipo_entrega: "Uniformes",
@@ -51,6 +52,12 @@ describe("acta_entrega_productos: mapeo", () => {
         const s = JSON.stringify(o);
         assert.equal(s.includes("base64"), false);
         assert.equal(s.includes("BBBB"), false);
+    });
+    it("el consecutivo sale con ceros a la izquierda y vacío si el acta no está numerada (issue #138)", () => {
+        assert.equal(mapActaEntregaRow(raw()).consecutivo, "0003");
+        assert.equal(mapActaEntregaRow(raw({ consecutivo: 12345 })).consecutivo, "12345");
+        assert.equal(mapActaEntregaRow(raw({ consecutivo: null })).consecutivo, null);
+        assert.equal(mapActaEntregaRow(raw({ consecutivo: undefined })).consecutivo, null);
     });
     it("tolera nulos, detalle inválido y nombres que son solo el id", () => {
         const o = mapActaEntregaRow(raw({ detalle: "no-json", nombre_recibe: "", empresa_nombre: "1", fecha: null }));

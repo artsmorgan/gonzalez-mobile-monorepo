@@ -5,6 +5,7 @@ import { prisma } from "../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee } from "../../../../../utils/sendNotification";
 import { reportError } from "../../../../../utils/reportError";
+import { calcularNota, esAutocalificable, leerQuiz, leerRespuestas, notaDesdeApp, notaDesdeCalculo, type NotaGuardable } from "../../../../../utils/documentos/notaQuiz";
 
 export async function PUT(
   req: NextRequest,
@@ -57,6 +58,7 @@ export async function PUT(
     const marca_id = typeof body?.marca_id === "number" ? body.marca_id : parseInt(String(body?.marca_id ?? ""), 10);
     const empleado_id = typeof body?.empleado_id === "number" ? body.empleado_id : parseInt(String(body?.empleado_id ?? ""), 10);
     const approved = body?.approved;
+    const bodyVersion = Number(body?.version);
 
     if (!marca_id || Number.isNaN(marca_id)) {
       await reportError(req, "api/job-manuals/[id]/quiz-result", "PUT", 400, "Marca no especificada");
@@ -95,6 +97,15 @@ export async function PUT(
       );
     }
 
+    // La calificación es de una versión del documento (issue #155): la que indique la app o, si no, la vigente.
+    const versionVigente = Number(manualObj.version ?? 1);
+    const versionCalificada = Number.isInteger(bodyVersion) && bodyVersion >= 1 && bodyVersion <= versionVigente ? bodyVersion : versionVigente;
+    let quizDeLaVersion: unknown = manualObj.quiz;
+    if (versionCalificada !== versionVigente) {
+      const anterior = await callDynamicPrisma({ req, data: { action: "GET", table: "e_manual_puesto_version", operation: "findFirst", where: { manual_puesto_id: manualId, version: versionCalificada } } });
+      quizDeLaVersion = (anterior as any)?.quiz ?? manualObj.quiz;
+    }
+
     const existing = await callDynamicPrisma({
       req,
       data: {
@@ -104,6 +115,7 @@ export async function PUT(
         where: {
           manual_puesto_id: manualId,
           empleado_id: empleado_id,
+          version: versionCalificada,
         },
       },
     });
@@ -119,6 +131,24 @@ export async function PUT(
     const existingObj = existing as any;
     const nowCR = toZonedTime(new Date(), "America/Costa_Rica") as Date;
 
+    // Nota consolidada (issue #156): ya calificado = inmutable. Repetir el mismo resultado (p. ej. una acción en cola que se reenvía) es inofensivo;
+    // cambiarlo no se permite, y no se recalcula con el quiz actual.
+    if (existingObj.nota_fecha) {
+      if (existingObj.approved === approved) {
+        return NextResponse.json({ status: true, message: "El quiz ya estaba calificado", already_graded: true }, { status: 200 });
+      }
+      await reportError(req, "api/job-manuals/[id]/quiz-result", "PUT", 409, "El quiz ya fue calificado y no puede cambiarse");
+      return NextResponse.json({ status: false, message: "El quiz ya fue calificado y no puede cambiarse" }, { status: 409 });
+    }
+    const quizLeido = leerQuiz(quizDeLaVersion);
+    const calificadoPor = Number.isFinite(tokenEmpleadoId) && tokenEmpleadoId > 0 ? tokenEmpleadoId : null;
+    let nota: NotaGuardable | null = notaDesdeApp(body?.score, quizLeido.minimo, nowCR.toISOString(), calificadoPor);
+    if (!nota && esAutocalificable(quizLeido)) {
+      // Una app anterior no manda el desglose: si todas las preguntas se califican solas, el servidor calcula la nota.
+      const calculada = calcularNota(quizLeido, leerRespuestas(existingObj.quiz_answear));
+      if (calculada) nota = notaDesdeCalculo(calculada, nowCR.toISOString(), calificadoPor);
+    }
+
     await callDynamicPrisma({
       req,
       data: {
@@ -129,6 +159,7 @@ export async function PUT(
         data: {
           approved,
           updated_at: nowCR.toISOString(),
+          ...(nota ?? {}),
         },
       },
     });

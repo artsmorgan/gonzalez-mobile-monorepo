@@ -5,12 +5,13 @@ import { v4 as uuidv4 } from "uuid";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "../../../../utils/prismaClient";
 import { resolveServerBaseUrl } from "../../../../utils/resolveServerBaseUrl";
+import { guardifyDeviceGate } from "../../../../utils/guardifyDevices";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const jwt = require("jsonwebtoken");
 
 export async function POST(request: NextRequest) {
     try {
-        const { refreshToken, deviceName } = await request.json();
+        const { refreshToken, deviceName, guardifyDeviceId: bodyDeviceId, guardifySessionId: bodySessionId } = await request.json();
 
         if (!refreshToken) {
             return NextResponse.json({ status: false, message: "Refresh token requerido" }, { status: 400 });
@@ -20,7 +21,7 @@ export async function POST(request: NextRequest) {
             throw new Error("JWT secrets not configured");
         }
 
-        let payload: { id?: number; sessionId?: string };
+        let payload: { id?: number; sessionId?: string; gdev?: string; gsid?: string };
         try {
             payload = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET!);
         } catch {
@@ -39,6 +40,17 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
         }
 
+        // El equipo y la sesión de Guardify se conservan al renovar; un refresh anterior a esta función no los trae y se adopta el equipo de Guardify que manda la app.
+        const gdev = String(payload.gdev ?? "").trim() || String(bodyDeviceId ?? "").trim() || undefined;
+        // La sesión de Guardify se abre después del login en la app: el primer refresh la incorpora al token.
+        const gsid = String(payload.gsid ?? "").trim() || String(bodySessionId ?? "").trim() || undefined;
+
+        // Si el equipo dejó de estar activo no se renueva la sesión (en `off` y `observe` nunca corta).
+        const deviceDenied = await guardifyDeviceGate({ payload: { id: payload.id, gdev, gsid }, route: "/api/auth/refresh-token", method: "POST", stage: "refresh", appVersion: request.headers.get("x-app-version") });
+        if (deviceDenied) {
+            return NextResponse.json({ status: false, message: deviceDenied }, { status: 403 });
+        }
+
         const nowCR = toZonedTime(new Date(), "America/Costa_Rica");
         const newSessionId = uuidv4();
 
@@ -47,6 +59,8 @@ export async function POST(request: NextRequest) {
                 id: payload.id,
                 cedula: empleado.cedula,
                 sessionId: newSessionId,
+                ...(gdev ? { gdev } : {}),
+                ...(gsid ? { gsid } : {}),
             },
             process.env.JWT_SECRET!,
             { expiresIn: "1d" },
@@ -56,6 +70,8 @@ export async function POST(request: NextRequest) {
             {
                 id: payload.id,
                 sessionId: newSessionId,
+                ...(gdev ? { gdev } : {}),
+                ...(gsid ? { gsid } : {}),
             },
             process.env.JWT_REFRESH_SECRET!,
             { expiresIn: "7d" },

@@ -53,6 +53,8 @@ import {
   setValidateGpsSalidaStorage,
 } from '@/hooks/validateGpsSalidaStorage';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import { removeCurrentMarca, removeCurrentMarcaIfExpired } from '@/hooks/currentMarcaExpiry';
+import { setHorasEliminarMarcaStorage } from '@/hooks/horasEliminarMarcaStorage';
 import resolveMarcaIngresoCoordinates from '@/hooks/resolveMarcaIngresoCoordinates';
 import {
   DEVICE_COORDS_POLL_SILENT,
@@ -174,6 +176,9 @@ interface AttendanceErrorResponse {
   monitoring_previous_minutes?: number;
   monitoring_post_minutes?: number;
   is_salida_anticipada?: boolean;
+  /** El último turno terminó hace más de N horas: no hay turno actual (issue #159). */
+  no_active_marca?: boolean;
+  horas_eliminar_marca_tras_salida?: number;
   marca?: AttendanceSuccessResponse['marca'];
 }
 
@@ -400,8 +405,12 @@ export default function MarcarIngresoSalidaScreen() {
       monitoring_post_minutes?: unknown;
       tiempo_gracia_marcar_salida?: unknown;
       validate_gps_salida?: unknown;
+      horas_eliminar_marca_tras_salida?: unknown;
     } | null | undefined
   ) => {
+    if (payload?.horas_eliminar_marca_tras_salida != null) {
+      await setHorasEliminarMarcaStorage(payload.horas_eliminar_marca_tras_salida);
+    }
     if (payload?.monitoring_previous_minutes != null) {
       const minutes = await setMonitoringPreviousMinutesStorage(payload.monitoring_previous_minutes);
       setMonitoringPreviousMinutes(minutes);
@@ -965,6 +974,10 @@ export default function MarcarIngresoSalidaScreen() {
         setHoraAccion(horaAccionValue);
       }
 
+      // Un turno que terminó hace más de N horas (nomenclador) deja de ser el turno actual: se elimina del almacenamiento antes de usarlo,
+      // también sin conexión (con las horas guardadas la última vez).
+      await removeCurrentMarcaIfExpired(horaAccionValue || undefined);
+
       const online = await evaluateInternetConnection();
 
       if (!online) {
@@ -1142,6 +1155,16 @@ export default function MarcarIngresoSalidaScreen() {
             console.error('Error hydrating auto-ingreso:', hydrateError);
           }
         }
+      } else if ((data as AttendanceErrorResponse)?.no_active_marca) {
+        // El servidor indica que el último turno ya terminó hace más de N horas: no hay turno actual hasta que empiece el siguiente.
+        const noActive = data as AttendanceErrorResponse;
+        await persistMonitoringMinutesFromResponse(noActive);
+        await removeCurrentMarca();
+        setAttendanceData(null);
+        setMarkingBlocked(false);
+        setRevertMarcaId(null);
+        setShouldResponseAbsentReason(false);
+        setErrorMessage(noActive.message);
       } else {
         const errorData = data as AttendanceErrorResponse;
         const presented = await presentBlockedMarcaFromError(

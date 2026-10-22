@@ -3,6 +3,7 @@ import { verifyAccessTokenByApi } from '../../../../../utils/verifyAccessTokenBy
 import { callDynamicPrisma } from '../../../../../utils/callDynamicPrisma';
 import { mapActaEntregaImagesForClient } from '../../mapActaEntregaImagesForClient';
 import { reportError } from '../../../../../utils/reportError';
+import { formatConsecutivoActa } from '../../../../../utils/consecutivoActa';
 
 export async function GET(req: NextRequest, context: { params: Promise<{ corpo_id: string }> }) {
   try {
@@ -34,6 +35,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
       const { c_imagenes_acta_entrega_producto: _img, ...rest } = r;
       return {
         ...rest,
+        consecutivo_formato: formatConsecutivoActa(rest.consecutivo),
         id_local: '',
         images: mapActaEntregaImagesForClient(Number(r.id), r.c_imagenes_acta_entrega_producto, baseUrl),
       };

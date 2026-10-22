@@ -165,6 +165,10 @@ export async function POST(req: NextRequest) {
       titulo_propiedad,
       rtv,
       marchamo,
+      vin,
+      titulo_propiedad_num,
+      rtv_num,
+      marchamo_num,
       firma_responsable,
       imagenes,
     } = await req.json();
@@ -208,6 +212,10 @@ export async function POST(req: NextRequest) {
       titulo_propiedad,
       rtv,
       marchamo,
+      vin,
+      titulo_propiedad_num,
+      rtv_num,
+      marchamo_num,
     });
 
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
@@ -345,6 +353,10 @@ export async function POST(req: NextRequest) {
               titulo_propiedad: newRecordObj.titulo_propiedad,
               rtv: newRecordObj.rtv,
               marchamo: newRecordObj.marchamo,
+              vin: newRecordObj.vin,
+              titulo_propiedad_num: newRecordObj.titulo_propiedad_num,
+              rtv_num: newRecordObj.rtv_num,
+              marchamo_num: newRecordObj.marchamo_num,
             },
           }]),
           created_at: createdAt.toISOString(),

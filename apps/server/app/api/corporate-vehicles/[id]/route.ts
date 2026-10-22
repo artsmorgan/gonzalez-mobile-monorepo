@@ -70,6 +70,10 @@ export async function PUT(
       titulo_propiedad,
       rtv,
       marchamo,
+      vin,
+      titulo_propiedad_num,
+      rtv_num,
+      marchamo_num,
       firma_responsable,
       imagenes,
     } = body || {};
@@ -110,6 +114,10 @@ export async function PUT(
       "titulo_propiedad",
       "rtv",
       "marchamo",
+      "vin",
+      "titulo_propiedad_num",
+      "rtv_num",
+      "marchamo_num",
     ] as const;
     const optionalTouched = optionalFieldKeys.some((k) => body[k] !== undefined) || tipo !== undefined;
 
@@ -127,6 +135,10 @@ export async function PUT(
           titulo_propiedad !== undefined ? titulo_propiedad : existingObj.titulo_propiedad,
         rtv: rtv !== undefined ? rtv : existingObj.rtv,
         marchamo: marchamo !== undefined ? marchamo : existingObj.marchamo,
+        vin: vin !== undefined ? vin : existingObj.vin,
+        titulo_propiedad_num: titulo_propiedad_num !== undefined ? titulo_propiedad_num : existingObj.titulo_propiedad_num,
+        rtv_num: rtv_num !== undefined ? rtv_num : existingObj.rtv_num,
+        marchamo_num: marchamo_num !== undefined ? marchamo_num : existingObj.marchamo_num,
       });
       Object.assign(updateData, optionalFields);
     }

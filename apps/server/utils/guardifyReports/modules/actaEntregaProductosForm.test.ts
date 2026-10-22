@@ -37,6 +37,10 @@ describe("acta de entrega de productos como formulario", () => {
         assert.deepEqual(r.firmasPresentes, ["firma_entrega", "firma_recibe"]);
         assert.deepEqual(r.hier, { empresa: 1, cliente: 2, division: 3, contrato: 4, corpo: 5, puesto: 6 });
     });
+    it("lleva el consecutivo del acta con ceros a la izquierda (vacío si no está numerada)", () => {
+        assert.equal(armarRegistro(acta({ consecutivo: 7 }), ubic, false).valores.consecutivo, "0007");
+        assert.equal(armarRegistro(acta(), ubic, false).valores.consecutivo, null);
+    });
     it("con firmas=1 entrega las imágenes; una firma ausente no se informa", () => {
         const r = armarRegistro(acta({ firma_recibe: null }), ubic, true);
         assert.equal(r.firmas.firma_entrega, SAMPLE_PNG);

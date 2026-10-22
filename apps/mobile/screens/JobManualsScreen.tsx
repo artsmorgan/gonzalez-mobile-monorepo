@@ -157,6 +157,14 @@ interface JobManualRemote {
   description: string;
   quiz?: string | null;
   firma: string;
+  /** Versión vigente del documento (v1, v2…). Cada versión se firma; `visualizaciones` trae solo las de esta versión. */
+  version?: number;
+  /** Huella (sello) de la versión vigente. */
+  sello?: string | null;
+  /** Versiones que el empleado actual ya firmó (la vigente puede faltar: debe firmar la nueva). */
+  mis_versiones_firmadas?: number[];
+  /** Cuándo se le entregó el documento al empleado actual y qué versión. */
+  mi_entrega?: { entregado_en: string | null; created_at: string | null; version: number } | null;
   puesto: {
     id: number;
     nombre: string;
@@ -173,6 +181,14 @@ interface JobManualRemote {
     firma_empleado_manual?: string | null;
     quiz_answear?: string | null;
     approved?: boolean | null;
+    /** Versión del documento que se firmó. */
+    version?: number;
+    /** Nota consolidada del quiz (0-100), guardada al calificar: no cambia aunque luego se edite el quiz. */
+    nota?: number | null;
+    nota_puntos?: number | null;
+    nota_total?: number | null;
+    nota_minimo?: number | null;
+    nota_fecha?: string | null;
     created_at: string;
     updated_at?: string;
     approved_pending?: boolean; // solo para UI offline (no viene del server)
@@ -1211,7 +1227,7 @@ export default function JobManualsScreen() {
     ]);
   };
 
-  const handleSetQuizResult = async (manualId: number, empleadoId: number, approved: boolean) => {
+  const handleSetQuizResult = async (manualId: number, empleadoId: number, approved: boolean, score?: { obtained: number; total: number } | null) => {
     const confirmed = await new Promise<boolean>((resolve) => {
       Alert.alert(
         'Confirmar',
@@ -1269,6 +1285,8 @@ export default function JobManualsScreen() {
           marcaId,
           empleadoId,
           approved,
+          score: score ?? null,
+          version: selectedManual.version ?? null,
           refreshAccessToken,
           logout,
         });
@@ -1296,6 +1314,9 @@ export default function JobManualsScreen() {
           marcaId,
           empleadoId,
           approved,
+          // Con qué puntos se calificó y de qué versión: la nota consolidada se guarda al sincronizar, no se recalcula después.
+          score: score ?? null,
+          version: selectedManual.version ?? null,
         });
         await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
       }
@@ -1320,6 +1341,7 @@ export default function JobManualsScreen() {
               approved,
               approved_pending: !isConnected,
               updated_at: updatedIso,
+              ...(score && score.total > 0 ? { nota: Math.round((score.obtained / score.total) * 1000) / 10, nota_puntos: score.obtained, nota_total: score.total, nota_fecha: updatedIso } : {}),
             };
           }
           return v;
@@ -1336,6 +1358,7 @@ export default function JobManualsScreen() {
               approved,
               approved_pending: !isConnected,
               updated_at: updatedIso,
+              ...(score && score.total > 0 ? { nota: Math.round((score.obtained / score.total) * 1000) / 10, nota_puntos: score.obtained, nota_total: score.total, nota_fecha: updatedIso } : {}),
             };
           }
           return v;
@@ -2450,6 +2473,7 @@ export default function JobManualsScreen() {
           firma,
           quizAnswear: null,
           files: null,
+          version: manual.version ?? null,
           refreshAccessToken,
           logout,
           marcaId: marcaId as number,
@@ -2458,8 +2482,8 @@ export default function JobManualsScreen() {
       } else {
         actions.push(
           manual.id > 0
-            ? { id: manual.id, type: 'auto_visualizacion', firma, marcaId }
-            : { id: 0, manualLocalId: String(manual.id_local), type: 'auto_visualizacion', firma, marcaId }
+            ? { id: manual.id, type: 'auto_visualizacion', firma, marcaId, version: manual.version ?? null }
+            : { id: 0, manualLocalId: String(manual.id_local), type: 'auto_visualizacion', firma, marcaId, version: manual.version ?? null }
         );
         await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
       }
@@ -2727,6 +2751,7 @@ export default function JobManualsScreen() {
           quizAnswear: quizAnswearStr,
           files: visualizationFilesStr,
           firmaEmpleadoManual: firmaEmpleadoManualBase64,
+          version: manualRef.version ?? null,
           refreshAccessToken,
           logout,
           marcaId,
@@ -2778,6 +2803,7 @@ export default function JobManualsScreen() {
                 files: visualizationFilesStr,
                 firmaEmpleadoManual: signatureToSave ?? undefined,
                 marcaId,
+                version: manualRef.version ?? null,
               }
             : {
                 id: manualRef.id,
@@ -2787,6 +2813,7 @@ export default function JobManualsScreen() {
                 files: visualizationFilesStr,
                 firmaEmpleadoManual: signatureToSave ?? undefined,
                 marcaId,
+                version: manualRef.version ?? null,
               }
         );
         await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
@@ -4330,7 +4357,7 @@ export default function JobManualsScreen() {
                     void ensureAutoVisualizacion(manual);
                   }}
                 >
-                  <ThemedText style={styles.manualTitle}>{manual.title}</ThemedText>
+                  <ThemedText style={styles.manualTitle}>{manual.title}{manual.version && manual.version > 1 ? ` (v${manual.version})` : ''}</ThemedText>
                   <ThemedText numberOfLines={2} style={styles.manualDescription}>
                     {manual.description}
                   </ThemedText>
@@ -4912,8 +4939,10 @@ export default function JobManualsScreen() {
                           hasQuizConfigured && hasQuizAnswers
                             ? computeQuizPercentage(quizCfg, quizAnswers, quizReviewScores[firma.empleado_id])
                             : null;
-                        const scoreValue = computedScore?.percentage ?? null;
-                        const scoreIsEstimated = !!computedScore?.approximate;
+                        // La nota consolidada (guardada al calificar) manda; si el quiz aún no tiene, se calcula aquí con las respuestas.
+                        const storedScore = typeof (firma as any).nota === 'number' ? ((firma as any).nota as number) : null;
+                        const scoreValue = storedScore ?? computedScore?.percentage ?? null;
+                        const scoreIsEstimated = storedScore !== null ? false : !!computedScore?.approximate;
                         const currentUserEmpIdForQuiz =
                           typeof employee?.id === 'number' ? employee.id : Number(employee?.id || 0);
                         const isOwnQuizAttempt =
@@ -5256,7 +5285,7 @@ export default function JobManualsScreen() {
                                           cannotConfirmQuiz && styles.formButtonDisabled,
                                         ]}
                                         disabled={cannotConfirmQuiz}
-                                        onPress={() => handleSetQuizResult(selectedManual?.id ?? 0, firma.empleado_id, isApproved)}
+                                        onPress={() => handleSetQuizResult(selectedManual?.id ?? 0, firma.empleado_id, isApproved, { obtained: obtainedPoints, total: totalPoints })}
                                       >
                                         {updatingQuizResultByEmployee[firma.empleado_id] ? (
                                           <ActivityIndicator size="small" color="#FFFFFF" />
@@ -5406,8 +5435,9 @@ export default function JobManualsScreen() {
                       <ThemedText style={styles.quizEmptyText}>Ya completaste este documento.</ThemedText>
                       {hasQuiz && myVis && isVisualizationQuizGraded(myVis) && (() => {
                         const computedOwn = computeQuizPercentage(quizCfg, parseQuizAnswersFromVisualization(myVis.quiz_answear));
-                        const ownScore = computedOwn?.percentage ?? null;
-                        const ownEstimated = !!computedOwn?.approximate;
+                        const ownStored = typeof (myVis as any).nota === 'number' ? ((myVis as any).nota as number) : null;
+                        const ownScore = ownStored ?? computedOwn?.percentage ?? null;
+                        const ownEstimated = ownStored !== null ? false : !!computedOwn?.approximate;
                         return (
                           <ThemedText style={styles.quizReviewStatusText}>
                             Resultado del quiz: {myVis.approved ? 'Aprobado' : 'Reprobado'}

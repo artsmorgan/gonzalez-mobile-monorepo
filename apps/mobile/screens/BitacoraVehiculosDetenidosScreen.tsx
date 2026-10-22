@@ -101,6 +101,9 @@ function clearVehiculoInfoCamposNoBicicleta(setters: {
   setVehTituloPropiedad: (v: boolean | null) => void;
   setVehRTV: (v: boolean | null) => void;
   setVehMarchamo: (v: boolean | null) => void;
+  setVehTituloPropiedadNum: (v: string) => void;
+  setVehRtvNum: (v: string) => void;
+  setVehMarchamoNum: (v: string) => void;
 }) {
   setters.setVehKilometraje('');
   setters.setVehProxCambioAceite('');
@@ -109,6 +112,9 @@ function clearVehiculoInfoCamposNoBicicleta(setters: {
   setters.setVehTituloPropiedad(null);
   setters.setVehRTV(null);
   setters.setVehMarchamo(null);
+  setters.setVehTituloPropiedadNum('');
+  setters.setVehRtvNum('');
+  setters.setVehMarchamoNum('');
 }
 type ReviewStatus = 'Bueno' | 'Malo' | 'No existe';
 type YesNo = 'Sí' | 'No';
@@ -772,6 +778,10 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const [vehTituloPropiedad, setVehTituloPropiedad] = useState<boolean | null>(null);
   const [vehRTV, setVehRTV] = useState<boolean | null>(null);
   const [vehMarchamo, setVehMarchamo] = useState<boolean | null>(null);
+  // Número o dato (texto opcional) de cada documento del vehículo.
+  const [vehTituloPropiedadNum, setVehTituloPropiedadNum] = useState<string>('');
+  const [vehRtvNum, setVehRtvNum] = useState<string>('');
+  const [vehMarchamoNum, setVehMarchamoNum] = useState<string>('');
 
   const [generalValues, setGeneralValues] = useState<Record<string, any>>({});
   const [generalFirmasUnavailableOffline, setGeneralFirmasUnavailableOffline] = useState<Record<string, boolean>>({});
@@ -1919,6 +1929,12 @@ export default function BitacoraVehiculosDetenidosScreen() {
           setVehTituloPropiedad(vehiculo?.titulo_propiedad ?? false);
           setVehRTV(vehiculo?.rtv ?? false);
           setVehMarchamo(vehiculo?.marchamo ?? false);
+          setVehTituloPropiedadNum(String(vehiculo?.titulo_propiedad_num ?? ''));
+          setVehRtvNum(String(vehiculo?.rtv_num ?? ''));
+          setVehMarchamoNum(String(vehiculo?.marchamo_num ?? ''));
+          if (vehiculo?.vin != null && String(vehiculo.vin).trim() !== '') {
+            setGeneralValues((prev) => (String(prev?.vin ?? '').trim() ? prev : { ...prev, vin: String(vehiculo.vin) }));
+          }
         };
 
         if (vehiculoId && Number(vehiculoId) > 0) {
@@ -2306,6 +2322,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
     setVehTituloPropiedad(null);
     setVehRTV(null);
     setVehMarchamo(null);
+    setVehTituloPropiedadNum('');
+    setVehRtvNum('');
+    setVehMarchamoNum('');
     if (isTipoBicicleta(tipoNext)) {
       clearVehiculoInfoCamposNoBicicleta({
         setVehKilometraje,
@@ -2315,6 +2334,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
         setVehTituloPropiedad,
         setVehRTV,
         setVehMarchamo,
+        setVehTituloPropiedadNum,
+        setVehRtvNum,
+        setVehMarchamoNum,
       });
     }
 
@@ -2547,6 +2569,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
     const tituloPropFromInfo = gMap.titulo_propiedad;
     const rtvFromInfo = gMap.rtv;
     const marchamoFromInfo = gMap.marchamo;
+    const tituloNumFromInfo = gMap.titulo_propiedad_num;
+    const rtvNumFromInfo = gMap.rtv_num;
+    const marchamoNumFromInfo = gMap.marchamo_num;
 
     setVehKilometraje((prev) =>
       kmFromInfo !== undefined && kmFromInfo !== null && String(kmFromInfo).trim() !== ''
@@ -2592,6 +2617,10 @@ export default function BitacoraVehiculosDetenidosScreen() {
     const rtvParsed = parseBoolFromInfo(rtvFromInfo);
     const marchamoParsed = parseBoolFromInfo(marchamoFromInfo);
 
+    const textFromInfo = (raw: any, prev: string) => (raw !== undefined && raw !== null && String(raw).trim() !== '' ? String(raw) : prev);
+    setVehTituloPropiedadNum((prev) => textFromInfo(tituloNumFromInfo, prev));
+    setVehRtvNum((prev) => textFromInfo(rtvNumFromInfo, prev));
+    setVehMarchamoNum((prev) => textFromInfo(marchamoNumFromInfo, prev));
     setVehTituloPropiedad((prev) => (tituloParsed !== null ? tituloParsed : prev));
     setVehRTV((prev) => (rtvParsed !== null ? rtvParsed : prev));
     setVehMarchamo((prev) => (marchamoParsed !== null ? marchamoParsed : prev));
@@ -2606,6 +2635,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
         setVehTituloPropiedad,
         setVehRTV,
         setVehMarchamo,
+        setVehTituloPropiedadNum,
+        setVehRtvNum,
+        setVehMarchamoNum,
       });
     }
   };
@@ -2883,6 +2915,24 @@ export default function BitacoraVehiculosDetenidosScreen() {
             ? 'true'
             : 'false',
         kind: 'text',
+      },
+      {
+        key: 'titulo_propiedad_num',
+        label: 'Título propiedad (número o dato)',
+        value: vehTituloPropiedadNum,
+        kind: 'text',
+      },
+      {
+        key: 'rtv_num',
+        label: 'RTV (número o dato)',
+        value: vehRtvNum,
+        kind: 'text',
+      },
+      {
+        key: 'marchamo_num',
+        label: 'Marchamo (número o dato)',
+        value: vehMarchamoNum,
+        kind: 'text',
       }
     );
 
@@ -2943,6 +2993,10 @@ export default function BitacoraVehiculosDetenidosScreen() {
         titulo_propiedad: esBicicleta ? null : vehTituloPropiedad,
         rtv: esBicicleta ? null : vehRTV,
         marchamo: esBicicleta ? null : vehMarchamo,
+        vin: esBicicleta ? null : strOrNull(String(generalValues.vin ?? '')),
+        titulo_propiedad_num: esBicicleta ? null : strOrNull(vehTituloPropiedadNum),
+        rtv_num: esBicicleta ? null : strOrNull(vehRtvNum),
+        marchamo_num: esBicicleta ? null : strOrNull(vehMarchamoNum),
       };
     }
 
@@ -3896,6 +3950,12 @@ export default function BitacoraVehiculosDetenidosScreen() {
                             } else {
                               setVehMarchamo(null);
                             }
+                            setVehTituloPropiedadNum(String(selectedVehicle.titulo_propiedad_num ?? ''));
+                            setVehRtvNum(String(selectedVehicle.rtv_num ?? ''));
+                            setVehMarchamoNum(String(selectedVehicle.marchamo_num ?? ''));
+                            if (selectedVehicle.vin != null && String(selectedVehicle.vin).trim() !== '') {
+                              setGeneralValues((prev) => ({ ...prev, vin: String(selectedVehicle.vin) }));
+                            }
                           }
                         }}
                         style={styles.picker}
@@ -4017,6 +4077,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
                           setVehTituloPropiedad,
                           setVehRTV,
                           setVehMarchamo,
+                          setVehTituloPropiedadNum,
+                          setVehRtvNum,
+                          setVehMarchamoNum,
                         });
                       }
                       return;
@@ -4168,6 +4231,40 @@ export default function BitacoraVehiculosDetenidosScreen() {
                         </View>
                         <ThemedText style={styles.checkboxLabel}>Marchamo</ThemedText>
                       </TouchableOpacity>
+                    </ThemedView>
+
+                    <ThemedView style={styles.row}>
+                      <ThemedText style={styles.label}>Título propiedad - número o dato</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={vehTituloPropiedadNum}
+                        onChangeText={setVehTituloPropiedadNum}
+                        placeholder="Número o dato del título"
+                        placeholderTextColor="#999"
+                        maxLength={100}
+                      />
+                    </ThemedView>
+                    <ThemedView style={styles.row}>
+                      <ThemedText style={styles.label}>RTV - número o dato</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={vehRtvNum}
+                        onChangeText={setVehRtvNum}
+                        placeholder="Número o dato de la RTV"
+                        placeholderTextColor="#999"
+                        maxLength={100}
+                      />
+                    </ThemedView>
+                    <ThemedView style={styles.row}>
+                      <ThemedText style={styles.label}>Marchamo - número o dato</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={vehMarchamoNum}
+                        onChangeText={setVehMarchamoNum}
+                        placeholder="Número o dato del marchamo"
+                        placeholderTextColor="#999"
+                        maxLength={100}
+                      />
                     </ThemedView>
                   </>
                 ) : null}

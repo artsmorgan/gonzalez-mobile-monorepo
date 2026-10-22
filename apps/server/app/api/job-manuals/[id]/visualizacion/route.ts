@@ -30,7 +30,7 @@ export async function PATCH(
             return NextResponse.json({ status: false, message: "Manual no especificado" }, { status: 400 });
         }
 
-        const { marca_id, field, value, firma_empleado } = await req.json();
+        const { marca_id, field, value, firma_empleado, version: bodyVersion } = await req.json();
         if (typeof field !== "string" || !ALLOWED_FIELDS.has(field)) {
             await reportError(req, "api/job-manuals/[id]/visualizacion", "PATCH", 400, "Campo no permitido");
             return NextResponse.json({ status: false, message: "Campo no permitido" }, { status: 400 });
@@ -48,13 +48,19 @@ export async function PATCH(
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
         }
 
+        // La visualización es por versión del documento (issue #155): la que la app mostraba, o la vigente si no la manda.
+        const manualActual = (await callDynamicPrisma({ req, data: { action: "GET", table: "e_manual_puesto", operation: "findUnique", where: { id } } })) as any;
+        const versionVigente = Number(manualActual?.version ?? 1);
+        let versionFirmada = Number(bodyVersion);
+        if (!Number.isInteger(versionFirmada) || versionFirmada < 1 || versionFirmada > versionVigente) versionFirmada = versionVigente;
+
         const existing = await callDynamicPrisma({
             req,
             data: {
                 action: "GET",
                 table: "e_empleado_visualizacion_manual_puesto",
                 operation: "findFirst",
-                where: { empleado_id: empleadoId, manual_puesto_id: id },
+                where: { empleado_id: empleadoId, manual_puesto_id: id, version: versionFirmada },
             },
         });
 
@@ -113,6 +119,8 @@ export async function PATCH(
                 data: {
                     empleado_id: empleadoId,
                     manual_puesto_id: id,
+                    version: versionFirmada,
+                    sello_version: versionFirmada === versionVigente ? manualActual?.sello ?? null : null,
                     nombre_empleado: `${empleadoObj.nombre} ${empleadoObj.primer_apellido} ${empleadoObj.segundo_apellido}`,
                     firma_empleado,
                     quiz_answear: null,

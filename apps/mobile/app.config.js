@@ -21,43 +21,87 @@ function getGitCommitLast4() {
  * Debe coincidir con la entrada de `apps/server/mobile_versions_test.json` (lite) o `mobile_versions_prod.json` (prod).
  */
 const APP_VERSION_INFO_LITE = {
-  "version": "1.0.2",
-  "id": "9e045449-0841-48be-b1e1-47e85e99e0a0",
+  "version": "1.0.3",
+  "id": "b1b7b720-814a-4ac3-89de-d2619b41d9c4",
   "name": "MonitoreApp",
-  "created_at": "2026-10-16T00:00:00Z",
-  "title": "Corrección de horas en las marcas de asistencia",
-  "description": "Corrige el cálculo de las horas de inicio y fin del turno y la selección de la marca cuando hay horarios en conflicto.",
+  "created_at": "2026-10-22T00:00:00Z",
+  "title": "Versionado de documentos, evidencia de cada acción, almuerzo manual corregido y nuevos campos",
+  "description": "Los documentos tienen versiones y se entregan al marcar ingreso, cada acción guarda su dispositivo, ubicación y hora (también sin conexión), el almuerzo manual guarda las horas escritas y se agregan campos al acta de entrega, a los vehículos y a inducción y recorrido.",
   "notas": [
     {
-      "title": "Marcas de asistencia",
-      "description": "Corrección del cálculo de la hora de inicio y de fin del turno: dependía de la zona horaria del dispositivo y sumaba un día al inicio en los turnos anteriores a las 06:00, lo que bloqueaba el ingreso. Ahora se calcula como hora de reloj de Costa Rica, comparable con la hora de referencia de la aplicación. Además, cuando dos marcas del mismo empleado se traslapan en horario, se prioriza la de reemplazo y, en su defecto, la de inicio más temprano (a igual inicio, la de menor id)."
+      "title": "Documentos",
+      "description": "Los documentos tienen versiones: al publicar una versión nueva se conservan las anteriores con sus firmas y el empleado firma la nueva. Al marcar el ingreso se entregan automáticamente los documentos pendientes de su puesto, incluido quien entra después. La nota del quiz queda guardada como dato consolidado y no cambia si el quiz se edita."
+    },
+    {
+      "title": "Evidencia de cada acción",
+      "description": "Cada alta o edición guarda el dispositivo, la ubicación y la hora de la acción. Si se hizo sin conexión se conserva la ubicación y la hora del momento en que se hizo, no las de la sincronización. Si el permiso de ubicación se niega, el registro se guarda igual y queda marcado."
+    },
+    {
+      "title": "Tiempo de alimentación",
+      "description": "El registro manual guarda la hora de inicio y de fin que se escribieron (antes se desplazaban 6 horas). Además se corrigió un duplicado que podía crearse al sincronizar un almuerzo hecho sin conexión."
+    },
+    {
+      "title": "Marcas y turnos",
+      "description": "Un turno sin cerrar deja de contar pasadas unas horas desde su salida (configurable en Nomencladores, 4 horas por defecto) y no se ofrecen acciones de ese turno vencido. Con marcas traslapadas por un cambio de guardia, la entrada ya no cierra como «salida anticipada» una marca que se traslapa."
+    },
+    {
+      "title": "Acta de entrega de productos",
+      "description": "Cada acta lleva un consecutivo por empresa (0001, 0002…), que también se asigna al sincronizar un acta hecha sin conexión."
+    },
+    {
+      "title": "Vehículos corporativos",
+      "description": "El registro y la revisión admiten el VIN o chasis y el número o dato del título de propiedad, la RTV y el marchamo (todos opcionales)."
+    },
+    {
+      "title": "Inducción y recorrido",
+      "description": "Nuevo campo opcional «Tipo de capacitación» (Presencial o Virtual), visible en la lista y al editar."
+    },
+    {
+      "title": "Seguridad de la sesión",
+      "description": "La sesión y los datos del empleado se guardan en el almacenamiento seguro del teléfono. Al actualizar, la sesión abierta se conserva."
     }
   ]
 };
 
 const APP_VERSION_INFO_PROD = {
-  "version": "1.0.1",
-  "id": "43e3b21b-7091-415b-9e4a-78fadb696fbd",
+  "version": "1.0.2",
+  "id": "f72ef0b2-274f-45ba-bad7-7ce71d141b13",
   "name": "MonitoreApp",
-  "created_at": "2026-10-16T00:00:00Z",
-  "title": "Reportes en modalidad tabular, actualización de listas, quices de documentos y corrección de horas en marcas",
-  "description": "Incorpora la modalidad tabular en los reportes, la actualización de las listas de los módulos mediante gesto de deslizamiento, la edición de preguntas y la visualización de calificaciones en el módulo de documentos, y la corrección del cálculo de horas en las marcas de asistencia.",
+  "created_at": "2026-10-22T00:00:00Z",
+  "title": "Versionado de documentos, evidencia de cada acción, almuerzo manual corregido y nuevos campos",
+  "description": "Los documentos tienen versiones y se entregan al marcar ingreso, cada acción guarda su dispositivo, ubicación y hora (también sin conexión), el almuerzo manual guarda las horas escritas y se agregan campos al acta de entrega, a los vehículos y a inducción y recorrido.",
   "notas": [
     {
-      "title": "Reportes",
-      "description": "Incorporación de la modalidad tabular (consolidada) en los reportes: una fila por registro, con los datos del registro repetidos en cada fila derivada y los valores múltiples concatenados con «;»."
-    },
-    {
-      "title": "Listas de módulos",
-      "description": "Actualización de las listas mediante el gesto de deslizamiento (pull-to-refresh) al inicio de la lista: reejecuta la consulta vigente con los filtros aplicados, estén o no visibles, y respeta el estado de conectividad (consulta remota o caché local)."
-    },
-    {
       "title": "Documentos",
-      "description": "Edición de las preguntas durante la creación del quiz, además de su alta y eliminación, y visualización de la calificación (0-100) de cada empleado en los quices revisados, calculada a partir de sus respuestas."
+      "description": "Los documentos tienen versiones: al publicar una versión nueva se conservan las anteriores con sus firmas y el empleado firma la nueva. Al marcar el ingreso se entregan automáticamente los documentos pendientes de su puesto, incluido quien entra después. La nota del quiz queda guardada como dato consolidado y no cambia si el quiz se edita."
     },
     {
-      "title": "Marcas de asistencia",
-      "description": "Corrección del cálculo de la hora de inicio y de fin del turno: dependía de la zona horaria del dispositivo y sumaba un día al inicio en los turnos anteriores a las 06:00, lo que bloqueaba el ingreso. Ahora se calcula como hora de reloj de Costa Rica, comparable con la hora de referencia de la aplicación. Además, cuando dos marcas del mismo empleado se traslapan en horario, se prioriza la de reemplazo y, en su defecto, la de inicio más temprano (a igual inicio, la de menor id)."
+      "title": "Evidencia de cada acción",
+      "description": "Cada alta o edición guarda el dispositivo, la ubicación y la hora de la acción. Si se hizo sin conexión se conserva la ubicación y la hora del momento en que se hizo, no las de la sincronización. Si el permiso de ubicación se niega, el registro se guarda igual y queda marcado."
+    },
+    {
+      "title": "Tiempo de alimentación",
+      "description": "El registro manual guarda la hora de inicio y de fin que se escribieron (antes se desplazaban 6 horas). Además se corrigió un duplicado que podía crearse al sincronizar un almuerzo hecho sin conexión."
+    },
+    {
+      "title": "Marcas y turnos",
+      "description": "Un turno sin cerrar deja de contar pasadas unas horas desde su salida (configurable en Nomencladores, 4 horas por defecto) y no se ofrecen acciones de ese turno vencido. Con marcas traslapadas por un cambio de guardia, la entrada ya no cierra como «salida anticipada» una marca que se traslapa."
+    },
+    {
+      "title": "Acta de entrega de productos",
+      "description": "Cada acta lleva un consecutivo por empresa (0001, 0002…), que también se asigna al sincronizar un acta hecha sin conexión."
+    },
+    {
+      "title": "Vehículos corporativos",
+      "description": "El registro y la revisión admiten el VIN o chasis y el número o dato del título de propiedad, la RTV y el marchamo (todos opcionales)."
+    },
+    {
+      "title": "Inducción y recorrido",
+      "description": "Nuevo campo opcional «Tipo de capacitación» (Presencial o Virtual), visible en la lista y al editar."
+    },
+    {
+      "title": "Seguridad de la sesión",
+      "description": "La sesión y los datos del empleado se guardan en el almacenamiento seguro del teléfono. Al actualizar, la sesión abierta se conserva."
     }
   ]
 };
@@ -173,12 +217,21 @@ module.exports = ({ config }) => {
           process.env.NEXT_PUBLIC_API_SERVER ||
           // test https://api-gonzalez-mobile-monorepo-production.up.railway.app
           // prod https://gonzalez-mobile-app-production.up.railway.app
-          "https://gonzalez-mobile-app-production.up.railway.app",
+          "https://api-gonzalez-mobile-monorepo-production.up.railway.app",
         /** Debe coincidir con `MOBILE_ACCESS_TOKEN` del servidor (query en `/api/main-structure`). */
         MOBILE_ACCESS_TOKEN:
           process.env.EXPO_PUBLIC_MOBILE_ACCESS_TOKEN ||
           process.env.MOBILE_ACCESS_TOKEN ||
           "",
+        /**
+         * Guardify (registro de equipos, órdenes y catálogo de APK) está BLOQUEADO por defecto: aunque haya URL, la app no lo usa mientras este interruptor
+         * no sea "true". El código se conserva; para reactivarlo: `EXPO_PUBLIC_GUARDIFY_ENABLED=true` y `EXPO_PUBLIC_GUARDIFY_URL`, y recompilar.
+         */
+        GUARDIFY_ENABLED: process.env.EXPO_PUBLIC_GUARDIFY_ENABLED || process.env.GUARDIFY_ENABLED || "false",
+        GUARDIFY_URL: process.env.EXPO_PUBLIC_GUARDIFY_URL || process.env.GUARDIFY_URL || "https://falls-gamecube-rendering-program.trycloudflare.com",
+        GUARDIFY_APP_KEY: process.env.EXPO_PUBLIC_GUARDIFY_APP_KEY || process.env.GUARDIFY_APP_KEY || "monitoreapp",
+        /** Código de empresa embebido (producción). En lite/full se deja vacío y se escribe al registrar el equipo. */
+        GUARDIFY_COMPANY_CODE: process.env.EXPO_PUBLIC_GUARDIFY_COMPANY_CODE || process.env.GUARDIFY_COMPANY_CODE || "corporacion-gonzalez",
         /** Variante con la que se evaluó esta configuración (la app usa la real, del paquete nativo: ver hooks/appVariant.ts). */
         APP_VARIANT: variant,
         /** Información de versión de la build según el entorno de construcción. */

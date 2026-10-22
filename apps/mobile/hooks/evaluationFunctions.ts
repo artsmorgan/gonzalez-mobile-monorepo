@@ -1658,6 +1658,10 @@ interface CreateCorporateVehicleParams {
     titulo_propiedad?: boolean | null;
     rtv?: boolean | null;
     marchamo?: boolean | null;
+    vin?: string | null;
+    titulo_propiedad_num?: string | null;
+    rtv_num?: string | null;
+    marchamo_num?: string | null;
     firma_responsable?: string;
     imagenes?: Array<{
       extension: string;
@@ -9296,6 +9300,7 @@ interface CreateInductionTourRecordParams {
     fecha?: string | null;
     division?: string | null;
     renglon_edificio?: string | null;
+    tipo_capacitacion?: string | null;
     supervisor_cliente?: string | null;
     supervisor_corporacion?: string | null;
     temas_desarrollados?: string | null;
@@ -9323,6 +9328,7 @@ interface UpdateInductionTourRecordParams {
     fecha?: string | null;
     division?: string | null;
     renglon_edificio?: string | null;
+    tipo_capacitacion?: string | null;
     supervisor_cliente?: string | null;
     supervisor_corporacion?: string | null;
     temas_desarrollados?: string | null;

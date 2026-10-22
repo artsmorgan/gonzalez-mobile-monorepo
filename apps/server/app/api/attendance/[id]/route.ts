@@ -9,6 +9,9 @@ import { createLoginMarca } from "../../../../utils/createLoginMarca";
 import { getMonitoringPostMinutes } from "../../../../utils/getMonitoringPostMinutes";
 import axios from "axios";
 import { getTiempoGraciaMarcarSalida } from "../../../../utils/getTiempoGraciaMarcarSalida";
+import { buildMarcaCandidata, puedeCerrarseAutomaticamente } from "../../../../utils/resolveMarcaConflicto";
+import { dynDesdeRequest } from "../../../../utils/documentos/dyn";
+import { entregarDocumentosPendientes } from "../../../../utils/documentos/service";
 import { reportError } from "../../../../utils/reportError";
 
 import { auditUpdateFields } from "../../../../utils/auditFields";
@@ -39,7 +42,7 @@ async function findPreviousOpenMarcaViaPlanillas(params: {
     planillasToken: string;
     empleadoCodigo: string;
     empleadoId: number;
-    currentMarca: { id: number; fecha: Date; hora_inicio: Date | null };
+    currentMarca: { id: number; fecha: Date; hora_inicio: Date | null; hora_fin?: Date | null };
     referenceDate: Date;
 }): Promise<{ id: number } | null> {
     const planillasUrl = String(process.env.PLANILLAS_URL || "").trim().replace(/\/+$/, "");
@@ -47,6 +50,9 @@ async function findPreviousOpenMarcaViaPlanillas(params: {
 
     const currentStart = buildMarcaDateTime(params.currentMarca);
     if (!currentStart) return null;
+    const candidata = (m: { id: number; fecha: Date; hora_inicio: Date | null; hora_fin?: Date | null }) =>
+        buildMarcaCandidata({ id: m.id, fecha: m.fecha, horaInicio: m.hora_inicio, horaFin: m.hora_fin, empleadoReemplazaId: null });
+    const candidataActual = candidata(params.currentMarca);
 
     const refCr = toZonedTime(params.referenceDate, "America/Costa_Rica");
     let dateCursor = new Date(`${refCr.toISOString().split("T")[0]}T12:00:00.000Z`);
@@ -100,6 +106,8 @@ async function findPreviousOpenMarcaViaPlanillas(params: {
 
                 const marcaStart = buildMarcaDateTime(marca);
                 if (!marcaStart || marcaStart >= currentStart) continue;
+                // Una marca que se traslapa con la nueva es el mismo turno físico (cambio de guardia), no un turno anterior olvidado.
+                if (!puedeCerrarseAutomaticamente(candidata(marca), candidataActual)) continue;
 
                 if (marca.hora_entrada_digitada != null && marca.hora_salida_digitada == null) {
                     return { id: marca.id };
@@ -167,6 +175,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                             id: marcaDia.id,
                             fecha: marcaDia.fecha,
                             hora_inicio: marcaDia.hora_inicio,
+                            hora_fin: marcaDia.hora_fin,
                         },
                         referenceDate: Number.isNaN(referenceDate.getTime()) ? new Date() : referenceDate,
                     });
@@ -276,6 +285,21 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                         const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha ingresado a su puesto de ${puesto_name}${desc_tardia}`;
                         await sendNotificationByRole(req, marcaDia.corpo_id, [marcaDia.plaza_id ?? 0], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
                     }
+                }
+
+                // Entrega de documentos (issue #154): al marcar el ingreso se crean los vínculos pendientes entre el empleado y los documentos de su puesto
+                // (y los de las asignaciones vigentes de Guardify que lo alcanzan), con la fecha de entrega. Nunca bloquea el ingreso.
+                try {
+                    const ahoraEntrega = Number.isNaN(horaAccionDate.getTime()) ? toZonedTime(new Date(), "America/Costa_Rica") : horaAccionDate;
+                    // La marca no guarda la división: sale del contrato.
+                    const contratoMarca = marcaDia.contrato_id ? await prisma.e_estructura_contrato.findUnique({ where: { id: marcaDia.contrato_id }, select: { division_id: true } }) : null;
+                    await entregarDocumentosPendientes(dynDesdeRequest(req), {
+                        empleadoId: Number(empleado.id),
+                        hier: { puesto: marcaDia.puesto_id, corpo: marcaDia.corpo_id, contrato: marcaDia.contrato_id, cliente: marcaDia.cliente_id, empresa: marcaDia.empresa_id, division: contratoMarca?.division_id ?? null },
+                        ahoraIso: ahoraEntrega.toISOString(),
+                    });
+                } catch (docErr) {
+                    console.warn("[attendance/entrada] No se pudieron entregar los documentos pendientes (no bloquea el ingreso):", docErr instanceof Error ? docErr.message : docErr);
                 }
                 break;
             case "salida":

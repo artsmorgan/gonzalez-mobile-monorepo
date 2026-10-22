@@ -6,9 +6,8 @@ import { loadPuestoHierarchy, type Hierarchy } from "../scope";
 
 /**
  * Cambio de ubicación del puesto como formulario (`c_ubicacion_puesto_registro_cambios`). No hay generador individual ni firma guardada:
- * el formato sale de las columnas del consolidado. IGUAL QUE EL MÓDULO DE LISTA, NUNCA se entregan la latitud ni la longitud (decisión de
- * seguridad ya tomada ahí: son las coordenadas de un puesto de vigilancia); el documento dice si el puesto tenía ubicación anterior y
- * cuántos metros se movió. La tabla no tiene `isActive`.
+ * el formato sale de las columnas del consolidado. El módulo de lista ya expone la latitud y la longitud (issue #137); este documento, que es el formato
+ * impreso, sigue diciendo solo si el puesto tenía ubicación anterior y cuántos metros se movió. La tabla no tiene `isActive`.
  */
 const txt = (v: unknown): string | null => { const s = String(v ?? "").trim(); return s ? s : null; };
 

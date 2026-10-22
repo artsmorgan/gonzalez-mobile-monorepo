@@ -35,7 +35,10 @@ describe("registro de vehículos corporativos como formulario", () => {
         assert.equal(r.variante, "Vehículo");
         assert.deepEqual([r.valores.placa, r.valores.anno, r.valores.kilometraje], ["BCD-123", 2022, 45210]);
         assert.deepEqual([r.valores.fecha_creacion, r.valores.hora_creacion, r.valores.creado_por], ["2026-04-20", "08:12", "Ana Soto"]);
-        assert.deepEqual(r.listas.documentos, [{ item: "Título de propiedad", valor: "Sí" }, { item: "RTV", valor: "Sí" }, { item: "Marchamo", valor: "No" }]);
+        assert.deepEqual(r.listas.documentos, [{ item: "Título de propiedad", valor: "Sí", dato: null }, { item: "RTV", valor: "Sí", dato: null }, { item: "Marchamo", valor: "No", dato: null }]);
+        const conDatos = armarRegistro(vehiculo({ vin: "9BWZZZ377VT004251", titulo_propiedad_num: "TP-55", rtv_num: "R-1" }), ubic, false);
+        assert.equal(conDatos.valores.vin, "9BWZZZ377VT004251");
+        assert.deepEqual(conDatos.listas.documentos.map((d: any) => d.dato), ["TP-55", "R-1", null]);
         assert.deepEqual(r.listas.usos[0], { conductor: "Luis Mora", codigo: "E-100", fecha: "2026-04-21", inicio: "07:30", fin: "12:45", km_inicio: 45210, km_fin: 45290, motivo: "Ronda", combustible_inicio: "Lleno", combustible_fin: "Medio", firma_conductor: SAMPLE_PNG });
         assert.deepEqual(r.listas.mantenimientos[0], { fecha: "2026-04-25", tipo: "Preventivo", mantenimiento: "Cambio de aceite", diagnostico: "Sin novedad", km_siguiente: 50000, mecanico: "Pedro Vega", firma_mecanico: null });
         assert.deepEqual(r.hier, { empresa: 1, cliente: 2, division: 3, contrato: 4, corpo: 5, puesto: 6 });

@@ -20,6 +20,15 @@ export type ParticipanteRow = {
  * ausente hace que Prisma pida todas las columnas del modelo, incluidas las eliminadas, y la consulta
  * falla con "Unknown field ... does not exist"/"column ... does not exist".
  */
+/** Opciones de «Tipo de capacitación» (las mismas del registro de capacitaciones). */
+export const TIPOS_CAPACITACION = ["Presencial", "Virtual"] as const;
+
+/** Valor recibido de la app → opción válida; vacío o desconocido queda en `null` (el campo es opcional). */
+export function normalizeTipoCapacitacion(value: unknown): string | null {
+    const v = String(value ?? "").trim().toLowerCase();
+    return TIPOS_CAPACITACION.find((t) => t.toLowerCase() === v) ?? null;
+}
+
 export const INDUCTION_TOUR_SAFE_SELECT = {
     id: true,
     empresa_id: true,
@@ -30,6 +39,7 @@ export const INDUCTION_TOUR_SAFE_SELECT = {
     plaza_id: true,
     fecha: true,
     renglon_edificio: true,
+    tipo_capacitacion: true,
     supervisor_cliente: true,
     supervisor_corporacion: true,
     temas_desarrollados: true,

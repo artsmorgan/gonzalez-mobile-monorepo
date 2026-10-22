@@ -7,6 +7,7 @@ import {
     hydrateParticipantesForRecords,
     replaceParticipantesForRegistro,
     INDUCTION_TOUR_SAFE_SELECT,
+    normalizeTipoCapacitacion,
 } from "../participantesHelpers";
 
 function parseFechaInput(fecha: any): Date | undefined {
@@ -55,6 +56,7 @@ export async function PUT(
             fecha,
             division,
             renglon_edificio,
+            tipo_capacitacion,
             supervisor_cliente,
             supervisor_corporacion,
             temas_desarrollados,
@@ -101,6 +103,7 @@ export async function PUT(
         }
         if (division !== undefined) updateData.division = division ? String(division).trim() : "Otros";
         if (renglon_edificio !== undefined) updateData.renglon_edificio = renglon_edificio ? String(renglon_edificio) : "";
+        if (tipo_capacitacion !== undefined) updateData.tipo_capacitacion = normalizeTipoCapacitacion(tipo_capacitacion);
         if (supervisor_cliente !== undefined) updateData.supervisor_cliente = supervisor_cliente !== null && supervisor_cliente !== undefined ? String(supervisor_cliente) : null;
         if (supervisor_corporacion !== undefined) updateData.supervisor_corporacion = supervisor_corporacion ? String(supervisor_corporacion) : "";
         if (temas_desarrollados !== undefined) updateData.temas_desarrollados = temas_desarrollados ? String(temas_desarrollados) : "[]";
@@ -248,6 +251,7 @@ export async function DELETE(
                             fecha: fechaValue,
                             division: existingObj.division,
                             renglon_edificio: existingObj.renglon_edificio,
+                            tipo_capacitacion: existingObj.tipo_capacitacion ?? null,
                             supervisor_cliente: existingObj.supervisor_cliente,
                             supervisor_corporacion: existingObj.supervisor_corporacion,
                             temas_desarrollados: existingObj.temas_desarrollados,

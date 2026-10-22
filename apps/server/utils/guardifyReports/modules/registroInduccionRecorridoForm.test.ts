@@ -8,7 +8,7 @@ const ubic = { empresa: "CH - Empresa", cliente: "Edificio Central", division: "
 const raw = (extra: any = {}) => ({
     id: 12, empresa_id: 9, cliente_id: 2, corpo_id: 5, division_id: 5, contrato_id: 4, puesto_id: 6, plaza_id: 8, division: "Aseo",
     fecha: new Date("2026-06-02T00:00:00Z"), created_at: new Date("2026-06-02T15:05:09Z"), created_by: "20",
-    renglon_edificio: "Torre B", supervisor_cliente: "Rosa Campos", supervisor_corporacion: "Mario León",
+    renglon_edificio: "Torre B", tipo_capacitacion: "Virtual", supervisor_cliente: "Rosa Campos", supervisor_corporacion: "Mario León",
     temas_desarrollados: JSON.stringify([
         { tema: "Prueba de cepillo.", respuesta: "SI", comentarios: "Sin novedad" }, { tema: "Presentación de los Supervisores", respuesta: "no", comentarios: "" },
         { tema: "Uso de los ascensores", respuesta: "N/A", comentarios: "No hay ascensor" }, { tema: "Sin responder", respuesta: "", comentarios: "" },
@@ -30,6 +30,8 @@ describe("registro de inducción y recorrido como formulario", () => {
         assert.equal(r.variante, null);
         assert.equal(r.valores.fecha, "2026-06-02");
         assert.equal(r.valores.renglon_edificio, "Torre B");
+        assert.equal(r.valores.tipo_capacitacion, "Virtual");
+        assert.equal(armarRegistro(raw({ tipo_capacitacion: null }), ubic, false).valores.tipo_capacitacion, null);
         assert.deepEqual(r.listas.temas.map((t) => [t.item, t.valor, t.observacion]), [
             ["Prueba de cepillo.", "SI", "Sin novedad"], ["Presentación de los Supervisores", "NO", null], ["Uso de los ascensores", "NA", "No hay ascensor"], ["Sin responder", null, null],
         ]);

@@ -125,3 +125,34 @@ describe("manuales de trabajo: empleados asignados a los puestos", () => {
         assert.equal(mapManualPuestoRow(raw, { asignados: [] }).empleados_enviados, 3);
     });
 });
+
+describe("documentos con versión y nota consolidada (issues #155 y #156)", () => {
+    const base = { id: 4, title: "Protocolo", version: 2, created_at: new Date("2026-10-01T10:00:00Z"), e_puestos_manual_puesto: [], e_empleados_manual_puesto: [{ empleado_id: 1 }, { empleado_id: 2 }, { empleado_id: 3 }] };
+    it("el estatus es el de la versión vigente: la firma de la v1 no cuenta como firmado de la v2", () => {
+        const o = mapManualPuestoRow({
+            ...base,
+            e_empleado_visualizacion_manual_puesto: [
+                { empleado_id: 1, version: 1, firma_empleado_manual: "f", approved: true, nota: 90 },
+                { empleado_id: 1, version: 2, firma_empleado_manual: "f2", approved: true, nota: 80 },
+                { empleado_id: 2, version: 1, firma_empleado_manual: "f", approved: true, nota: 100 },
+            ],
+        });
+        assert.deepEqual([o.version, o.vistos, o.firmados, o.aprobados, o.empleados_enviados, o.pendientes], [2, 1, 1, 1, 3, 2]);
+    });
+    it("la nota promedio es la de la versión vigente, con un decimal, y vacía si nadie fue calificado", () => {
+        const o = mapManualPuestoRow({ ...base, e_empleado_visualizacion_manual_puesto: [{ empleado_id: 1, version: 2, nota: 80 }, { empleado_id: 2, version: 2, nota: 65.5 }, { empleado_id: 3, version: 2, nota: null }, { empleado_id: 9, version: 1, nota: 10 }] });
+        assert.equal(o.nota_promedio, 72.8);
+        assert.equal(mapManualPuestoRow({ ...base, e_empleado_visualizacion_manual_puesto: [{ empleado_id: 1, version: 2, nota: null }] }).nota_promedio, null);
+        assert.equal(mapManualPuestoRow({ ...base, e_empleado_visualizacion_manual_puesto: [] }).nota_promedio, null);
+    });
+    it("un documento anterior a las versiones (sin columna) es la v1 y sus visualizaciones cuentan", () => {
+        const o = mapManualPuestoRow({ id: 5, e_empleado_visualizacion_manual_puesto: [{ empleado_id: 1, firma_empleado_manual: "f" }], e_empleados_manual_puesto: [{ empleado_id: 1 }] });
+        assert.deepEqual([o.version, o.vistos, o.firmados], [1, 1, 1]);
+    });
+    it("version y nota_promedio son columnas filtrables y ordenables", () => {
+        for (const k of ["version", "nota_promedio"]) {
+            assert.ok(manualesPuesto.filterKeys.includes(k), k);
+            assert.ok(manualesPuesto.sortKeys.includes(k), k);
+        }
+    });
+});

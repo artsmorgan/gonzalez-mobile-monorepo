@@ -1097,8 +1097,9 @@ export async function buildManualesPuestoExcelConsolidado(
         const visRows: VisRowData[] = vizList.map((v: any) => {
             const ansItems = parseQuizAnswersPayload(v.quiz_answear);
             const firmado = !!(v as any).firma_empleado_manual;
-            // La calificación no se guarda: se calcula aquí con las respuestas del empleado.
-            const score = quizScorePercentage(questionObjs, ansItems);
+            // Nota consolidada (issue #156): si ya se calificó, la guardada (no cambia aunque se edite el quiz). Si no, se estima con las respuestas del empleado.
+            const notaGuardada = (v as any).nota != null && String((v as any).nota).trim() !== "" ? Number((v as any).nota) : null;
+            const score = notaGuardada != null && Number.isFinite(notaGuardada) ? { value: notaGuardada, estimada: false } : quizScorePercentage(questionObjs, ansItems);
             return {
                 empleadoTxt: excelCellString(empleadoCedulaNombre(v.c_empleado, excelCellString(v.nombre_empleado))),
                 puestoTxt: puestosTxtByEmpleado.get(Number(v.empleado_id)) ?? "",

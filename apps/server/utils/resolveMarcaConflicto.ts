@@ -91,6 +91,16 @@ export function grupoEnConflicto(semilla: MarcaCandidata, pool: MarcaCandidata[]
     return [...grupo.values()];
 }
 
+/**
+ * ¿Se puede cerrar automáticamente `previa` (entrada sin salida) al marcar la entrada de `actual`? Solo si NO se traslapan: dos marcas
+ * traslapadas del mismo empleado son el mismo turno físico (su propia marca y la del compañero al que reemplaza) o una cobertura
+ * simultánea, no un turno anterior olvidado; cerrar una con la hora de entrada de la otra la registraría como «salida anticipada» sin serlo
+ * (issue #160).
+ */
+export function puedeCerrarseAutomaticamente(previa: MarcaCandidata, actual: MarcaCandidata): boolean {
+    return !marcasSeTraslapan(previa, actual);
+}
+
 /** Elige la marca prioritaria de un grupo en conflicto para el empleado consultado. */
 export function elegirMarcaPrioritaria(grupo: MarcaCandidata[], empleadoId: number): MarcaCandidata {
     const reemplazos = grupo.filter((m) => m.empleadoReemplazaId === Number(empleadoId));

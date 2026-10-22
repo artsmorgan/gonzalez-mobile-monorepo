@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import axios from "axios";
+import { guardifyDeviceGate } from "./guardifyDevices";
 
 type VerifyTokenResponse = {
     valid: boolean;
@@ -36,12 +37,21 @@ export async function verifyAccessTokenByApi(req: NextRequest): Promise<VerifyTo
 
     const data = response?.data || {};
 
-    return {
+    const result: VerifyTokenResponse = {
         valid: !!data.valid,
         expired: !!data.expired,
         payload: data.payload ?? null,
         message: data.message || "Token inválido",
     };
+
+    // Punto único para exigir que el equipo esté aprobado en Guardify (issues #149 y #150): en `off` (por defecto) no hace nada; en `observe`
+    // solo registra; en `on` corta con 403 `device_not_approved|ESTADO|motivo`.
+    if (result.valid) {
+        const denied = await guardifyDeviceGate({ payload: result.payload, route: req.nextUrl?.pathname, method: req.method, stage: "request", appVersion: req.headers.get("x-app-version") });
+        if (denied) return { valid: false, expired: false, payload: null, message: denied };
+    }
+
+    return result;
 }
 
 

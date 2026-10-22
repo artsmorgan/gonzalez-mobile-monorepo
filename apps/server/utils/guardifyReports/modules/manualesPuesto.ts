@@ -28,6 +28,8 @@ const personas = (v: unknown, pred: (x: any) => boolean = () => true): number =>
     return ids.length ? new Set(ids).size : rows.length;
 };
 
+const v_esNota = (n: number) => Number.isFinite(n) && n >= 0 && n <= 100;
+
 /** Datos que se resuelven en lote: ejecutivo de cuenta de la sucursal, división del contrato (si la fila no trae una) y nombre de los puestos vinculados que la consulta no hidrató. */
 export type ManualExtra = { ejecutivo?: string | null; division?: string | null; puestos?: Map<number, string>; /** Ids de los empleados asignados a los puestos del manual (`c_empleado_plaza`): a todos les llega, lo hayan abierto o no. */ asignados?: number[] };
 
@@ -40,10 +42,15 @@ export function mapManualPuestoRow(r: any, extra: ManualExtra = {}): OutRow {
     const links: any[] = Array.isArray(r.e_puestos_manual_puesto) ? r.e_puestos_manual_puesto : [];
     const puestos = [txt(r.puesto_principal_txt), ...links.map((l) => puestoLabel(l?.e_estructura_puesto) ?? extra.puestos?.get(Number(l?.puesto_id)) ?? null)]
         .filter((x): x is string => !!x && !/^\d+$/.test(x));
-    const vis = r.e_empleado_visualizacion_manual_puesto;
+    const todasVis: any[] = Array.isArray(r.e_empleado_visualizacion_manual_puesto) ? r.e_empleado_visualizacion_manual_puesto : [];
+    // Documentos con versiones (issue #155): el estatus es el de la versión VIGENTE; las firmas y notas de versiones anteriores se conservan (salen en el detalle).
+    const version = Number(r.version ?? 1);
+    const vis = todasVis.filter((v) => Number(v?.version ?? 1) === version);
+    // Nota promedio (issue #156): promedio de la nota consolidada de quienes ya tienen calificado el quiz de esta versión; null si nadie.
+    const notas = vis.filter((v) => v?.nota != null && String(v.nota).trim() !== "").map((v) => Number(v.nota)).filter((n) => v_esNota(n));
     // A quién le llegó: los empleados vinculados al manual y también los que lo abrieron aunque no estén vinculados (les llega por su puesto).
     // Y los que ocupan los puestos del manual (`asignados`), aunque nunca lo hayan abierto: son los «no vistos» del reporte.
-    const filas = [...(Array.isArray(r.e_empleados_manual_puesto) ? r.e_empleados_manual_puesto : []), ...(Array.isArray(vis) ? vis : [])];
+    const filas = [...(Array.isArray(r.e_empleados_manual_puesto) ? r.e_empleados_manual_puesto : []), ...todasVis];
     const ids = new Set<number>(extra.asignados ?? []);
     let sinId = 0;
     for (const x of filas) { const n = Number(x?.empleado_id); if (Number.isFinite(n) && n > 0) ids.add(n); else sinId++; }
@@ -54,6 +61,8 @@ export function mapManualPuestoRow(r: any, extra: ManualExtra = {}): OutRow {
         titulo: short(r.title),
         descripcion: short(r.description),
         clasificacion: txt(r.classification),
+        version,
+        nota_promedio: notas.length ? Math.round((notas.reduce((a, b) => a + b, 0) / notas.length) * 10) / 10 : null,
         // Nivel 1 (la lista de manuales): a cuántos empleados les llegó y qué hicieron. El detalle por empleado está en el formulario del manual.
         empleados_enviados: enviados,
         vistos,
@@ -120,8 +129,8 @@ export const manualesPuesto: GuardifyReportModule = {
     id: "manuales_puesto",
     supportsScope: true,
     searchKeys: ["titulo", "descripcion", "clasificacion", "sucursal", "puesto", "puestos", "creado_por", "ejecutivo_cuenta"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "puestos", "clasificacion", "ejecutivo_cuenta", "creado_por"],
-    sortKeys: ["creado", "titulo", "clasificacion", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "creado_por", "puestos_vinculados", "empleados_enviados", "vistos", "pendientes", "id", "firmados", "aprobados"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "puestos", "clasificacion", "version", "nota_promedio", "ejecutivo_cuenta", "creado_por"],
+    sortKeys: ["creado", "titulo", "version", "nota_promedio", "clasificacion", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo_cuenta", "creado_por", "puestos_vinculados", "empleados_enviados", "vistos", "pendientes", "id", "firmados", "aprobados"],
     defaultSort: "creado",
     form: manualesPuestoForm,
     async load(db, p) {

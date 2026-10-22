@@ -26,6 +26,8 @@ type UpdateJobManualVisualizacionFieldParams = {
   field: string;
   value: string | null;
   firmaEmpleado?: string | null;
+  /** Versión del documento a la que pertenece la visualización. */
+  version?: number | null;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 };
@@ -43,6 +45,8 @@ type SignJobManualParams = {
   files?: string | null;
   /** Fusiona `firma_empleado_manual` en la misma petición (p. ej. una `visualizacion_field_update` pendiente). */
   firmaEmpleadoManual?: string | null;
+  /** Versión del documento que se firma (la que la app mostraba). Una firma hecha sin conexión sobre una versión anterior queda como firma de ESA versión. */
+  version?: number | null;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
   marcaId: number;
@@ -53,6 +57,10 @@ type PutQuizResultParams = {
   marcaId: number;
   empleadoId: number;
   approved: boolean;
+  /** Puntos obtenidos y totales con los que se calificó (la nota consolidada se guarda con ellos; ver apps/server/utils/documentos/notaQuiz.ts). */
+  score?: { obtained: number; total: number } | null;
+  /** Versión del documento que se califica. */
+  version?: number | null;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 };
@@ -210,6 +218,7 @@ export const signJobManual = async ({
   quizAnswear,
   files,
   firmaEmpleadoManual,
+  version,
   refreshAccessToken,
   logout,
   marcaId,
@@ -232,6 +241,7 @@ export const signJobManual = async ({
         quiz_answear: quizAnswear ?? null,
         files: files ?? null,
         ...(firmaEmpleadoManual !== undefined ? { firma_empleado_manual: firmaEmpleadoManual } : {}),
+        ...(version ? { version } : {}),
       }),
     },
     refreshAccessToken,
@@ -328,6 +338,7 @@ export const updateJobManualVisualizacionField = async ({
   field,
   value,
   firmaEmpleado,
+  version,
   refreshAccessToken,
   logout,
 }: UpdateJobManualVisualizacionFieldParams): Promise<any> => {
@@ -348,6 +359,7 @@ export const updateJobManualVisualizacionField = async ({
         field,
         value: value ?? '',
         ...(firmaEmpleado ? { firma_empleado: firmaEmpleado } : {}),
+        ...(version ? { version } : {}),
       }),
     },
     refreshAccessToken,
@@ -367,6 +379,8 @@ export const putJobManualQuizResult = async ({
   marcaId,
   empleadoId,
   approved,
+  score,
+  version,
   refreshAccessToken,
   logout,
 }: PutQuizResultParams): Promise<any> => {
@@ -382,7 +396,7 @@ export const putJobManualQuizResult = async ({
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ empleado_id: empleadoId, approved, marca_id: marcaId }),
+      body: JSON.stringify({ empleado_id: empleadoId, approved, marca_id: marcaId, ...(score ? { score } : {}), ...(version ? { version } : {}) }),
     },
     refreshAccessToken,
     logout,

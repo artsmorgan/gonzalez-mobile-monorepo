@@ -19,7 +19,14 @@ const placeholderToNull = (v: unknown, id?: unknown): string | null => {
     return s;
 };
 
-/** Distancia en metros entre dos pares de coordenadas (texto). Las coordenadas NO se exponen: solo cuánto se movió el puesto. */
+/** Coordenada (texto en la tabla) como número; null si está vacía, no es numérica o queda fuera de rango. */
+export function coordenada(v: unknown, max: 90 | 180): number | null {
+    if (txt(v) == null) return null;
+    const n = Number(v);
+    return Number.isFinite(n) && Math.abs(n) <= max ? n : null;
+}
+
+/** Distancia en metros entre dos pares de coordenadas (texto); null si falta alguna. */
 function metrosEntre(lat1: unknown, lng1: unknown, lat2: unknown, lng2: unknown): number | null {
     const [a, b, c, d] = [lat1, lng1, lat2, lng2].map((x) => (txt(x) == null ? NaN : Number(x)));
     if (![a, b, c, d].every((n) => Number.isFinite(n))) return null;
@@ -31,7 +38,9 @@ function metrosEntre(lat1: unknown, lng1: unknown, lat2: unknown, lng2: unknown)
 }
 
 /**
- * Cambios en la ubicación del puesto (`c_ubicacion_puesto_registro_cambios`). Nunca expone latitud ni longitud.
+ * Cambios en la ubicación del puesto (`c_ubicacion_puesto_registro_cambios`). `latitud` / `longitud` son la ubicación NUEVA (numéricas, vacías si
+ * no hay o no son válidas) y `latitud_anterior` / `longitud_anterior` la que tenía el puesto. Decisión del cliente (20 oct 2026, issue #137):
+ * las coordenadas se exponen a quien ve el reporte (se guardan por cada acción y se muestran en el mapa en vivo de Guardify).
  * Cada fila es un evento que no se edita: la tabla no guarda `updated_at`/`updated_by` ni historial, así que `modificado` y
  * `modificado_por` salen siempre vacíos.
  */
@@ -49,13 +58,17 @@ export function mapCambioUbicacionPuestoRow(r: any): OutRow {
         modificado: (r as any).updated_at ? fmtDt((r as any).updated_at) : (null),
         modificado_por: (r as any).audit_modificado_por ?? (null),
         tenia_ubicacion: txt(r.latitud_anterior) && txt(r.longitud_anterior) ? "Sí" : "No",
+        latitud: coordenada(r.latitud_nueva, 90),
+        longitud: coordenada(r.longitud_nueva, 180),
+        latitud_anterior: coordenada(r.latitud_anterior, 90),
+        longitud_anterior: coordenada(r.longitud_anterior, 180),
         metros: metrosEntre(r.latitud_anterior, r.longitud_anterior, r.latitud_nueva, r.longitud_nueva),
     };
 }
 
 /**
  * Cambios en ubicación del puesto. El periodo se aplica a `creado` (`created_at`, la «Fecha» del Excel). `creado_por` (código - nombre)
- * es quien registró el cambio (`created_by`). Latitud y longitud no se exponen (decisión de seguridad). La consulta ya trae la ubicación completa del puesto en la estructura
+ * es quien registró el cambio (`created_by`). La consulta ya trae la ubicación completa del puesto en la estructura
  * (empresa, cliente, división, contrato, sucursal), así que admite alcance por unidad.
  */
 // El rango se amplía un día por lado en la consulta (la zona horaria del servidor puede correr los límites) y se recorta exacto aquí.
@@ -63,8 +76,8 @@ export const cambiosUbicacionPuesto: GuardifyReportModule = {
     id: "cambios_ubicacion_puesto",
     supportsScope: true,
     searchKeys: ["puesto", "sucursal", "contrato", "cliente", "creado_por"],
-    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "creado_por", "tenia_ubicacion"],
-    sortKeys: ["creado", "empresa", "cliente", "contrato", "sucursal", "puesto", "creado_por", "metros"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "creado", "creado_por", "tenia_ubicacion", "latitud", "longitud", "latitud_anterior", "longitud_anterior"],
+    sortKeys: ["creado", "empresa", "cliente", "contrato", "sucursal", "puesto", "creado_por", "metros", "latitud", "longitud"],
     defaultSort: "creado",
     form: cambiosUbicacionPuestoForm,
     async load(db, p) {

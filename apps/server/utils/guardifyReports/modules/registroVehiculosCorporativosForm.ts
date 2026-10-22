@@ -54,14 +54,14 @@ export function armarRegistro(raw: VehiculoCrudo, ubic: FormRecord["estructura"]
     const bici = varianteDe(raw.tipo) === "Bicicleta";
     const valores: FormRecord["valores"] = {
         tipo: txt(raw.tipo), placa: txt(raw.placa), tipo_autoria: txt(raw.tipo_autoria), estado: txt(raw.estado), marca: txt(raw.marca),
-        modelo: txt(raw.modelo), anno: num(raw.anno), kilometraje: num(raw.kilometraje), prox_cambio_aceite: num(raw.prox_cambio_aceite),
+        modelo: txt(raw.modelo), vin: txt(raw.vin), anno: num(raw.anno), kilometraje: num(raw.kilometraje), prox_cambio_aceite: num(raw.prox_cambio_aceite),
         descripcion: txt(raw.descripcion),
         fecha_creacion: creado ? creado.slice(0, 10) : null, hora_creacion: creado ? creado.slice(11, 16) : null, creado_por: txt(raw.creador),
     };
     const documentos = bici ? [] : [
-        { item: "Título de propiedad", valor: sino(raw.titulo_propiedad) },
-        { item: "RTV", valor: sino(raw.rtv) },
-        { item: "Marchamo", valor: sino(raw.marchamo) },
+        { item: "Título de propiedad", valor: sino(raw.titulo_propiedad), dato: txt(raw.titulo_propiedad_num) },
+        { item: "RTV", valor: sino(raw.rtv), dato: txt(raw.rtv_num) },
+        { item: "Marchamo", valor: sino(raw.marchamo), dato: txt(raw.marchamo_num) },
     ];
     const usos = (raw.usos ?? []).map((u) => ({
         conductor: txt(u.nombre_conductor), codigo: txt(u.codigo_conductor), fecha: dia(u.fecha), inicio: hora(u.inicio), fin: hora(u.fin),
@@ -92,7 +92,7 @@ export const registroVehiculosCorporativosForm: GuardifyFormModule = {
             select: {
                 id: true, empresa_id: true, cliente_id: true, division_id: true, contrato_id: true, sucursal_id: true, puesto_id: true,
                 tipo: true, placa: true, tipo_autoria: true, estado: true, marca: true, modelo: true, anno: true, kilometraje: true, prox_cambio_aceite: true,
-                descripcion: true, titulo_propiedad: true, rtv: true, marchamo: true, firma_responsable: true, created_at: true, created_by: true,
+                descripcion: true, titulo_propiedad: true, rtv: true, marchamo: true, vin: true, titulo_propiedad_num: true, rtv_num: true, marchamo_num: true, firma_responsable: true, created_at: true, created_by: true,
             },
         });
         if (!rows.length) return [];

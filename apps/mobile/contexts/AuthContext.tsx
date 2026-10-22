@@ -13,6 +13,8 @@ import {
   persistStoredPlanillasToken,
 } from '@/hooks/planillasTokenStorage';
 import { persistLegacySession } from '@/hooks/authTokenStorage';
+import { getGuardifyIdentityReady } from '@/hooks/guardifyClient';
+import { handleDeviceNotApprovedResponse, parseDeviceNotApprovedMessage, reportDeviceNotApproved, describeDeviceStatus } from '@/hooks/deviceNotApproved';
 import {
   deleteEmployeeProfilePhoto,
   saveEmployeeProfilePhotoFromBase64,
@@ -170,7 +172,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         body: JSON.stringify({
           cedula: cedula,
           password: password,
-          deviceName: `${Device.brand}-${Device.modelName}`
+          deviceName: `${Device.brand}-${Device.modelName}`,
+          guardifyDeviceId: (await getGuardifyIdentityReady().catch(() => ({ deviceId: undefined }))).deviceId,
         }),
       });
 
@@ -185,6 +188,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       }
 
       if (!response.ok) {
+        // Equipo no aprobado en Guardify: pantalla de estado del equipo y mensaje claro en el login.
+        const deviceBlock = parseDeviceNotApprovedMessage(responseData?.message);
+        if (deviceBlock) {
+          reportDeviceNotApproved(deviceBlock);
+          return { success: false, error: describeDeviceStatus(deviceBlock.status, deviceBlock.reason).title };
+        }
         return {
           success: false,
           passwordExpired: responseData?.passwordExpired || false,
@@ -464,11 +473,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         },
         body: JSON.stringify({
           refreshToken: tokenToUse,
-          deviceName: `${Device.brand}-${Device.modelName}`
+          deviceName: `${Device.brand}-${Device.modelName}`,
+          ...(await (async () => {
+            const identity = await getGuardifyIdentityReady().catch(() => ({} as { deviceId?: string; sessionId?: string }));
+            return { guardifyDeviceId: identity.deviceId, guardifySessionId: identity.sessionId };
+          })()),
         }),
       });
 
       if (!response.ok) {
+        // Equipo no aprobado: se avisa con la pantalla de estado (quien llama decide si cierra la sesión).
+        await handleDeviceNotApprovedResponse(response);
         return false;
       }
 

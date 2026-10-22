@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildMarcaCandidata, resolverConflictoDeMarcas, type MarcaCandidata } from "./resolveMarcaConflicto";
+import { buildMarcaCandidata, puedeCerrarseAutomaticamente, resolverConflictoDeMarcas, type MarcaCandidata } from "./resolveMarcaConflicto";
 
 const m = (id: number, fecha: string, ini: string, fin: string, reemplaza: number | null = null): MarcaCandidata =>
     buildMarcaCandidata({ id, fecha, horaInicio: ini, horaFin: fin, empleadoReemplazaId: reemplaza });
@@ -78,5 +78,25 @@ describe("prioridad entre marcas en conflicto de horario", () => {
         });
         assert.equal(c.inicio.toISOString(), "2026-10-15T07:30:00.000Z");
         assert.equal(c.empleadoReemplazaId, 3730);
+    });
+});
+
+describe("cierre automático del turno anterior (issue #160)", () => {
+    it("un turno anterior terminado se puede cerrar", () => {
+        const noche = m(1, "2026-10-14", "22:00", "06:00");
+        const dia = m(2, "2026-10-15", "07:00", "16:00");
+        assert.equal(puedeCerrarseAutomaticamente(noche, dia), true);
+    });
+    it("el caso real: la marca propia y la del reemplazo se traslapan → no se cierran entre sí", () => {
+        const propia = m(11319911, "2026-10-15", "07:00", "16:00");
+        const reemplazo = m(11322388, "2026-10-15", "05:30", "17:30", EMPLEADO);
+        // el reemplazo empezó antes (es la «anterior»), pero es el mismo turno físico
+        assert.equal(puedeCerrarseAutomaticamente(reemplazo, propia), false);
+    });
+    it("turnos seguidos (uno termina cuando empieza el otro) no se consideran traslape", () => {
+        assert.equal(puedeCerrarseAutomaticamente(m(1, "2026-10-15", "06:00", "14:00"), m(2, "2026-10-15", "14:00", "22:00")), true);
+    });
+    it("un turno nocturno que cruza la medianoche choca con el del día siguiente que empieza antes de que termine", () => {
+        assert.equal(puedeCerrarseAutomaticamente(m(1, "2026-10-15", "22:00", "06:00"), m(2, "2026-10-16", "05:30", "17:30")), false);
     });
 });

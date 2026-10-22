@@ -115,7 +115,7 @@ export function mapMobileVariableRow(row: unknown): MobileVariableRow | null {
 }
 
 export async function fetchMobileVariablesList(req: NextRequest): Promise<MobileVariableRow[]> {
-    await ensureValidateGpsSalidaVariable(req);
+    await ensureDefaultMobileVariables(req);
 
     const rows = await callDynamicPrisma({
         req,
@@ -132,37 +132,39 @@ export async function fetchMobileVariablesList(req: NextRequest): Promise<Mobile
         .filter((row): row is MobileVariableRow => row !== null);
 }
 
-async function ensureValidateGpsSalidaVariable(req: NextRequest): Promise<void> {
-    try {
-        const existing = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: MOBILE_VARIABLES_TABLE,
-                operation: "findFirst",
-                where: { variable_name: "validate_gps_salida" },
-            },
-        });
-        if (existing) return;
+/** Variables del sistema que deben existir siempre; si falta alguna al listar, se crea con su valor por defecto. */
+export const DEFAULT_MOBILE_VARIABLES: ReadonlyArray<{ variable_name: string; slug: string; variable_value: string; variable_type: string }> = [
+    { variable_name: "validate_gps_salida", slug: "validate-gps-salida", variable_value: "false", variable_type: "boolean" },
+    // Horas tras la salida de un turno (marca) en que se elimina del almacenamiento de la app (issue #159).
+    { variable_name: "horas_eliminar_marca_tras_salida", slug: "horas-eliminar-marca-tras-salida", variable_value: "4", variable_type: "integer" },
+];
 
-        const now = new Date();
-        await callDynamicPrisma({
-            req,
-            data: {
-                action: "POST",
-                table: MOBILE_VARIABLES_TABLE,
+async function ensureDefaultMobileVariables(req: NextRequest): Promise<void> {
+    for (const def of DEFAULT_MOBILE_VARIABLES) {
+        try {
+            const existing = await callDynamicPrisma({
+                req,
                 data: {
-                    variable_name: "validate_gps_salida",
-                    slug: "validate-gps-salida",
-                    variable_value: "false",
-                    variable_type: "boolean",
-                    created_at: now,
-                    updated_at: now,
+                    action: "GET",
+                    table: MOBILE_VARIABLES_TABLE,
+                    operation: "findFirst",
+                    where: { variable_name: def.variable_name },
                 },
-            },
-        });
-    } catch (error) {
-        console.error("Error asegurando validate_gps_salida:", error);
+            });
+            if (existing) continue;
+
+            const now = new Date();
+            await callDynamicPrisma({
+                req,
+                data: {
+                    action: "POST",
+                    table: MOBILE_VARIABLES_TABLE,
+                    data: { ...def, created_at: now, updated_at: now },
+                },
+            });
+        } catch (error) {
+            console.error(`Error asegurando ${def.variable_name}:`, error);
+        }
     }
 }
 
