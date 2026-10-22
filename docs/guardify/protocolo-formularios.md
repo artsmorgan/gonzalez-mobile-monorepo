@@ -80,6 +80,18 @@ Los archivos adjuntos no viajan en el registro. Guardify los pide, solo cuando u
 GET {base}/api/guardify/reports/{modulo}/forms/{registro}/attachments/{adjunto}?scope   → el archivo (Content-Type y Content-Length); 404 si no existe o está fuera del alcance
 ```
 
+### API de evidencia (la app guarda la evidencia; Guardify la pide)
+Los reportes con `evidence: {}` en su definición tienen evidencia por registro. En la exportación probatoria Guardify la pide por cada registro:
+
+```
+GET {base}/api/guardify/evidence?report=<modulo>&registro_id=<id>[&tabla=<tabla>]   → { rows: [ … ] }   (la más reciente primero)
+  fila = { dispositivo, latitud, longitud, ubicacion_origen, capturado_en, cedula, firma, contenido, sello_ok, … }
+```
+- Misma llave que los reportes. `report` es el módulo (`remote`) y la app sabe de qué tabla sale; `tabla` solo si el reporte la declara en `evidence.table`.
+- `firma` = SHA-256 del JSON canónico de `contenido` (ver protocolo-reportes.md): Guardify la **recalcula** y dice si coincide. `sello_ok`: `true`/`false` si la app comprobó su HMAC, `null` si no hay sello o falta la clave.
+- `ubicacion_origen`: `firma` (GPS del momento de la acción), `cabecera` (último GPS al sincronizar), `denegada` o `sin_datos`; Guardify lo escribe en el bloque de evidencia.
+- Un registro sin evidencia responde `{ rows: [] }` y sale sin bloque; `404/501` equivale a «la app no tiene evidencia».
+
 - **Exportación probatoria** (`probatorio: true` en la exportación; pide `reportes:exportar`): cada registro lleva un bloque «Evidencia» (firma, fecha y hora, dispositivo, cédula, coordenadas solo con `reportes:ubicacion`, y si la huella coincide), el PDF imprime la huella del contenido en el pie, queda **protegido contra edición** (se abre y se imprime sin contraseña) y la huella SHA-256 del archivo queda en la bitácora (`report.sealed`). **Reportes → Verificar firma → «Comprobar un archivo exportado»** dice si un archivo es el original o fue alterado.
 - **Adjuntos en el Excel**: cada archivo sale como un enlace firmado que caduca a los 7 días. El enlace no basta: quien lo abre necesita sesión de la empresa, poder ejecutar y exportar el reporte, y que el registro esté en su alcance. Cada descarga queda en la bitácora (`attachment.downloaded`).
 
