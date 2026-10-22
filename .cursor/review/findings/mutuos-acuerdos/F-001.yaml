@@ -1,0 +1,18 @@
+id: F-001
+module_id: mutuos-acuerdos
+severity: critical
+status: fixed
+file: apps/mobile/App.tsx
+lines: "7655-7669"
+category: offline
+title: Cola legacy mutuos_acuerdos_actions borrada sin sincronizar
+description: |
+  checkMutuosAcuerdosActionsCache elimina mutuos_acuerdos_actions y mutuos_acuerdos_cache si tienen datos,
+  sin POST/PATCH previo. Comentario dice 'modo online' pero no migra items pendientes.
+reproduction: |
+  1. Dispositivo con cola legacy en mutuos_acuerdos_actions (app anterior).
+  2. Abrir app Lite con conexión; corre sync global.
+  3. App.tsx hace removeItem de la cola sin procesar acciones.
+  4. MutuosAcuerdosScreen ya no encola offline (solo API directa).
+impact: Pérdida irreversible de mutuos acuerdos pendientes de usuarios que actualizan desde versión con cola offline.
+suggested_fix: Migrar/sincronizar acciones legacy antes de removeItem, o bloquear borrado hasta drenar la cola.

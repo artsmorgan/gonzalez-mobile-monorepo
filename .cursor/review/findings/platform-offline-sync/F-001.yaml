@@ -1,0 +1,18 @@
+id: F-001
+module_id: platform-offline-sync
+severity: high
+status: fixed
+file: apps/mobile/App.tsx
+lines: "853-872"
+category: concurrency
+title: Sync paralelo sin transacción — colas pueden quedar parcialmente sincronizadas
+description: |
+  Tras checks secuenciales (attendance, incidents), un Promise.all ejecuta ~15 check*ActionsCache en paralelo.
+  Si uno falla, actionsSyncError se captura pero las colas ya procesadas no revierten.
+  No hay idempotency guard global entre handlers.
+reproduction: |
+  1. Poblar varias colas offline (notes + activities + visitors).
+  2. Simular fallo HTTP 500 en un módulo durante sync (p.ej. activities).
+  3. Observar que otros módulos en Promise.all pueden completar mientras activities queda inconsistente.
+impact: Pérdida parcial de datos o duplicados al reintentar; estado difícil de recuperar para operarios offline.
+suggested_fix: Secuencializar módulos críticos, marcar items con synced/error por acción, o implementar retry por cola con estado atómico por item.

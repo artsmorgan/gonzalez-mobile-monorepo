@@ -1,0 +1,17 @@
+id: F-002
+module_id: mutuos-acuerdos
+severity: medium
+status: fixed
+file: apps/mobile/screens/MutuosAcuerdosScreen.tsx
+lines: "568-648"
+category: offline
+title: Creación sin guard de conectividad explícito
+description: |
+  runSaveConfirmed llama createMutuoAcuerdo directo; no verifica getConnectionStatus antes de enviar,
+  a diferencia de fetchRecords que bloquea offline.
+reproduction: |
+  1. Abrir formulario de creación con internet.
+  2. Perder conexión antes de Confirmar.
+  3. runSaveConfirmed POST falla; usuario ve Alert genérico tras completar firmas/adjuntos.
+impact: Trabajo perdido en campo sin conexión; UX inconsistente con banner 'exclusivamente online'.
+suggested_fix: Verificar conexión al inicio de runSaveConfirmed (como handleCreate en PermitRequestScreenV2) y bloquear con mensaje claro.

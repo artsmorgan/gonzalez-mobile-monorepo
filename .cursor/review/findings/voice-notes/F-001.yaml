@@ -1,0 +1,16 @@
+id: F-001
+module_id: voice-notes
+severity: high
+status: fixed
+file: apps/mobile/App.tsx
+lines: "7853-7948"
+category: offline
+title: Snapshot stale de voice_notes_actions
+description: |
+  Mismo patrón que incidents: filter desde array inicial.
+reproduction: |
+  1. Cola múltiple create+update.
+  2. Sync.
+impact: Duplicados en servidor.
+suggested_fix: |
+  Reasignar actions tras cada dequeue.

@@ -1,0 +1,15 @@
+id: F-002
+module_id: llaves
+severity: medium
+status: fixed
+file: apps/mobile/App.tsx
+lines: "1951-1972"
+category: offline
+title: Mismo patrón en update/delete llaves
+description: |
+  Branches update/delete sin refresh in-memory array.
+reproduction: |
+  1. Cola mixta update+delete.
+impact: Duplicados PUT/DELETE.
+suggested_fix: |
+  Patrón re-read como llaveros sub-queue.

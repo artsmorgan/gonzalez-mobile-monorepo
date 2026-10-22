@@ -1,0 +1,15 @@
+id: F-003
+module_id: attendance-control
+severity: low
+status: fixed
+file: apps/mobile/screens/AttendanceControlScreen.tsx
+lines: "1427-1438"
+category: async
+title: Solo delete_image tiene path offline parcial
+description: |
+  delete_image encola offline; create/update no.
+reproduction: |
+  1. Offline delete imagen vs create control.
+impact: Comportamiento híbrido inconsistente.
+suggested_fix: |
+  Alinear política offline del módulo.

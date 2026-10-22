@@ -1,0 +1,15 @@
+id: F-001
+module_id: complaints-master
+severity: medium
+status: fixed
+file: apps/mobile/screens/ComplaintsMasterScreen.tsx
+lines: "2336-2344"
+category: offline
+title: Updates offline duplicados en cola
+description: |
+  push update sin filtrar previo para mismo id.
+reproduction: |
+  1. Múltiples edits offline mismo registro.
+impact: Múltiples PUT en sync.
+suggested_fix: |
+  Merge/dedupe como non-conforming-product.

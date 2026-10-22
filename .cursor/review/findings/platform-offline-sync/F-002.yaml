@@ -1,0 +1,17 @@
+id: F-002
+module_id: platform-offline-sync
+severity: medium
+status: fixed
+file: apps/mobile/App.tsx
+lines: "880-901"
+category: ux
+title: Alerta de éxito omitida en error pero sin feedback de fallo al usuario
+description: |
+  Cuando actionsSyncError está seteado y overlay activo, finishOverlay no muestra alerta de éxito (correcto).
+  Pero tampoco muestra alerta de error — solo console.error.
+  Usuario puede creer que sync terminó ok al cerrarse el overlay.
+reproduction: |
+  1. Forzar excepción en un check*ActionsCache durante sync con overlay visible.
+  2. Overlay se cierra sin Alert de error.
+impact: Operario no sabe que datos quedaron pendientes; riesgo operativo en soft-release.
+suggested_fix: Alert.alert con mensaje de error parcial o contador de colas fallidas.

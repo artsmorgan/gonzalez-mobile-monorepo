@@ -1,0 +1,188 @@
+import {
+    queryMantenimientoArticulosRows,
+    type MantenimientoArticuloReportRow,
+    type MantenimientoArticulosModuleFilters,
+} from "../../reports-functions/mantenimientoArticulosReport";
+import type { ReportDataAccess } from "../../reportDynamicPrisma";
+import { ejecutivoPorCorpo, nombresEmpleado, usuarioInserta } from "../enrich";
+import type { OutRow } from "../listing";
+import { fmtDt } from "../mappers";
+import { addDays, type ReportParams } from "../params";
+import { matchesScope, type Nivel } from "../scope";
+import type { GuardifyReportModule } from "../types";
+import { mantenimientoArticulosForm } from "./mantenimientoArticulosForm";
+
+const MAX_TEXT = 500;
+
+/** ¿Parece una imagen incrustada (data URI o base64 largo)? */
+function esImagen(s: string): boolean {
+    if (/^data:[a-z]+\/[^;,]+[;,]/i.test(s) || /^(iVBORw0KGgo|\/9j\/|R0lGOD|UklGR|PHN2Zy)/.test(s)) return true;
+    const head = s.slice(0, 200);
+    return s.length > 1000 && /^[A-Za-z0-9+/=_-]+$/.test(head) && /[A-Z]/.test(head) && /[a-z]/.test(head) && /\d/.test(head);
+}
+
+/** Texto libre recortado a 500 caracteres; descarta lo que parezca una imagen/base64. */
+function text(v: unknown, max = MAX_TEXT): string | null {
+    const s = String(v ?? "").trim();
+    if (!s) return null;
+    if (esImagen(s)) return null;
+    return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+const num = (v: unknown): number | null => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+
+/**
+ * Fila de `queryMantenimientoArticulosRows` → fila plana. Se omiten ids internos de plan/asignación, el formulario de
+ * mantenimiento de armas (texto estructurado largo) y el contenido de los archivos adjuntos (solo se cuenta cuántos hay).
+ * `ejecutivo`: ejecutivo de cuenta de la sucursal (se carga por lote en `load`). `modificadoPor`: quien hizo el último cambio
+ * registrado (historial `c_cambios_apps_modules`, se carga por lote en `load`). La tabla no guarda quién creó el mantenimiento
+ * (el alta no deja entrada en el historial), por eso `creado_por` sale siempre null.
+ */
+export function mapMantenimientoArticuloRow(r: MantenimientoArticuloReportRow, ejecutivo?: string | null, modificadoPor?: string | null): OutRow {
+    return {
+        id: Number(r.id),
+        creado: fmtDt(r.created_at),
+        creado_por: (r as any).audit_creado_por ?? (null),
+        empresa: text(r.empresa_txt, 200),
+        cliente: text(r.cliente_txt, 200),
+        division: text(r.division_txt, 200),
+        contrato: text(r.contrato_txt, 200),
+        sucursal: text(r.corpo_txt, 200),
+        puesto: text(r.puesto_txt, 200),
+        origen: text(r.origen, 50),
+        articulo: text(r.articulo_nombre, 200),
+        estado: text(r.estado, 55),
+        accion: text(r.accion, 55),
+        cantidad_necesaria: num(r.cantidad_necesaria),
+        cantidad_real: num(r.cantidad_real),
+        observaciones: text(r.observaciones),
+        fecha_inicio: fmtDt(r.fecha_inicio),
+        fecha_solucion: fmtDt(r.fecha_solucion),
+        fecha_fin: fmtDt(r.fecha_fin),
+        fecha_salida: fmtDt(r.fecha_salida),
+        fecha_entrada: fmtDt(r.fecha_entrada),
+        tipo: text(r.tipo, 200),
+        marca: text(r.marca, 200),
+        modelo: text(r.modelo, 200),
+        serie_placa: text(r.serie_placa, 200),
+        marca_nuevo: text(r.marca_nuevo, 200),
+        modelo_nuevo: text(r.modelo_nuevo, 200),
+        serie_placa_nuevo: text(r.serie_placa_nuevo, 200),
+        categoria: text(r.categoria, 200),
+        tipo_mantenimiento: text(r.tipo_mantenimiento_art, 200),
+        categoria_mantenimiento: text(r.categoria_mantinimiento, 200),
+        kilometraje: num(r.kilometraje),
+        detalle: text(r.detalle),
+        proveedor: text(r.proveedor, 200),
+        boleta_proveeduria: text(r.numero_boleta_proveeduria, 200),
+        numero_fc: text(r.numero_fc, 200),
+        costo_mano_obra: num(r.costo_mo),
+        costo_insumos: num(r.costo_i),
+        iva: num(r.iva),
+        costo_total: num(r.costo_total),
+        reincidencia_30_dias: r.reincidencia_treinta_dias_txt === "Sí" || r.reincidencia_treinta_dias_txt === "No" ? r.reincidencia_treinta_dias_txt : null,
+        tipo_mantenimiento_reincidencia: text(r.tipo_mant_art_reincid, 200),
+        adjuntos: num(r.archivos_adjuntos_count) ?? 0,
+        modificado: fmtDt(r.updated_at),
+        modificado_por: (r as any).audit_modificado_por ?? (text(modificadoPor, 200)),
+        ejecutivo_cuenta: text(ejecutivo, 200),
+    };
+}
+
+const TABLA = "c_articulo_mantenimiento";
+
+/**
+ * Quién hizo el último cambio de cada mantenimiento: el empleado de la última entrada de `c_cambios_apps_modules` de esta tabla y
+ * registro. Una consulta por bloque de 1000 ids (sin traer el contenido de `cambios`, que puede incluir archivos) + un lote de empleados.
+ * Si el historial no se puede leer, el reporte sigue sin la columna.
+ */
+export async function modificadoresPorCambio(db: any, ids: unknown[]): Promise<Map<number, string>> {
+    const out = new Map<number, string>();
+    const unicos = [...new Set(ids.map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+    if (!unicos.length) return out;
+    try {
+        const ultimo = new Map<number, { id: number; by: unknown }>();
+        for (let i = 0; i < unicos.length; i += 1000) {
+            const filas = await db.c_cambios_apps_modules.findMany({
+                where: { nombre_tabla: TABLA, registro_id: { in: unicos.slice(i, i + 1000) } },
+                select: { id: true, registro_id: true, created_by: true },
+                orderBy: { id: "asc" },
+            });
+            for (const f of filas) {
+                const prev = ultimo.get(Number(f.registro_id));
+                if (!prev || Number(f.id) > prev.id) ultimo.set(Number(f.registro_id), { id: Number(f.id), by: f.created_by });
+            }
+        }
+        const nombres = await nombresEmpleado(db, [...ultimo.values()].map((u) => u.by));
+        for (const [registro, u] of ultimo) {
+            const nombre = usuarioInserta(u.by, nombres);
+            if (nombre) out.set(registro, nombre);
+        }
+    } catch (e) {
+        console.warn("[guardifyReports] mantenimiento_articulos: no se pudo leer el historial de cambios", (e as Error)?.message);
+        return new Map();
+    }
+    return out;
+}
+
+const FILTRO_POR_NIVEL: Record<Nivel, "empresaIds" | "clienteIds" | "divisionIds" | "contratoIds" | "corpoIds" | "puestoIds"> = {
+    empresa: "empresaIds",
+    cliente: "clienteIds",
+    division: "divisionIds",
+    contrato: "contratoIds",
+    corpo: "corpoIds",
+    puesto: "puestoIds",
+};
+
+type QueryFn = (db: ReportDataAccess, f: MantenimientoArticulosModuleFilters, order: "puesto_id") => Promise<MantenimientoArticuloReportRow[]>;
+
+/**
+ * Carga del reporte (la consulta se puede inyectar para probar el alcance sin base de datos).
+ * Sin alcance: una consulta del periodo. Con alcance: una consulta por cada nodo (la consulta de la app limita a 5 000
+ * puestos, así que acotarla por nodo evita perder filas), se unen sin repetir y se vuelve a filtrar con `matchesScope`.
+ */
+export async function loadMantenimientoArticulos(db: ReportDataAccess, p: ReportParams, query: QueryFn = queryMantenimientoArticulosRows): Promise<OutRow[]> {
+    const base: MantenimientoArticulosModuleFilters = { creadoDesde: `${p.from}T00:00:00`, creadoHasta: `${addDays(p.to, -1)}T23:59:59` };
+    const scope = p.scope;
+    let rows: MantenimientoArticuloReportRow[];
+    if (!scope) {
+        rows = await query(db, base, "puesto_id");
+    } else {
+        const byId = new Map<number, MantenimientoArticuloReportRow>();
+        for (const item of scope) {
+            for (const r of await query(db, { ...base, [FILTRO_POR_NIVEL[item.nivel]]: [item.id] }, "puesto_id")) byId.set(Number(r.id), r);
+        }
+        rows = [...byId.values()].filter((r) =>
+            matchesScope({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.corpo_id, puesto: r.puesto_id }, scope),
+        );
+    }
+    const enPeriodo = rows.filter((r) => {
+        const d = fmtDt(r.created_at)?.slice(0, 10);
+        return !!d && d >= p.from && d < p.to;
+    });
+    const [ejecutivos, modificadores] = await Promise.all([
+        ejecutivoPorCorpo(db as any, enPeriodo.map((r) => r.corpo_id)),
+        modificadoresPorCambio(db, enPeriodo.map((r) => r.id)),
+    ]);
+    return enPeriodo.map((r) => mapMantenimientoArticuloRow(r, ejecutivos.get(Number(r.corpo_id)) ?? null, modificadores.get(Number(r.id)) ?? null));
+}
+
+/**
+ * Mantenimiento de artículos (`c_articulo_mantenimiento`). El periodo (`from`/`to`) se aplica a `creado` (`created_at`, la fecha de
+ * registro del mantenimiento: «Fecha inicio/fin» del Excel «Equipo del puesto»); la fecha de solución se filtra aparte con el filtro
+ * `fecha_solucion`. La fila se ubica por el puesto del artículo (plan o asignado),
+ * del que la consulta ya deduce empresa/cliente/división/contrato/corpo.
+ */
+export const mantenimientoArticulos: GuardifyReportModule = {
+    id: "mantenimiento_articulos",
+    supportsScope: true,
+    searchKeys: ["articulo", "puesto", "sucursal", "contrato", "proveedor", "marca", "modelo", "serie_placa", "observaciones", "detalle", "modificado_por"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "origen", "estado", "accion", "categoria", "reincidencia_30_dias", "ejecutivo_cuenta", "creado_por", "modificado_por"],
+    sortKeys: [
+        "creado", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "articulo", "estado", "accion",
+        "fecha_inicio", "fecha_solucion", "fecha_fin", "proveedor", "costo_total", "creado_por", "modificado", "modificado_por", "ejecutivo_cuenta",
+    ],
+    defaultSort: "creado",
+    form: mantenimientoArticulosForm,
+    load: (db, p) => loadMantenimientoArticulos(db, p),
+};

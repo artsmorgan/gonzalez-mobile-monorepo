@@ -1,0 +1,19 @@
+id: F-001
+module_id: nomencladores
+severity: medium
+status: fixed
+file: apps/mobile/screens/NomencladoresScreen.tsx
+lines: "716-718,809-810"
+category: cache
+title: CRUD no invalida caches AsyncStorage usados por otros módulos
+description: |
+  Tras save/delete solo fetchRecords refresca la lista del modal. No se actualizan categories_cache,
+  categoria_mantenimiento_cache, incidents_classifications_cache, etc. updateNomenclator.ts omite refetch
+  si el cache ya existe (early return).
+reproduction: |
+  1. Editar nomenclador (p.ej. categorias-novedades) en NomencladoresScreen.
+  2. Ir a Notas/Incidentes sin remarcar entrada.
+  3. Otros módulos leen categories_cache / incidents_classifications_cache antiguos.
+  4. getCategories en updateNomenclator.ts retorna sin fetch si cache != [].
+impact: Catálogos obsoletos en módulos dependientes hasta próximo refresh de marca o reinstall.
+suggested_fix: Tras CRUD exitoso, invalidar/actualizar la key AsyncStorage correspondiente al slug del nomenclador.

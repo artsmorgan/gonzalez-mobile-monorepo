@@ -1,0 +1,15 @@
+id: F-003
+module_id: staffEvaluations
+severity: informational
+status: fixed
+file: apps/mobile/hooks/updateNomenclator.ts
+lines: "688-691"
+category: offline
+title: getEvaluations borra cola pendiente
+description: |
+  removeItem evaluations_staff_actions en helper no usado en flujo principal.
+reproduction: |
+  1. Invocar getEvaluations con cola pendiente.
+impact: Wipe silencioso si se reactiva helper.
+suggested_fix: |
+  No borrar cola o guard en sync activo.

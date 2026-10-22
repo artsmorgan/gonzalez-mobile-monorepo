@@ -6,20 +6,19 @@ import React from 'react';
 import { StyleSheet, TouchableOpacity } from 'react-native';
 
 export default function RecoverPasswordScreen() {
-  const { userId, userName, userEmail, userUsername, userTelefono } = useLocalSearchParams<{ 
-    userId: string; 
-    userName?: string; 
-    userEmail?: string; 
-    userUsername?: string;
-    
-    userTelefono?: string;
+  const { employeeId, employeeName, employeeEmail, employeeCedula, employeeTelefono } = useLocalSearchParams<{ 
+    employeeId: string; 
+    employeeName?: string; 
+    employeeEmail?: string; 
+    employeeCedula?: string;
+    employeeTelefono?: string;
   }>();
 
   const handleBackToLogin = () => {
     router.replace('/');
   };
 
-  if (!userId) {
+  if (!employeeId) {
     return (
       <ThemedView style={styles.container}>
         <ThemedView style={styles.contentContainer}>
@@ -27,7 +26,7 @@ export default function RecoverPasswordScreen() {
             Error
           </ThemedText>
           <ThemedText style={styles.errorText}>
-            ID de usuario no válido
+            ID de empleado no válido
           </ThemedText>
           <TouchableOpacity style={styles.backButton} onPress={handleBackToLogin}>
             <ThemedText style={styles.backButtonText}>Volver al inicio de sesión</ThemedText>
@@ -37,18 +36,18 @@ export default function RecoverPasswordScreen() {
     );
   }
 
-  const userInfo = userName && userEmail ? {
-    token: userId,
-    name: userName,
-    email: userEmail,
-    username: userUsername || '',
-    telefono: userTelefono || ''
+  const employeeInfo = employeeName && employeeEmail ? {
+    token: employeeId,
+    name: employeeName,
+    email: employeeEmail,
+    cedula: employeeCedula || '',
+    telefono: employeeTelefono || ''
   } : undefined;
 
   return (
     <PasswordRecovery 
-      userId={userId}
-      userInfo={userInfo}
+      userId={employeeId}
+      userInfo={employeeInfo}
     />
   );
 }
