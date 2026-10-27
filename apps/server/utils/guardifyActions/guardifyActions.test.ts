@@ -3,11 +3,14 @@ import crypto from "node:crypto";
 import { describe, it } from "node:test";
 import { ACTOR_MAX_SKEW_MS, resolveActorEmployee, verifyActorHeaders } from "./actor";
 import type { ActionEnv } from "./env";
-import { handleActionDetail, handleActionExecute, handleImport, handleLookupEmpleado, IMPORT_MAX_ROWS, turnosDe } from "./handler";
+import { handleActionDetail, handleActionExecute, handleImport, handleLookupEmpleado, IMPORT_MAX_ROWS, MAX_BODY_CHARS, turnosDe } from "./handler";
 import { cargarInventarioPuesto, formatearParaPlanillas, parseFechaEntregaParts, planificarCargaInventario } from "./inventario";
 import { aprobarMutuoAcuerdo } from "./aprobar-mutuo";
 import { aprobarPermisoSolicitud } from "./aprobar-permiso";
-import { tokenPlanillasVigente } from "./planillas";
+import { MARGEN_TOKEN_MS, tokenPlanillasVigente } from "./planillas";
+import { makeActionEnv, type EnvDeps } from "./envFactory";
+import { PlanillasError } from "./env";
+import { isInternalRequest, markInternalRequest } from "../internalRequests";
 import { accionesDeMutuo, puedeRechazarMutuo, rechazarMutuoAcuerdo } from "./mutuos";
 import { accionesDePermiso, esEjecutivoDelPermiso, rechazarPermisoSolicitud } from "./permisos";
 
@@ -18,30 +21,46 @@ const IDEM = "0123456789abcdef0123";
 const NOW = 1_700_000_000_000;
 
 /** Firma como lo describe el protocolo, sin usar el código de la app: así se prueba que cumple la especificación. */
-function sign(claims: unknown, key = KEY) {
+const binding = (method: string, url: string, body = "") => { const u = new URL(url); return `${method.toUpperCase()}\n${u.pathname}${u.search}\n${crypto.createHash("sha256").update(body, "utf8").digest("hex")}`; };
+const BIND0 = binding("POST", "https://app.test/x", "{}");
+function sign(claims: unknown, key = KEY, bind = BIND0) {
     const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
-    return { "x-guardify-actor": payload, "x-guardify-actor-sig": crypto.createHmac("sha256", key).update(payload).digest("hex") };
+    return { "x-guardify-actor": payload, "x-guardify-actor-sig": crypto.createHmac("sha256", key).update(`${payload}\n${bind}`).digest("hex") };
 }
+/** Las pruebas de rutas piden `good()`; al armar la petición se firma ligada a SU método, ruta y cuerpo. */
+const finalize = (h: Record<string, string>, method: string, url: string, body: string): Record<string, string> => {
+    const { "x-test-actor": claims, ...rest } = h;
+    return claims ? { ...rest, ...sign(JSON.parse(claims), KEY, binding(method, url, body)) } : rest;
+};
+const goodHeaders = () => ({ authorization: `Bearer ${KEY}`, "x-test-actor": JSON.stringify(actorClaims({ cedula: "c" })) });
 const actorClaims = (over: object = {}) => ({ actor: { email: "a@b.co", name: "n", ...over }, ts: NOW, tenant: "t" });
 const hdrs = (o: Record<string, string>) => ({ get: (k: string) => o[k.toLowerCase()] ?? null });
 
 describe("identidad del actor (protocolo de acciones)", () => {
     it("acepta una firma hecha según la especificación y devuelve quién es", () => {
-        const c = verifyActorHeaders(hdrs(sign(actorClaims())), KEY, NOW + 1000);
+        const c = verifyActorHeaders(hdrs(sign(actorClaims())), KEY, NOW + 1000, BIND0);
         assert.equal(c?.actor.email, "a@b.co");
         assert.equal(c?.tenant, "t");
     });
     it("rechaza llave distinta, carga alterada, firma mal formada, cabeceras ausentes y vencida o del futuro", () => {
         const h = sign(actorClaims());
-        assert.equal(verifyActorHeaders(hdrs(h), "otra".repeat(8), NOW), null);
-        assert.equal(verifyActorHeaders(hdrs({ ...h, "x-guardify-actor": sign(actorClaims({ email: "x@y.co" }))["x-guardify-actor"] }), KEY, NOW), null);
-        assert.equal(verifyActorHeaders(hdrs({ ...h, "x-guardify-actor-sig": "zz" }), KEY, NOW), null);
-        assert.equal(verifyActorHeaders(hdrs({}), KEY, NOW), null);
-        assert.equal(verifyActorHeaders(hdrs(h), "", NOW), null);
-        assert.equal(verifyActorHeaders(hdrs(h), KEY, NOW + ACTOR_MAX_SKEW_MS + 1), null);
-        assert.equal(verifyActorHeaders(hdrs(h), KEY, NOW - ACTOR_MAX_SKEW_MS - 1), null);
-        assert.notEqual(verifyActorHeaders(hdrs(h), KEY, NOW + ACTOR_MAX_SKEW_MS), null);
-        assert.equal(verifyActorHeaders(hdrs(sign({ actor: { name: "n" }, ts: NOW, tenant: "t" })), KEY, NOW), null);
+        assert.equal(verifyActorHeaders(hdrs(h), "otra".repeat(8), NOW, BIND0), null);
+        assert.equal(verifyActorHeaders(hdrs({ ...h, "x-guardify-actor": sign(actorClaims({ email: "x@y.co" }))["x-guardify-actor"] }), KEY, NOW, BIND0), null);
+        assert.equal(verifyActorHeaders(hdrs({ ...h, "x-guardify-actor-sig": "zz" }), KEY, NOW, BIND0), null);
+        assert.equal(verifyActorHeaders(hdrs({}), KEY, NOW, BIND0), null);
+        assert.equal(verifyActorHeaders(hdrs(h), "", NOW, BIND0), null);
+        assert.equal(verifyActorHeaders(hdrs(h), KEY, NOW + ACTOR_MAX_SKEW_MS + 1, BIND0), null);
+        assert.equal(verifyActorHeaders(hdrs(h), KEY, NOW - ACTOR_MAX_SKEW_MS - 1, BIND0), null);
+        assert.notEqual(verifyActorHeaders(hdrs(h), KEY, NOW + ACTOR_MAX_SKEW_MS, BIND0), null);
+        assert.equal(verifyActorHeaders(hdrs(sign({ actor: { name: "n" }, ts: NOW, tenant: "t" })), KEY, NOW, BIND0), null);
+    });
+    it("la firma queda LIGADA a la petición: otro método, otra ruta, otra consulta o otro cuerpo la invalidan", () => {
+        const h = sign(actorClaims(), KEY, binding("POST", "https://app.test/api/guardify/actions/permisos/1/aprobar", '{"a":1}'));
+        const ok = binding("POST", "https://app.test/api/guardify/actions/permisos/1/aprobar", '{"a":1}');
+        assert.notEqual(verifyActorHeaders(hdrs(h), KEY, NOW, ok), null);
+        for (const otra of [binding("GET", "https://app.test/api/guardify/actions/permisos/1/aprobar", '{"a":1}'), binding("POST", "https://app.test/api/guardify/actions/permisos/2/aprobar", '{"a":1}'), binding("POST", "https://app.test/api/guardify/actions/permisos/1/rechazar", '{"a":1}'), binding("POST", "https://app.test/api/guardify/actions/permisos/1/aprobar?scope=x", '{"a":1}'), binding("POST", "https://app.test/api/guardify/actions/permisos/1/aprobar", '{"a":2}')]) {
+            assert.equal(verifyActorHeaders(hdrs(h), KEY, NOW, otra), null);
+        }
     });
 });
 
@@ -192,8 +211,8 @@ describe("rechazar un mutuo acuerdo (lógica compartida con la ruta de la app)",
 
 describe("API de acciones para Guardify", () => {
     const env0 = { GUARDIFY_REPORTS_API_KEY: KEY };
-    const req = (method: string, headers: Record<string, string>, body?: unknown) => new Request("https://app.test/x", { method, headers: { ...headers, ...(body !== undefined ? { "content-type": "application/json" } : {}) }, body: body !== undefined ? JSON.stringify(body) : undefined });
-    const good = () => ({ authorization: `Bearer ${KEY}`, ...sign(actorClaims({ cedula: "c" }), KEY) });
+    const req = (method: string, headers: Record<string, string>, body?: unknown, url = "https://app.test/x") => { const text = body !== undefined ? JSON.stringify(body) : undefined; return new Request(url, { method, headers: { ...finalize(headers, method, url, text ?? ""), ...(body !== undefined ? { "content-type": "application/json" } : {}) }, body: text }); };
+    const good = goodHeaders;
     const deps = (f: ReturnType<typeof fakeEnv>, extra: object = {}) => ({ getEnv: () => f.env, env: env0, now: () => NOW, ...extra });
     // El actor es el empleado 5 y es el ejecutivo del registro.
     const world = (reg: object = { estado: "pendiente", ejecutivo_cuenta: 5, empleado_id: 8 }, tabla = "c_solicitud_permiso") => {
@@ -280,12 +299,13 @@ describe("API de acciones para Guardify", () => {
 
 describe("token de Planillas guardado de la persona", () => {
     const AHORA = 1_000_000;
-    it("vigente: lo devuelve; vencido, vacío, sin fecha o con fecha ilegible: nada (no se usa un token dudoso)", () => {
-        assert.equal(tokenPlanillasVigente({ token: " abc ", expires_at: new Date(AHORA + 1) }, AHORA), "abc");
-        assert.equal(tokenPlanillasVigente({ token: "abc", expires_at: AHORA + 1 }, AHORA), "abc");
-        assert.equal(tokenPlanillasVigente({ token: "abc", expires_at: new Date(AHORA) }, AHORA), null);
+    it("vigente: lo devuelve; vencido, por vencer, vacío, sin fecha o con fecha ilegible: nada (no se usa un token dudoso)", () => {
+        assert.equal(tokenPlanillasVigente({ token: " abc ", expires_at: new Date(AHORA + MARGEN_TOKEN_MS + 1) }, AHORA), "abc");
+        assert.equal(tokenPlanillasVigente({ token: "abc", expires_at: AHORA + MARGEN_TOKEN_MS + 1 }, AHORA), "abc");
+        assert.equal(tokenPlanillasVigente({ token: "abc", expires_at: new Date(AHORA + MARGEN_TOKEN_MS) }, AHORA), null);
+        assert.equal(tokenPlanillasVigente({ token: "abc", expires_at: new Date(AHORA + 1000) }, AHORA), null, "uno que vence en un segundo se rechazaría a mitad de la acción");
         assert.equal(tokenPlanillasVigente({ token: "abc", expires_at: new Date(AHORA - 1) }, AHORA), null);
-        assert.equal(tokenPlanillasVigente({ token: "", expires_at: new Date(AHORA + 1) }, AHORA), null);
+        assert.equal(tokenPlanillasVigente({ token: "", expires_at: new Date(AHORA + MARGEN_TOKEN_MS + 1) }, AHORA), null);
         assert.equal(tokenPlanillasVigente({ token: "abc" }, AHORA), null);
         assert.equal(tokenPlanillasVigente({ token: "abc", expires_at: "no es fecha" }, AHORA), null);
         assert.equal(tokenPlanillasVigente(null, AHORA), null);
@@ -299,7 +319,7 @@ describe("aprobar un permiso (lógica compartida con la ruta de la app)", () => 
     const base = { estado: "pendiente", ejecutivo_cuenta: 5, empleado_id: 8, tipo: "Con goce", corpo_id: 3, turnos, fecha_inicio: "2026-10-01T00:00:00.000Z", fecha_fin: "2026-10-02T00:00:00.000Z", plaza_id: 4 };
     const body = (over: object = {}) => ({ firma_ejecutivo_cuenta_digital: FIRMA, firma_ejecutivo_cuenta_manual: FIRMA, observaciones: " obs ", turnos: [], ...over });
     const world = (reg: object = base, extra: object = {}) => fakeEnv({ tablas: { c_solicitud_permiso: reg }, empleados: { 5: { nombre: "e" }, 8: { nombre: "s" }, 31: { nombre: "r" } }, ...extra });
-    const run = (f: ReturnType<typeof fakeEnv>, over: object = {}) => aprobarPermisoSolicitud(f.env, { id: 1, actorId: 5, payload: { id: 5 }, body: body(), planillasToken: "tp", ...over });
+    const run = (f: ReturnType<typeof fakeEnv>, over: { body?: object; [k: string]: unknown } = {}) => { const { body: b, ...rest } = over; return aprobarPermisoSolicitud(f.env, { id: 1, actorId: 5, payload: { id: 5 }, readBody: async () => (b ?? body()) as never, planillasToken: "tp", ...rest }); };
 
     it("sin token de Planillas no se hace nada: «planillas_session_required»", async () => {
         const f = world();
@@ -405,8 +425,8 @@ describe("aprobar un mutuo acuerdo (lógica compartida con la ruta de la app)", 
 
 describe("API de acciones: aprobar y buscar reemplazo", () => {
     const env0 = { GUARDIFY_REPORTS_API_KEY: KEY };
-    const req = (method: string, headers: Record<string, string>, body?: unknown, url = "https://app.test/x") => new Request(url, { method, headers: { ...headers, ...(body !== undefined ? { "content-type": "application/json" } : {}) }, body: body !== undefined ? JSON.stringify(body) : undefined });
-    const good = () => ({ authorization: `Bearer ${KEY}`, ...sign(actorClaims({ cedula: "c" }), KEY) });
+    const req = (method: string, headers: Record<string, string>, body?: unknown, url = "https://app.test/x") => { const text = body !== undefined ? JSON.stringify(body) : undefined; return new Request(url, { method, headers: { ...finalize(headers, method, url, text ?? ""), ...(body !== undefined ? { "content-type": "application/json" } : {}) }, body: text }); };
+    const good = goodHeaders;
     const H = () => ({ ...good(), "idempotency-key": IDEM });
     const deps = (f: ReturnType<typeof fakeEnv>) => ({ getEnv: () => f.env, env: env0, now: () => NOW });
     const FIRMA = "firma-con-mas-de-diez-caracteres";
@@ -465,7 +485,7 @@ describe("API de acciones: aprobar y buscar reemplazo", () => {
         assert.deepEqual([o.status, (await jsonOf(o)).code], [409, "already_resolved"]);
     });
     it("buscar un empleado por código: exige llave y actor, devuelve solo id, código y nombre; 404 si no existe; 400 sin código", async () => {
-        const mk = () => { const f = fakeEnv({ empleados: { 5: { codigo: "A1" }, 31: { id: 31, codigo: "B2", nombre: "n", primer_apellido: "a", segundo_apellido: "b", cedula: "SECRETA" } } }); (f.env.prisma as any).c_empleado.findMany = async (a: any) => (a.where.cedula ? [{ id: 5, supervisor_id: null }] : []); return f; };
+        const mk = () => { const empleados: Record<number, any> = { 5: { codigo: "A1" }, 31: { id: 31, codigo: "B2", nombre: "n", primer_apellido: "a", segundo_apellido: "b", cedula: "SECRETA" } }; const f = fakeEnv({ empleados }); (f.env.prisma as any).c_empleado.findMany = async (a: any) => (a.where.cedula ? [{ id: 5, supervisor_id: null }] : a.where.codigo ? Object.values(empleados).filter((e: any) => e.codigo === a.where.codigo) : []); return f; };
         const get = (h: Record<string, string>, q: string) => handleLookupEmpleado(req("GET", h, undefined, `https://app.test/x?codigo=${q}`), deps(mk()));
         assert.equal((await get({}, "B2")).status, 401);
         assert.equal((await get({ authorization: `Bearer ${KEY}` }, "B2")).status, 401);
@@ -543,8 +563,8 @@ describe("carga masiva del inventario de un puesto", () => {
 
     describe("API de cargas para Guardify", () => {
         const env0 = { GUARDIFY_REPORTS_API_KEY: KEY };
-        const good = () => ({ authorization: `Bearer ${KEY}`, ...sign(actorClaims({ cedula: "c" }), KEY) });
-        const req = (h: Record<string, string>, body?: unknown) => new Request("https://app.test/x", { method: "POST", headers: { ...h, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+        const good = goodHeaders;
+        const req = (h: Record<string, string>, body?: unknown) => { const text = body === undefined ? undefined : JSON.stringify(body); return new Request("https://app.test/x", { method: "POST", headers: { ...finalize(h, "POST", "https://app.test/x", text ?? ""), "content-type": "application/json" }, body: text }); };
         const mk = (extra: object = {}) => { const f = world(extra); (f.env.prisma as any).c_empleado.findMany = async (a: any) => (a.where.cedula ? [{ id: 5, supervisor_id: null }] : []); return f; };
         const deps = (f: ReturnType<typeof fakeEnv>) => ({ getEnv: () => f.env, env: env0, now: () => NOW });
         const jsonOf = async (r: Response) => r.json() as Promise<any>;
@@ -596,5 +616,273 @@ describe("carga masiva del inventario de un puesto", () => {
             const r = await handleImport(req(good(), { modo: "validar", filas: [fila()] }), "inventario-puesto", deps(f));
             assert.equal(r.status, 500); assert.equal(JSON.stringify(await jsonOf(r)).includes("secreto"), false);
         });
+    });
+});
+
+
+describe("entorno real de las acciones (lo que antes solo se probaba con piezas falsas)", () => {
+    const deps = (over: Partial<EnvDeps> = {}) => {
+        const log: { fn: string; args: any[] }[] = [];
+        const d: EnvDeps = {
+            callDynamicPrisma: async (p) => { log.push({ fn: "call", args: [p] }); return p.data.table === "a_mobile_token_for_planillas" ? { token: "t", expires_at: new Date(10 * 60_000 + 1_000_000) } : { ok: true }; },
+            markInternalRequest: (r) => { log.push({ fn: "mark", args: [r] }); markInternalRequest(r); },
+            reportError: async (...a) => { log.push({ fn: "report", args: a }); },
+            sendNotificationByEmployee: async (...a) => { log.push({ fn: "notify", args: a }); },
+            prisma: {},
+            planillasPost: async (path, body, token) => { log.push({ fn: "planillas", args: [path, body, token] }); return { success: true }; },
+            ahoraPared: () => new Date(1_000_000),
+            ...over,
+        };
+        return { d, log };
+    };
+    it("desde Guardify la petición se marca como interna y TODA llamada va sin verificar al usuario; desde la app, nada cambia", async () => {
+        const g = deps(); const reqG = {};
+        const envG = makeActionEnv(g.d, reqG, "ruta", "POST", { verifyUser: false });
+        await envG.call({ action: "GET", table: "x" });
+        assert.equal(isInternalRequest(reqG), true);
+        assert.equal(g.log.find((l) => l.fn === "call")!.args[0].shouldVerifyAccessToken, false);
+        const a = deps(); const reqA = {};
+        const envA = makeActionEnv(a.d, reqA, "ruta", "PUT", { verifyUser: true });
+        await envA.call({ action: "GET", table: "x" });
+        assert.equal(isInternalRequest(reqA), false);
+        assert.equal(a.log.find((l) => l.fn === "call")!.args[0].shouldVerifyAccessToken, true);
+        assert.equal(a.log.some((l) => l.fn === "mark"), false);
+    });
+    it("`report` NUNCA lanza: un fallo al registrar un error no tumba la respuesta de la acción", async () => {
+        const { d } = deps({ reportError: async () => { throw new TypeError("Cannot read properties of null (reading 'id')"); } });
+        const env = makeActionEnv(d, {}, "ruta", "POST", { verifyUser: false });
+        await assert.doesNotReject(() => env.report(400, "mensaje"));
+    });
+    it("las notificaciones salen con quién la origina y a quién; el orden de los argumentos es el de la librería", async () => {
+        const { d, log } = deps();
+        const env = makeActionEnv(d, {}, "ruta", "POST", { verifyUser: false });
+        await env.notify("título", "mensaje", [8, 9], [5]);
+        assert.deepEqual(log.find((l) => l.fn === "notify")!.args.slice(1), [0, [5], "título", "mensaje", [8, 9]]);
+    });
+    it("el token de Planillas se busca sin usuario, el más reciente primero, y se descarta si vence pronto", async () => {
+        const { d, log } = deps();
+        const env = makeActionEnv(d, {}, "ruta", "POST", { verifyUser: false });
+        assert.equal(await env.tokenPlanillas(5), "t");
+        const q = log.find((l) => l.fn === "call")!.args[0];
+        assert.deepEqual([q.shouldVerifyAccessToken, q.data.where, q.data.orderBy], [false, { empleado_id: 5 }, { id: "desc" }]);
+        const corto = deps({ callDynamicPrisma: async () => ({ token: "t", expires_at: new Date(1_000_000 + 5_000) }) });
+        assert.equal(await makeActionEnv(corto.d, {}, "r", "POST", { verifyUser: false }).tokenPlanillas(5), null);
+    });
+    it("los errores de Planillas llegan como `PlanillasError` con su estado HTTP y el mensaje original", async () => {
+        const mk = (e: unknown) => makeActionEnv(deps({ planillasPost: async () => { throw e; } }).d, {}, "r", "POST", { verifyUser: false });
+        await assert.rejects(() => mk(Object.assign(new Error("Request failed with status code 401"), { response: { status: 401 } })).planillas("/x", {}, "t"), (e: any) => e instanceof PlanillasError && e.httpStatus === 401 && e.message === "Request failed with status code 401");
+        await assert.rejects(() => mk(new Error("timeout of 30000ms exceeded")).planillas("/x", {}, "t"), (e: any) => e instanceof PlanillasError && e.httpStatus === 0);
+    });
+    it("una petición interna no se confunde con otra (la marca es por objeto)", () => {
+        const a = {}, b = {}; markInternalRequest(a);
+        assert.equal(isInternalRequest(a), true); assert.equal(isInternalRequest(b), false);
+    });
+});
+
+describe("mutuo: si Planillas falla, el acuerdo no queda aprobado a medias", () => {
+    const FIRMA = "firma-con-mas-de-diez-caracteres";
+    const base = { estado: "pendiente", ejecutivo_cuenta: 5, ausente_acepta: true, reemplaza_acepta: true, empleadoAusente_id: 11, empleadoReemplaza_id: 12, fecha_ausente: "2026-10-01", fecha_reemplaza: "2026-10-02", firma_ejecutivo_cuenta_manual: null, firma_ejecutivo_cuenta_digital: "" };
+    const world = (extra: object = {}, reg: object = base) => fakeEnv({ tablas: { e_mutuos_acuerdos: reg, n_ejecutivo_cuenta_coordinador: { coordinador_id: 77 } }, empleados: { 3: { nombre: "e", supervisor_id: 5 } }, rows: { c_cambio_guardia: { 1: { id: 1 } } }, ...extra });
+    const run = (f: ReturnType<typeof fakeEnv>) => aprobarMutuoAcuerdo(f.env, { id: 1, actorId: 3, firmaDigital: FIRMA, firmaManual: FIRMA, horaAccion: null, planillasToken: "tp" });
+    it("Planillas dice que no: el acuerdo vuelve a pendiente y sin firmas, sin bitácora ni aviso (se puede reintentar)", async () => {
+        const f = world({ planillas: () => ({ success: false }) });
+        const r: any = await run(f);
+        assert.deepEqual([r.ok, r.status], [false, 500]);
+        const ws = writes(f.calls);
+        assert.equal(ws.length, 2);
+        assert.equal(ws[0]!.data.estado, "aprobado");
+        assert.deepEqual([ws[1]!.data.estado, ws[1]!.data.firma_ejecutivo_cuenta_manual, ws[1]!.data.firma_ejecutivo_cuenta_digital], ["pendiente", null, ""]);
+        assert.equal(f.notifs.length, 0); assert.equal(ws.some((c) => c.table === "c_cambios_apps_modules"), false);
+    });
+    it("Planillas lanza (401, 5xx, sin respuesta): también se revierte y el error sube", async () => {
+        const f = world({ planillas: () => { throw new PlanillasError(401, "401"); } });
+        await assert.rejects(() => run(f), (e: any) => e instanceof PlanillasError);
+        const ws = writes(f.calls);
+        assert.deepEqual([ws[0]!.data.estado, ws[1]!.data.estado], ["aprobado", "pendiente"]);
+    });
+    it("un dato que falta (coordinador, fechas, marcas) se detecta ANTES de escribir: no se toca nada", async () => {
+        for (const f of [world({ tablas: { e_mutuos_acuerdos: base } }), world({}, { ...base, fecha_ausente: null })]) {
+            const r: any = await run(f);
+            assert.equal(r.status, 404);
+            assert.equal(writes(f.calls).length, 0); assert.equal(f.planillasCalls.length, 0);
+        }
+    });
+    it("si además falla el revertir, el error de Planillas es el que se informa (y queda en el log)", async () => {
+        const f = world({ planillas: () => ({ success: false }) });
+        const original = f.env.call;
+        let updates = 0;
+        f.env.call = async (d) => { if (d.action === "UPDATE" && ++updates === 2) throw new Error("db caída"); return original(d); };
+        const r: any = await run(f);
+        assert.deepEqual([r.ok, r.status], [false, 500]);
+    });
+});
+
+describe("aprobar un permiso: entradas y orden", () => {
+    const FIRMA = "firma-con-mas-de-diez-caracteres";
+    const base = { estado: "pendiente", ejecutivo_cuenta: 5, empleado_id: 8, tipo: "Con goce", corpo_id: 3, turnos: JSON.stringify([{ id: 21 }]), fecha_inicio: "2026-10-01T00:00:00.000Z", fecha_fin: "2026-10-02T00:00:00.000Z" };
+    const world = (reg: object = base) => fakeEnv({ tablas: { c_solicitud_permiso: reg }, empleados: { 5: {}, 8: {}, 31: {} } });
+    const b = (over: object = {}) => ({ firma_ejecutivo_cuenta_digital: FIRMA, firma_ejecutivo_cuenta_manual: FIRMA, turnos: [], ...over });
+    const run = (f: ReturnType<typeof fakeEnv>, body: object, readBody?: () => Promise<any>) => aprobarPermisoSolicitud(f.env, { id: 1, actorId: 5, payload: { id: 5 }, readBody: readBody ?? (async () => body), planillasToken: "tp" });
+    it("los reemplazos y el reemplazo obligatorio deben ser números enteros: se revisan ANTES de crear nada en Planillas", async () => {
+        for (const bad of [b({ reemplazo_obligatorio: "x" }), b({ reemplazo_obligatorio: 2.5 }), b({ turnos: [{ id: 21, reemplazo_id: "x" }] }), b({ turnos: [{ id: 21, reemplazo_id: -3 }] })]) {
+            const f = world(); const r: any = await run(f, bad);
+            assert.deepEqual([r.status, r.code], [400, "invalid_request"]);
+            assert.equal(f.planillasCalls.length, 0); assert.equal(writes(f.calls).length, 0);
+        }
+        const ok = world(); assert.equal(((await run(ok, b({ turnos: [{ id: 21, reemplazo_id: 31 }], reemplazo_obligatorio: null }))) as any).ok, true);
+    });
+    it("un permiso sin turnos se rechaza con un mensaje claro (antes era un error interno)", async () => {
+        const f = world({ ...base, turnos: "[]" });
+        const r: any = await run(f, b());
+        assert.deepEqual([r.status, r.code, r.message], [400, "invalid_state", "La solicitud no tiene turnos"]);
+        assert.equal(f.planillasCalls.length, 0);
+    });
+    it("el cuerpo se lee DESPUÉS de las validaciones, como en la ruta original: registro inexistente o no autorizado no depende de un JSON válido", async () => {
+        let leido = false;
+        const boom = async () => { leido = true; throw new SyntaxError("JSON inválido"); };
+        assert.equal(((await run(fakeEnv(), {}, boom)) as any).code, "not_found");
+        assert.equal(((await run(world({ ...base, ejecutivo_cuenta: 99 }), {}, boom)) as any).code, "out_of_scope");
+        assert.equal(leido, false);
+        await assert.rejects(() => run(world(), {}, boom), SyntaxError);
+        assert.equal(leido, true);
+    });
+});
+
+describe("API de acciones: correcciones de la revisión", () => {
+    const env0 = { GUARDIFY_REPORTS_API_KEY: KEY };
+    const FIRMA = "firma-con-mas-de-diez-caracteres";
+    const sigs = [{ role: "digital", method: "digital", image: FIRMA }, { role: "manual", method: "manual", image: FIRMA }];
+    const IDEM = "0123456789abcdef0123";
+    const url = (p: string) => `https://app.test${p}`;
+    const reqAt = (method: string, p: string, body?: unknown, extra: Record<string, string> = {}, claims?: object) => {
+        const text = body === undefined ? undefined : JSON.stringify(body);
+        const u = url(p);
+        const h = { authorization: `Bearer ${KEY}`, ...extra, ...sign(claims ?? actorClaims({ cedula: "c" }), KEY, binding(method, u, text ?? "")), ...(body !== undefined ? { "content-type": "application/json" } : {}) };
+        return new Request(u, { method, headers: h, body: text });
+    };
+    const permiso = { estado: "pendiente", ejecutivo_cuenta: 5, empleado_id: 8, tipo: "Sin goce", corpo_id: 3, turnos: JSON.stringify([{ id: 21 }]), fecha_inicio: "2026-10-01T00:00:00.000Z", fecha_fin: "2026-10-01T00:00:00.000Z" };
+    const mk = (reg: object = permiso, extra: object = {}, actorRow: object = { id: 5, supervisor_id: null, cedula: "c", estado: "A" }) => {
+        const f = fakeEnv({ tablas: { c_solicitud_permiso: reg }, empleados: { 5: {}, 8: {} }, ...extra });
+        (f.env.prisma as any).c_empleado.findMany = async (a: any) => (a.where.cedula ? [actorRow] : []);
+        (f.env.prisma as any).c_empleado.findUnique = async ({ where }: any) => (where.id === 5 ? actorRow : where.id === 8 ? {} : null);
+        return f;
+    };
+    const deps = (f: ReturnType<typeof fakeEnv>) => ({ getEnv: () => f.env, env: env0, now: () => NOW });
+    const jsonOf = async (r: Response) => r.json() as Promise<any>;
+
+    it("una firma hecha para otra ruta, otra acción o con otro cuerpo se rechaza (401)", async () => {
+        const f = mk();
+        const good = reqAt("POST", "/api/guardify/actions/permisos/1/aprobar", { signatures: sigs }, { "idempotency-key": IDEM });
+        // Se reutilizan SUS cabeceras en una petición distinta.
+        const robadas = Object.fromEntries(["authorization", "x-guardify-actor", "x-guardify-actor-sig", "idempotency-key"].map((k) => [k, good.headers.get(k)!]));
+        const otraAccion = new Request(url("/api/guardify/actions/permisos/1/rechazar"), { method: "POST", headers: { ...robadas, "content-type": "application/json" }, body: JSON.stringify({ signatures: sigs }) });
+        const otroCuerpo = new Request(url("/api/guardify/actions/permisos/1/aprobar"), { method: "POST", headers: { ...robadas, "content-type": "application/json" }, body: JSON.stringify({ signatures: [] }) });
+        const otroId = new Request(url("/api/guardify/actions/permisos/2/aprobar"), { method: "POST", headers: { ...robadas, "content-type": "application/json" }, body: JSON.stringify({ signatures: sigs }) });
+        for (const r of [otraAccion, otroCuerpo, otroId]) assert.equal((await handleActionExecute(r, ...(new URL(r.url).pathname.split("/").slice(-3) as [string, string, string]), deps(f))).status, 401);
+        assert.equal(writes(f.calls).length, 0);
+    });
+    it("el tipo y la acción se buscan solo entre los propios (nada de «constructor» o «__proto__»)", async () => {
+        const f = mk();
+        for (const t of ["constructor", "__proto__", "toString", "hasOwnProperty"]) assert.equal((await handleActionDetail(reqAt("GET", `/x/${t}/1`), t, "1", deps(f))).status, 404, t);
+        for (const a of ["constructor", "__proto__", "toString"]) assert.equal((await handleActionExecute(reqAt("POST", `/x/permisos/1/${a}`, {}, { "idempotency-key": IDEM }), "permisos", "1", a, deps(f))).status, 404, a);
+        assert.equal(writes(f.calls).length, 0);
+    });
+    it("un cuerpo enorme se rechaza (413) sin procesarlo", async () => {
+        const f = mk();
+        const r = await handleActionExecute(reqAt("POST", "/x/permisos/1/aprobar", { x: "a".repeat(MAX_BODY_CHARS + 10) }, { "idempotency-key": IDEM }), "permisos", "1", "aprobar", deps(f));
+        assert.equal(r.status, 413); assert.equal(f.calls.length, 0);
+    });
+    it("el solicitante (o una parte del acuerdo) no resuelve lo suyo, aunque su supervisor sea el ejecutivo", async () => {
+        const f = mk({ ...permiso, empleado_id: 5 });
+        const d = await jsonOf(await handleActionDetail(reqAt("GET", "/x/permisos/1"), "permisos", "1", deps(f)));
+        assert.deepEqual(d.acciones, []);
+        const r = await handleActionExecute(reqAt("POST", "/x/permisos/1/aprobar", { signatures: sigs }, { "idempotency-key": IDEM }), "permisos", "1", "aprobar", deps(f));
+        const cuerpo = await jsonOf(r);
+        assert.deepEqual([r.status, cuerpo.code, cuerpo.message], [403, "out_of_scope", "No puedes resolver un registro en el que eres parte."]);
+        assert.equal(f.planillasCalls.length, 0);
+        const m = fakeEnv({ tablas: { e_mutuos_acuerdos: { estado: null, ejecutivo_cuenta: 5, ausente_acepta: true, reemplaza_acepta: true, empleadoAusente_id: 3, empleadoReemplaza_id: 12 } }, empleados: { 3: { supervisor_id: 5 } } });
+        (m.env.prisma as any).c_empleado.findMany = async (a: any) => (a.where.cedula ? [{ id: 3, supervisor_id: 5, cedula: "c", estado: "A" }] : []);
+        assert.deepEqual((await jsonOf(await handleActionDetail(reqAt("GET", "/x/mutuos-acuerdos/1"), "mutuos-acuerdos", "1", deps(m)))).acciones, []);
+    });
+    it("un empleado dado de baja no actúa; un id que no coincide con su cédula tampoco", async () => {
+        const baja = mk(permiso, {}, { id: 5, supervisor_id: null, cedula: "c", estado: "BA" });
+        assert.equal((await handleActionDetail(reqAt("GET", "/x/permisos/1"), "permisos", "1", deps(baja))).status, 403);
+        const ok = mk();
+        const conOtroId = reqAt("GET", "/x/permisos/1", undefined, {}, actorClaims({ cedula: "otra-cedula", externalId: "5" }));
+        assert.equal((await handleActionDetail(conOtroId, "permisos", "1", deps(ok))).status, 403);
+        const coincide = reqAt("GET", "/x/permisos/1", undefined, {}, actorClaims({ cedula: "c", externalId: "5" }));
+        assert.equal((await handleActionDetail(coincide, "permisos", "1", deps(ok))).status, 200);
+    });
+    it("quien no tiene nada que resolver ve solo el estado: sin turnos, nombres ni historial", async () => {
+        const f = mk({ ...permiso, ejecutivo_cuenta: 99 }, { cambios: [{ created_by: 5, cambios: "[]" }] });
+        const d = await jsonOf(await handleActionDetail(reqAt("GET", "/x/permisos/1"), "permisos", "1", deps(f)));
+        assert.deepEqual([d.acciones, d.datos, d.historial], [[], {}, []]);
+        assert.equal(d.estado, "pendiente");
+    });
+    it("el motivo por el que no se puede es el verdadero: ya firmado → resuelto; mutuo sin aceptar → estado; otro → sin alcance", async () => {
+        const call = async (reg: object, tipo = "permisos", accion = "aprobar") => {
+            const f = tipo === "permisos" ? mk(reg) : (() => { const x = fakeEnv({ tablas: { e_mutuos_acuerdos: reg }, empleados: { 5: { supervisor_id: 5 } } }); (x.env.prisma as any).c_empleado.findMany = async (a: any) => (a.where.cedula ? [{ id: 5, supervisor_id: 7, cedula: "c", estado: "A" }] : []); return x; })();
+            const r = await handleActionExecute(reqAt("POST", `/x/${tipo}/1/${accion}`, { signatures: sigs }, { "idempotency-key": IDEM }), tipo, "1", accion, deps(f));
+            return [r.status, (await jsonOf(r)).code];
+        };
+        assert.deepEqual(await call({ ...permiso, firma_ejecutivo_cuenta_manual: "x" }), [409, "already_resolved"]);
+        assert.deepEqual(await call({ estado: null, ejecutivo_cuenta: 7, ausente_acepta: true, reemplaza_acepta: false, empleadoAusente_id: 1, empleadoReemplaza_id: 2 }, "mutuos-acuerdos"), [409, "invalid_state"]);
+        assert.deepEqual(await call({ ...permiso, ejecutivo_cuenta: 99 }), [403, "out_of_scope"]);
+    });
+    it("un fallo de servidor conserva su estado (500), no se disfraza de 400; los de Planillas se traducen", async () => {
+        const f = mk(permiso, { planillas: () => ({ success: false }), rows: { e_estructura_sucursal: { 3: {} } } });
+        const r = await handleActionExecute(reqAt("POST", "/x/permisos/1/aprobar", { signatures: sigs, params: { turnos: [{ id: 21, reemplazoId: null }] } }, { "idempotency-key": IDEM }), "permisos", "1", "aprobar", deps(f));
+        assert.equal(r.status, 500);
+        const por = async (st: number) => { const g = mk(permiso, { planillas: () => { throw new PlanillasError(st, "x"); }, rows: { e_estructura_sucursal: { 3: {} } } }); const x = await handleActionExecute(reqAt("POST", "/x/permisos/1/aprobar", { signatures: sigs, params: { turnos: [] } }, { "idempotency-key": IDEM }), "permisos", "1", "aprobar", deps(g)); const c = await jsonOf(x); return [x.status, c.code ?? c.error]; };
+        assert.deepEqual(await por(401), [409, "planillas_session_required"]);
+        assert.deepEqual(await por(403), [403, "out_of_scope"]);
+        assert.deepEqual(await por(422), [400, "invalid_request"]);
+        assert.deepEqual(await por(502), [502, "planillas_unavailable"]);
+        assert.deepEqual(await por(0), [502, "planillas_unavailable"]);
+    });
+    it("dos aprobaciones a la vez sobre el mismo registro: la segunda recibe «conflicto» y Planillas se llama una sola vez", async () => {
+        let soltar!: () => void;
+        const f = mk(permiso, { rows: { e_estructura_sucursal: { 3: {} } }, planillas: () => new Promise((res) => { soltar = () => res({ success: true }); }) as never });
+        const lanzar = () => handleActionExecute(reqAt("POST", "/x/permisos/1/aprobar", { signatures: sigs, params: { turnos: [{ id: 21, reemplazoId: null }] } }, { "idempotency-key": IDEM }), "permisos", "1", "aprobar", deps(f));
+        const primera = lanzar();
+        for (let i = 0; i < 50 && !f.planillasCalls.length; i++) await new Promise((r) => setTimeout(r, 5));
+        assert.equal(f.planillasCalls.length, 1, "la primera ya está llamando a Planillas");
+        const segunda = await lanzar();
+        assert.deepEqual([segunda.status, (await jsonOf(segunda)).code], [409, "conflict"]);
+        soltar();
+        assert.equal((await primera).status, 200);
+        assert.equal(f.planillasCalls.length, 1);
+    });
+    it("la hora de la acción es la del servidor, no la que mande el cliente", async () => {
+        const f = mk(permiso, { rows: { e_estructura_sucursal: { 3: {} } } });
+        const r = await handleActionExecute(reqAt("POST", "/x/permisos/1/aprobar", { signatures: sigs, requestedAt: "2020-01-01T00:00:00.000Z", params: { turnos: [{ id: 21, reemplazoId: null }] } }, { "idempotency-key": IDEM }), "permisos", "1", "aprobar", deps(f));
+        assert.equal(r.status, 200);
+        const cambio = writes(f.calls).find((c) => c.table === "c_cambios_apps_modules")!;
+        assert.equal(cambio.data.created_at, "2026-10-26T20:00:00.000Z");
+    });
+    it("buscar empleado: un código repetido no se adivina (409); uno dado de baja no sale", async () => {
+        const arma = (rows: any[]) => { const f = fakeEnv({}); (f.env.prisma as any).c_empleado.findMany = async (a: any) => (a.where.cedula ? [{ id: 5, supervisor_id: null, cedula: "c", estado: "A" }] : rows); return f; };
+        const get = (f: ReturnType<typeof fakeEnv>) => handleLookupEmpleado(reqAt("GET", "/x/lookup/empleado?codigo=Z"), deps(f));
+        assert.equal((await get(arma([{ id: 1, codigo: "Z" }, { id: 2, codigo: "Z" }]))).status, 409);
+        assert.equal((await get(arma([{ id: 1, codigo: "Z", estado: "BA" }]))).status, 404);
+        assert.equal((await get(arma([{ id: 1, codigo: "Z", nombre: "n" }]))).status, 200);
+    });
+});
+
+describe("carga de inventario: datos de entrada", () => {
+    const world = () => fakeEnv({ many: { n_articulo_corpo_puesto: [{ id: 1 }], e_estructura_puesto: [{ id: 10, codigo: "P" }] } });
+    const fila = (over: object = {}) => ({ codigo_puesto: "P", numero_articulo: 1, cantidad: 1, serie: "S", marca: "M", modelo: "Mo", fecha_entrega: "05-10-2026", ...over });
+    it("una fecha que no existe en el calendario (31-02, 29-02 de un año sin bisiesto) es inválida; una real, válida", () => {
+        for (const v of ["31-02-2026", "29-02-2026", "31-04-2026", "00-01-2026"]) assert.equal(parseFechaEntregaParts(v), null, v);
+        for (const v of ["29-02-2028", "28-02-2026", "31-12-2026"]) assert.notEqual(parseFechaEntregaParts(v), null, v);
+    });
+    it("`true`, listas y objetos no valen como número; los textos demasiado largos se rechazan; todo con el detalle por fila", async () => {
+        const r: any = await cargarInventarioPuesto(world().env, { modo: "validar", planillasToken: null, filas: [fila({ numero_articulo: true }), fila({ cantidad: [5] }), fila({ numero_articulo: {} }), fila({ serie: "s".repeat(121) }), fila({ codigo_puesto: "c".repeat(41) })] });
+        assert.equal(r.status, 400); assert.equal(r.errors.length, 5);
+        assert.match(r.errors[3], /demasiado largo/);
+    });
+    it("los números como texto numérico siguen valiendo (así vienen del Excel)", async () => {
+        const r: any = await cargarInventarioPuesto(world().env, { modo: "validar", planillasToken: null, filas: [fila({ numero_articulo: "1", cantidad: "2" })] });
+        assert.equal(r.ok, true);
     });
 });

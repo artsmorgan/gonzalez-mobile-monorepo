@@ -12,7 +12,7 @@ Tipos: `permisos` (`c_solicitud_permiso`) y `mutuos-acuerdos` (`e_mutuos_acuerdo
 Los campos, adjuntos y firmas del registro los dibuja Guardify con el formulario del reporte (`/api/guardify/reports/{modulo}/forms`); el detalle trae el estado, las acciones que ESTE actor puede ejecutar, el historial y, en `permisos`, `datos.turnos` (id, etiqueta y reemplazo actual de cada turno).
 
 ## Autenticación
-`Authorization: Bearer <GUARDIFY_REPORTS_API_KEY>` (la misma llave de los reportes) **y** la identidad del actor firmada (`x-guardify-actor` + `x-guardify-actor-sig`, HMAC-SHA256 con esa misma llave, vigencia de 5 minutos). El actor se resuelve a un empleado por `externalId` (id), `cedula` o correo; si no hay UNA coincidencia clara → `403 out_of_scope`.
+`Authorization: Bearer <GUARDIFY_REPORTS_API_KEY>` (la misma llave de los reportes) **y** la identidad del actor firmada (`x-guardify-actor` + `x-guardify-actor-sig`, HMAC-SHA256 con esa misma llave, vigencia de 5 minutos). El actor se resuelve a un empleado por `externalId` (id), `cedula` o correo; si no hay UNA coincidencia clara → `403 out_of_scope`. Si Guardify manda id y cédula y no coinciden, no se actúa; un empleado dado de baja (`estado` «BA») no actúa. Quien es **parte** del registro (el solicitante de un permiso, o quien se ausenta o reemplaza en un mutuo) no lo resuelve. Quien no tiene nada que resolver ve solo el estado (sin turnos, nombres ni historial).
 
 ## Qué reglas aplica (las de la app, sin cambios)
 - **Permisos:** puede resolver el ejecutivo de cuenta de la solicitud o su supervisor, solo si está `pendiente`.
@@ -39,3 +39,12 @@ Las **actividades** no tienen carga masiva en la app (se crean una a una en `/ap
 ## Lo que NO hace
 - **Sin evidencia de dispositivo:** la escritura va por la API dinámica con el token móvil del servidor (`shouldVerifyAccessToken: false`), así que no genera la fila de `c_evidencia_registro` que sí genera una acción hecha desde el teléfono. El rastro queda en la bitácora de la app (`c_cambios_apps_modules`) y en la de Guardify.
 - **Idempotencia por estado**, sin tabla de claves: si el mismo actor repite `rechazar` o `aprobar` sobre un registro que él ya resolvió, devuelve el mismo resultado sin escribir; otro actor recibe `409 already_resolved`.
+
+## Fallos y garantías
+- **Si Planillas falla al aprobar un mutuo, el acuerdo vuelve a pendiente y sin firmas** (se revisa todo lo revisable antes de escribir, se reserva el acuerdo, se llama a Planillas y, si falla, se revierte): no queda «aprobado» sin cambio de guardia y se puede reintentar. Esto cambia el comportamiento heredado de la ruta de la app (que lo dejaba aprobado). En permisos, Planillas se llama antes de escribir; si falla a la mitad de varios turnos, los ya creados allá quedan: por eso el error de Planillas pide revisar en Planillas antes de reintentar.
+- Errores de Planillas: `401` → `409 planillas_session_required`; `403` → `403 out_of_scope`; otro `4xx` → `400 invalid_request`; `5xx` o sin respuesta (plazo de 30 s) → `502 planillas_unavailable`. Un fallo de servidor conserva su estado `500`.
+- Dos acciones a la vez sobre el mismo registro (o dos cargas `aplicar`): la segunda recibe `409 conflict` (candado en el proceso; no protege entre procesos distintos).
+- La hora de la acción es la del servidor; la que mande el cliente no se usa.
+- Cuerpos de más de ~2,5 MB → `413`. Reemplazos y reemplazo obligatorio deben ser enteros; un permiso sin turnos se rechaza.
+- Las llamadas internas de una acción (notificaciones, push y registro de errores) van con el token móvil del servidor y sin JWT de usuario (`utils/internalRequests.ts`); `reportError` dejó de fallar sin JWT y ahora guarda el mensaje real del error.
+- Carga: fechas con calendario real (`31-02` es inválida), `numero_articulo` y `cantidad` solo número o texto numérico, y textos acotados.

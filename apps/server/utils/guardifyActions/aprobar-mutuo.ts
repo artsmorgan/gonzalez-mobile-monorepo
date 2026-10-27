@@ -61,66 +61,77 @@ export async function aprobarMutuoAcuerdo(
         return fail(400, "out_of_scope", "No autorizado para firmar este mutuo acuerdo");
     }
 
+    // Todo lo que se puede revisar SIN escribir se revisa antes: un dato que falta no debe dejar el acuerdo aprobado a medias.
+    const marcaAusenteId = parseMarcaIdsArray((existing as any)?.marcas_ausente ?? (existing as any)?.marcaDiaAusente_id)[0];
+    const marcaReemplazaId = parseMarcaIdsArray((existing as any)?.marcas_reemplaza ?? (existing as any)?.marcaDiaReemplaza_id)[0];
+    const fechaAusente = ymdFromFecha((existing as any)?.fecha_ausente) || null;
+    const fechaReemplaza = ymdFromFecha((existing as any)?.fecha_reemplaza) || null;
+
+    const marcaAusente = marcaAusenteId ? await env.prisma.c_marca_dia.findUnique({ where: { id: marcaAusenteId } }) : null;
+    const marcaReemplaza = marcaReemplazaId ? await env.prisma.c_marca_dia.findUnique({ where: { id: marcaReemplazaId } }) : null;
+
+    if ((!fechaAusente && !marcaAusente) || (!fechaReemplaza && !marcaReemplaza)) {
+        await env.report(404, "Marca ausente o reemplaza no encontrada");
+        return fail(404, "not_found", "Marca ausente o reemplaza no encontrada");
+    }
+
+    const fechaAusenteFinal = fechaAusente || (marcaAusente?.fecha ? new Date(marcaAusente.fecha).toISOString().split("T")[0] : null);
+    const fechaReemplazaFinal = fechaReemplaza || (marcaReemplaza?.fecha ? new Date(marcaReemplaza.fecha).toISOString().split("T")[0] : null);
+    if (!fechaAusenteFinal || !fechaReemplazaFinal) {
+        await env.report(500, "Fechas del mutuo acuerdo no disponibles");
+        return fail(500, "invalid_request", "Fechas del mutuo acuerdo no disponibles");
+    }
+
+    const coordinador = await env.call({ action: "GET", table: "n_ejecutivo_cuenta_coordinador", operation: "findFirst", where: { ejecutivo_cuenta_id: myEjecutivoCuentaId } });
+    if (!coordinador) {
+        await env.report(404, "Coordinador no encontrado");
+        return fail(404, "not_found", "Coordinador no encontrado");
+    }
+
+    // Se «reserva» el acuerdo (aprobado y firmado) ANTES de llamar a Planillas, como siempre: así un segundo intento a la vez ve que ya no está pendiente.
     const updated = await env.call({
         action: "UPDATE",
         table: "e_mutuos_acuerdos",
         where: { id: idNum },
         data: { firma_ejecutivo_cuenta_manual: firmaManual, firma_ejecutivo_cuenta_digital: firmaDigital, estado: "aprobado" },
     });
+    // Si Planillas falla, el acuerdo vuelve a como estaba (pendiente y sin firmas): no queda «aprobado» sin cambio de guardia y se puede reintentar.
+    const revertir = () => env
+        .call({ action: "UPDATE", table: "e_mutuos_acuerdos", where: { id: idNum }, data: { estado: existing.estado || "pendiente", firma_ejecutivo_cuenta_manual: existing.firma_ejecutivo_cuenta_manual ?? null, firma_ejecutivo_cuenta_digital: existing.firma_ejecutivo_cuenta_digital ?? "" } })
+        .catch((e: unknown) => console.error("[aprobar-mutuo] NO se pudo devolver el acuerdo a pendiente tras el fallo de Planillas:", idNum, e instanceof Error ? e.message : e));
 
     const now = env.nowIso(horaAccion);
 
-    if (updated) {
-        const marcaAusenteId = parseMarcaIdsArray((existing as any)?.marcas_ausente ?? (existing as any)?.marcaDiaAusente_id)[0];
-        const marcaReemplazaId = parseMarcaIdsArray((existing as any)?.marcas_reemplaza ?? (existing as any)?.marcaDiaReemplaza_id)[0];
-        const fechaAusente = ymdFromFecha((existing as any)?.fecha_ausente) || null;
-        const fechaReemplaza = ymdFromFecha((existing as any)?.fecha_reemplaza) || null;
-
-        const marcaAusente = marcaAusenteId ? await env.prisma.c_marca_dia.findUnique({ where: { id: marcaAusenteId } }) : null;
-        const marcaReemplaza = marcaReemplazaId ? await env.prisma.c_marca_dia.findUnique({ where: { id: marcaReemplazaId } }) : null;
-
-        if ((!fechaAusente && !marcaAusente) || (!fechaReemplaza && !marcaReemplaza)) {
-            await env.report(404, "Marca ausente o reemplaza no encontrada");
-            return fail(404, "not_found", "Marca ausente o reemplaza no encontrada");
-        }
-
-        const fechaAusenteFinal = fechaAusente || (marcaAusente?.fecha ? new Date(marcaAusente.fecha).toISOString().split("T")[0] : null);
-        const fechaReemplazaFinal = fechaReemplaza || (marcaReemplaza?.fecha ? new Date(marcaReemplaza.fecha).toISOString().split("T")[0] : null);
-        if (!fechaAusenteFinal || !fechaReemplazaFinal) {
-            await env.report(500, "Fechas del mutuo acuerdo no disponibles");
-            return fail(500, "invalid_request", "Fechas del mutuo acuerdo no disponibles");
-        }
-
-        const coordinador = await env.call({ action: "GET", table: "n_ejecutivo_cuenta_coordinador", operation: "findFirst", where: { ejecutivo_cuenta_id: myEjecutivoCuentaId } });
-        if (!coordinador) {
-            await env.report(404, "Coordinador no encontrado");
-            return fail(404, "not_found", "Coordinador no encontrado");
-        }
-
-        const planillasResponse = await env.planillas(
+    let planillasResponse: Awaited<ReturnType<ActionEnv["planillas"]>>;
+    try {
+        planillasResponse = await env.planillas(
             "/cdg",
             {
                 tipo: "MUT",
-                empleado_reemplaza_id: updated.empleadoReemplaza_id,
+                empleado_reemplaza_id: existing.empleadoReemplaza_id,
                 fecha_reemplaza: fechaReemplazaFinal,
-                empleado_ausente_id: updated.empleadoAusente_id,
+                empleado_ausente_id: existing.empleadoAusente_id,
                 fecha_ausente: fechaAusenteFinal,
                 coordinado_por_id: 3,
                 coordinador_id: coordinador.coordinador_id,
             },
             planillasToken,
         );
+    } catch (e) {
+        await revertir();
+        throw e;
+    }
 
-        if (!planillasResponse.success) {
-            await env.report(500, "Error al crear el cambio de guardia en Planillas");
-            return fail(500, "invalid_request", "Error al crear el cambio de guardia en Planillas");
-        }
+    if (!planillasResponse.success) {
+        await revertir();
+        await env.report(500, "Error al crear el cambio de guardia en Planillas");
+        return fail(500, "invalid_request", "Error al crear el cambio de guardia en Planillas");
+    }
 
-        const cambioGuardiaCreated = await env.prisma.c_cambio_guardia.findUnique({ where: { id: planillasResponse.data.id } });
-        if (cambioGuardiaCreated) {
-            // Actualizar el mutuo acuerdo con el id del cambio de guardia
-            await env.call({ action: "UPDATE", table: "e_mutuos_acuerdos", where: { id: idNum }, data: { cambio_guardia_id: cambioGuardiaCreated.id } });
-        }
+    const cambioGuardiaCreated = await env.prisma.c_cambio_guardia.findUnique({ where: { id: planillasResponse.data.id } });
+    if (cambioGuardiaCreated) {
+        // Actualizar el mutuo acuerdo con el id del cambio de guardia
+        await env.call({ action: "UPDATE", table: "e_mutuos_acuerdos", where: { id: idNum }, data: { cambio_guardia_id: cambioGuardiaCreated.id } });
     }
 
     await env.call({

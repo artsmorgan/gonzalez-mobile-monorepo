@@ -10,10 +10,13 @@
  */
 export type TokenPlanillasRow = { token?: unknown; expires_at?: unknown } | null | undefined;
 
+/** El token debe tener al menos este margen de vida: uno que vence en un segundo se vería vigente y Planillas lo rechazaría a mitad de la acción. */
+export const MARGEN_TOKEN_MS = 60_000;
+
 export function tokenPlanillasVigente(row: TokenPlanillasRow, ahoraPared: number): string | null {
     const token = String(row?.token ?? "").trim();
     if (!token) return null;
     const vence = row?.expires_at ? new Date(row.expires_at as string | number | Date).getTime() : NaN;
-    if (!Number.isFinite(vence) || vence <= ahoraPared) return null;
+    if (!Number.isFinite(vence) || vence <= ahoraPared + MARGEN_TOKEN_MS) return null;
     return token;
 }

@@ -39,3 +39,10 @@ export const parseDateInput = (input: unknown): Date | null => {
 
 export const nombreCompleto = (e: { nombre?: string | null; primer_apellido?: string | null; segundo_apellido?: string | null } | null | undefined, fallback: string): string =>
     e ? `${e.nombre ?? ""} ${e.primer_apellido ?? ""} ${e.segundo_apellido ?? ""}`.trim() : fallback;
+
+/** Planillas respondió con error (o no respondió): lleva el estado HTTP (0 si ni siquiera hubo respuesta) y conserva el mensaje original para que las rutas de la app digan lo mismo que antes. */
+export class PlanillasError extends Error {
+    constructor(public httpStatus: number, message: string) {
+        super(message);
+    }
+}

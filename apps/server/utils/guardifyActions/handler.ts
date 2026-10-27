@@ -1,6 +1,6 @@
 import { verifyGuardifyApiKey, MIN_API_KEY_LENGTH } from "../guardifyReports/auth";
-import { verifyActorHeaders, resolveActorEmployee, type ActorEmployee, type GuardifyActor } from "./actor";
-import type { ActionEnv, ActionErrorCode, ActionHttp } from "./env";
+import { bindingOf, verifyActorHeaders, resolveActorEmployee, type ActorEmployee, type GuardifyActor } from "./actor";
+import { PlanillasError, type ActionEnv, type ActionErrorCode, type ActionHttp } from "./env";
 import { aprobarMutuoAcuerdo } from "./aprobar-mutuo";
 import { cargarInventarioPuesto } from "./inventario";
 import { aprobarPermisoSolicitud } from "./aprobar-permiso";
@@ -23,6 +23,10 @@ export type ActionTypeImpl = {
     estado: (existing: any) => string;
     /** Acciones que ESTE actor puede ejecutar ahora. */
     acciones: (existing: any, actor: ActorEmployee) => string[];
+    /** Ids de empleado que son PARTE del registro (el solicitante, quien se ausenta y quien reemplaza): nadie resuelve lo suyo. */
+    partes: (existing: any) => number[];
+    /** Por qué una acción no aplica cuando el estado sí es pendiente, para que Guardify lo explique (si no hay motivo claro: sin alcance). */
+    sinAccion: (existing: any) => { code: ActionErrorCode; message: string } | null;
     /** Datos propios del registro que la pantalla necesita para pedir la acción (p. ej. los turnos de un permiso, para asignar su reemplazo). */
     datos?: (existing: any) => Record<string, unknown>;
     ejecutar: Record<string, { planillas?: boolean; run: (env: ActionEnv, a: RunArgs) => Promise<ActionHttp> }>;
@@ -45,7 +49,9 @@ const firmaDe = (request: any, role: string): string => {
     const s = (Array.isArray(request?.signatures) ? request.signatures : []).find((x: any) => x?.role === role);
     return typeof s?.image === "string" ? s.image : "";
 };
-const horaDe = (request: any): Date | null => { const d = request?.requestedAt ? new Date(request.requestedAt) : null; return d && !isNaN(d.getTime()) ? d : null; };
+
+const partesDePermiso = (e: any): number[] => [Number(e?.empleado_id)].filter((n) => n > 0);
+const partesDeMutuo = (e: any): number[] => [Number(e?.empleadoAusente_id), Number(e?.empleadoReemplaza_id)].filter((n) => n > 0);
 
 const estadoDe = (e: any, vacio = "") => String(e?.estado || "").trim().toLowerCase() || vacio;
 
@@ -66,7 +72,9 @@ export const ACTION_TYPES: Record<string, ActionTypeImpl> = {
     permisos: {
         table: "c_solicitud_permiso",
         estado: (e) => estadoDe(e),
-        acciones: (e, a) => accionesDePermiso(e, a.id, a.supervisorId),
+        acciones: (e, a) => (partesDePermiso(e).includes(a.id) ? [] : accionesDePermiso(e, a.id, a.supervisorId)),
+        partes: partesDePermiso,
+        sinAccion: (e) => (e?.firma_ejecutivo_cuenta_digital || e?.firma_ejecutivo_cuenta_manual ? { code: "already_resolved", message: "La solicitud ya fue completada por el ejecutivo." } : null),
         datos: (e) => ({
             turnos: turnosDe(e),
             reemplazoObligatorio: e?.reemplazo_obligatorio ?? null,
@@ -79,14 +87,14 @@ export const ACTION_TYPES: Record<string, ActionTypeImpl> = {
                     const p = a.request?.params ?? {};
                     return aprobarPermisoSolicitud(env, {
                         id: a.id, actorId: a.actor.id, payload: { id: a.actor.id }, planillasToken: a.planillasToken, extraCambios: a.extraCambios,
-                        body: {
+                        // La hora de la acción es la del servidor (la convención de la app): la hora que mande el cliente no se usa en la bitácora.
+                        readBody: async () => ({
                             reemplazo_obligatorio: p.reemplazoObligatorio ?? null,
                             turnos: (Array.isArray(p.turnos) ? p.turnos : []).map((t: any) => ({ id: t?.id, reemplazo_id: t?.reemplazoId ?? null })),
                             observaciones: typeof p.observaciones === "string" ? p.observaciones : "",
                             firma_ejecutivo_cuenta_digital: firmaDe(a.request, "digital"),
                             firma_ejecutivo_cuenta_manual: firmaDe(a.request, "manual"),
-                            hora_accion: horaDe(a.request)?.toISOString(),
-                        },
+                        }),
                     });
                 },
             },
@@ -95,12 +103,14 @@ export const ACTION_TYPES: Record<string, ActionTypeImpl> = {
     "mutuos-acuerdos": {
         table: "e_mutuos_acuerdos",
         estado: (e) => estadoDe(e, "pendiente"),
-        acciones: (e, a) => accionesDeMutuo(e, a.supervisorId),
+        acciones: (e, a) => (partesDeMutuo(e).includes(a.id) ? [] : accionesDeMutuo(e, a.supervisorId)),
+        partes: partesDeMutuo,
+        sinAccion: (e) => (e?.firma_ejecutivo_cuenta_digital || e?.firma_ejecutivo_cuenta_manual ? { code: "already_resolved", message: "Este mutuo acuerdo ya fue firmado por el ejecutivo." } : !e?.ausente_acepta || !e?.reemplaza_acepta ? { code: "invalid_state", message: "Ambos empleados deben aceptar antes de resolverlo." } : null),
         ejecutar: {
             rechazar: { run: (env, a) => rechazarMutuoAcuerdo(env, { id: a.id, actorId: a.actor.id, horaAccion: null, extraCambios: a.extraCambios }) },
             aprobar: {
                 planillas: true,
-                run: (env, a) => aprobarMutuoAcuerdo(env, { id: a.id, actorId: a.actor.id, firmaDigital: firmaDe(a.request, "digital"), firmaManual: firmaDe(a.request, "manual"), horaAccion: horaDe(a.request), planillasToken: a.planillasToken, extraCambios: a.extraCambios }),
+                run: (env, a) => aprobarMutuoAcuerdo(env, { id: a.id, actorId: a.actor.id, firmaDigital: firmaDe(a.request, "digital"), firmaManual: firmaDe(a.request, "manual"), horaAccion: null, planillasToken: a.planillasToken, extraCambios: a.extraCambios }),
             },
         },
     },
@@ -110,28 +120,64 @@ const HTTP: Record<ActionErrorCode, number> = { planillas_session_required: 409,
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 const err = (code: ActionErrorCode, message: string, status = HTTP[code]) => json({ code, message }, status);
+/** Un fallo de la lógica: los de servidor (500) conservan su estado; el resto sale con el estado del código tipado. */
+const failure = (res: Extract<ActionHttp, { ok: false }>) => json({ code: res.code, message: res.message, ...(res.errors?.length ? { errores: res.errors } : {}) }, res.status >= 500 ? res.status : HTTP[res.code]);
+
+/** Planillas respondió con error: se traduce a algo que Guardify pueda explicar. 401 = su sesión de Planillas no sirve; 403 = Planillas no se lo permite; 5xx o sin respuesta = no se completó. */
+function planillasFailure(e: PlanillasError): Response {
+    if (e.httpStatus === 401) return err("planillas_session_required", "Planillas no aceptó la sesión de la persona: debe abrir MonitoreApp y escribir su contraseña de Planillas, y luego reintentar.");
+    if (e.httpStatus === 403) return err("out_of_scope", "Planillas no permitió esta operación para esta persona.");
+    if (e.httpStatus >= 400 && e.httpStatus < 500) return err("invalid_request", "Planillas rechazó la solicitud.", 400);
+    return json({ error: "planillas_unavailable", message: "Planillas no respondió o falló. Revisa en Planillas antes de reintentar si la operación llegó a completarse." }, 502);
+}
 
 export type ActionDeps = { getEnv: () => ActionEnv; env?: Record<string, string | undefined>; now?: () => number };
 
-type Ctx = { tipo: ActionTypeImpl; id: number; actor: ActorEmployee; claims: GuardifyActor; env: ActionEnv };
+/** Tope del cuerpo de una petición (las firmas viajan como imagen). */
+export const MAX_BODY_CHARS = 2_500_000;
 
-/** Llave, actor firmado, actor resuelto a una persona de la app y registro: lo común a las dos rutas. */
-async function prepare(req: Request, tipoId: string, idStr: string, deps: ActionDeps): Promise<{ ok: true; c: Ctx; existing: any } | { ok: false; res: Response }> {
+/** Registros con una acción en curso en ESTE proceso: dos intentos a la vez sobre lo mismo no pasan los dos (el segundo recibe «conflicto»). */
+const enCurso = new Set<string>();
+async function conCandado<T>(llave: string, fn: () => Promise<T>): Promise<T | Response> {
+    if (enCurso.has(llave)) return err("conflict", "Hay otra acción en curso sobre este registro. Espera un momento y revisa su estado.");
+    enCurso.add(llave);
+    try { return await fn(); } finally { enCurso.delete(llave); }
+}
+
+/** Llave y actor firmado (ligado a esta petición): lo común a todas las rutas. */
+function autenticar(req: Request, raw: string, deps: ActionDeps): { ok: true; claims: GuardifyActor } | { ok: false; res: Response } {
     const envVars = deps.env ?? process.env;
     const auth = verifyGuardifyApiKey(req.headers, envVars);
     if (!auth.ok) return { ok: false, res: json({ error: auth.error, message: auth.message }, auth.status) };
-    const claims = verifyActorHeaders(req.headers, (envVars.GUARDIFY_REPORTS_API_KEY ?? "").trim(), (deps.now ?? Date.now)());
-    if (!claims || (envVars.GUARDIFY_REPORTS_API_KEY ?? "").trim().length < MIN_API_KEY_LENGTH) return { ok: false, res: json({ error: "unauthorized", message: "Identidad del actor inválida o vencida." }, 401) };
-    const tipo = ACTION_TYPES[tipoId];
+    const key = (envVars.GUARDIFY_REPORTS_API_KEY ?? "").trim();
+    const claims = key.length < MIN_API_KEY_LENGTH ? null : verifyActorHeaders(req.headers, key, (deps.now ?? Date.now)(), bindingOf(req.method, req.url, raw));
+    if (!claims) return { ok: false, res: json({ error: "unauthorized", message: "Identidad del actor inválida o vencida." }, 401) };
+    return { ok: true, claims: claims.actor };
+}
+
+const leerCuerpo = async (req: Request): Promise<string | Response> => {
+    if (req.method === "GET") return "";
+    const raw = await req.text();
+    return raw.length > MAX_BODY_CHARS ? err("invalid_request", "El cuerpo de la petición es demasiado grande.", 413) : raw;
+};
+const parseJson = (raw: string): any => { try { return raw ? JSON.parse(raw) : {}; } catch { return {}; } };
+
+type Ctx = { tipo: ActionTypeImpl; id: number; actor: ActorEmployee; claims: GuardifyActor; env: ActionEnv };
+
+/** Llave, actor firmado, actor resuelto a una persona de la app y registro: lo común a las dos rutas de acciones. */
+async function prepare(req: Request, raw: string, tipoId: string, idStr: string, deps: ActionDeps): Promise<{ ok: true; c: Ctx; existing: any } | { ok: false; res: Response }> {
+    const a = autenticar(req, raw, deps);
+    if (!a.ok) return a;
+    const tipo = Object.hasOwn(ACTION_TYPES, tipoId) ? ACTION_TYPES[tipoId] : undefined;
     if (!tipo) return { ok: false, res: err("invalid_request", `No existe el tipo «${tipoId}».`, 404) };
     const id = Number(idStr);
     if (!Number.isInteger(id) || id <= 0) return { ok: false, res: err("invalid_request", "Id inválido.") };
     const env = deps.getEnv();
-    const actor = await resolveActorEmployee(env.prisma, claims.actor);
+    const actor = await resolveActorEmployee(env.prisma, a.claims);
     if (!actor) return { ok: false, res: err("out_of_scope", "No se pudo identificar a esta persona en la app.") };
     const existing = await env.call({ action: "GET", table: tipo.table, operation: "findUnique", where: { id } });
     if (!existing) return { ok: false, res: err("not_found", "Registro no encontrado") };
-    return { ok: true, c: { tipo, id, actor, claims: claims.actor, env }, existing };
+    return { ok: true, c: { tipo, id, actor, claims: a.claims, env }, existing };
 }
 
 const iso = (d: unknown): string | null => { const t = d ? new Date(d as string) : null; return t && !isNaN(t.getTime()) ? t.toISOString() : null; };
@@ -153,11 +199,12 @@ async function historial(env: ActionEnv, table: string, id: number) {
 
 export async function handleActionDetail(req: Request, tipoId: string, idStr: string, deps: ActionDeps): Promise<Response> {
     try {
-        const p = await prepare(req, tipoId, idStr, deps);
+        const p = await prepare(req, "", tipoId, idStr, deps);
         if (!p.ok) return p.res;
         const { c, existing } = p;
-        // Los campos, adjuntos y firmas los dibuja Guardify con el formulario del registro (`/api/guardify/reports/{modulo}/forms`).
-        return json({ id: c.id, estado: c.tipo.estado(existing) || "pendiente", campos: [], adjuntos: [], firmas: [], acciones: c.tipo.acciones(existing, c.actor), datos: c.tipo.datos?.(existing) ?? {}, historial: await historial(c.env, c.tipo.table, c.id) });
+        const acciones = c.tipo.acciones(existing, c.actor);
+        // Quien no tiene nada que resolver aquí no ve el detalle (turnos, nombres, historial): solo el estado. Los campos, adjuntos y firmas los dibuja Guardify con el formulario del registro.
+        return json({ id: c.id, estado: c.tipo.estado(existing) || "sin-estado", campos: [], adjuntos: [], firmas: [], acciones, datos: acciones.length ? c.tipo.datos?.(existing) ?? {} : {}, historial: acciones.length ? await historial(c.env, c.tipo.table, c.id) : [] });
     } catch (e) {
         console.error(JSON.stringify({ level: "error", msg: "guardify_action_detail_failed", tipo: tipoId, error: String(e) }));
         return json({ code: "invalid_request", message: "No se pudo consultar el registro." }, 500);
@@ -167,61 +214,73 @@ export async function handleActionDetail(req: Request, tipoId: string, idStr: st
 export async function handleActionExecute(req: Request, tipoId: string, idStr: string, accion: string, deps: ActionDeps): Promise<Response> {
     const started = Date.now();
     try {
-        const p = await prepare(req, tipoId, idStr, deps);
+        const raw = await leerCuerpo(req);
+        if (raw instanceof Response) return raw;
+        const p = await prepare(req, raw, tipoId, idStr, deps);
         if (!p.ok) return p.res;
-        const { c, existing } = p;
-        const impl = c.tipo.ejecutar[accion];
+        const { c } = p;
+        const impl = Object.hasOwn(c.tipo.ejecutar, accion) ? c.tipo.ejecutar[accion] : undefined;
         if (!impl) return err("invalid_request", `La acción «${accion}» no está disponible para este tipo.`, 404);
-        const body: any = await req.json().catch(() => ({}));
+        const body: any = parseJson(raw);
         const idem = String(req.headers.get("idempotency-key") ?? body?.idempotencyKey ?? "").trim();
         if (idem.length < 16) return err("invalid_request", "Falta la clave de idempotencia.");
         const motivo = typeof body?.reason === "string" && body.reason.trim() ? body.reason.trim().slice(0, 500) : null;
 
-        const estado = c.tipo.estado(existing) || "pendiente";
-        // Idempotencia por estado: si el MISMO actor ya llevó el registro a ese resultado, el reintento devuelve el mismo resultado sin repetir el efecto.
-        const resultado = accion === "aprobar" ? "aprobado" : "rechazado";
-        if ((accion === "rechazar" || accion === "aprobar") && estado === resultado) {
-            const ultimo: any[] = (await c.env.call({ action: "GET", table: "c_cambios_apps_modules", operation: "findMany", where: { nombre_tabla: c.tipo.table, registro_id: c.id }, orderBy: { id: "desc" }, take: 1 })) ?? [];
-            if (Number(ultimo[0]?.created_by) === c.actor.id) return json({ estado: resultado, ref: null, message: `Ya estaba ${resultado} por esta persona.` });
-        }
-        if (!c.tipo.acciones(existing, c.actor).includes(accion)) {
-            // Distingue el motivo para que Guardify lo explique: ya resuelto / sin alcance / otro estado.
-            if (estado !== "pendiente") return err(estado === "rechazado" || estado === "aprobado" ? "already_resolved" : "invalid_state", "El registro ya no está pendiente.");
-            return err("out_of_scope", "No tienes alcance para esta acción sobre este registro.");
-        }
-        // Aprobar escribe en Planillas con el token que la persona dejó al entrar en la app: sin uno vigente no se toca nada.
-        let planillasToken: string | null = null;
-        if (impl.planillas) {
-            planillasToken = await c.env.tokenPlanillas(c.actor.id);
-            if (!planillasToken) return err("planillas_session_required", "Para esta acción hace falta la sesión de Planillas de la persona: debe abrir MonitoreApp y escribir su contraseña de Planillas, y luego reintentar.");
-        }
-        const res = await impl.run(c.env, {
-            id: c.id, actor: c.actor, claims: c.claims, motivo, request: body, planillasToken,
-            extraCambios: [...(motivo ? [{ prop: accion === "rechazar" ? "motivo_rechazo" : "observacion_guardify", before: null, after: motivo }] : []), { prop: "origen", before: null, after: `Guardify (${c.claims.email})` }],
+        const out = await conCandado(`${tipoId}:${c.id}`, async () => {
+            // Se vuelve a leer el registro DENTRO del candado: lo que decida ahora es lo que está en la base ahora.
+            const existing = await c.env.call({ action: "GET", table: c.tipo.table, operation: "findUnique", where: { id: c.id } });
+            if (!existing) return err("not_found", "Registro no encontrado");
+            const estado = c.tipo.estado(existing) || "sin-estado";
+            // Idempotencia por estado: si el MISMO actor ya llevó el registro a ese resultado, el reintento devuelve el mismo resultado sin repetir el efecto.
+            const resultado = accion === "aprobar" ? "aprobado" : "rechazado";
+            if ((accion === "rechazar" || accion === "aprobar") && estado === resultado) {
+                const ultimo: any[] = (await c.env.call({ action: "GET", table: "c_cambios_apps_modules", operation: "findMany", where: { nombre_tabla: c.tipo.table, registro_id: c.id }, orderBy: { id: "desc" }, take: 1 })) ?? [];
+                if (Number(ultimo[0]?.created_by) === c.actor.id) return json({ estado: resultado, ref: null, message: `Ya estaba ${resultado} por esta persona.` });
+            }
+            if (!c.tipo.acciones(existing, c.actor).includes(accion)) {
+                // Distingue el motivo para que Guardify lo explique: ya resuelto / otro estado / parte del registro / sin alcance.
+                if (c.tipo.partes(existing).includes(c.actor.id)) return err("out_of_scope", "No puedes resolver un registro en el que eres parte.");
+                if (estado !== "pendiente") return err(estado === "rechazado" || estado === "aprobado" ? "already_resolved" : "invalid_state", "El registro ya no está pendiente.");
+                const motivoNo = c.tipo.sinAccion(existing);
+                if (motivoNo) return err(motivoNo.code, motivoNo.message);
+                return err("out_of_scope", "No tienes alcance para esta acción sobre este registro.");
+            }
+            // Aprobar escribe en Planillas con el token que la persona dejó al entrar en la app: sin uno vigente no se toca nada.
+            let planillasToken: string | null = null;
+            if (impl.planillas) {
+                planillasToken = await c.env.tokenPlanillas(c.actor.id);
+                if (!planillasToken) return err("planillas_session_required", "Para esta acción hace falta la sesión de Planillas de la persona: debe abrir MonitoreApp y escribir su contraseña de Planillas, y luego reintentar.");
+            }
+            const res = await impl.run(c.env, {
+                id: c.id, actor: c.actor, claims: c.claims, motivo, request: body, planillasToken,
+                extraCambios: [...(motivo ? [{ prop: accion === "rechazar" ? "motivo_rechazo" : "observacion_guardify", before: null, after: motivo }] : []), { prop: "origen", before: null, after: `Guardify (${c.claims.email})` }],
+            });
+            console.log(JSON.stringify({ level: "info", msg: "guardify_action", tipo: tipoId, accion, status: res.status, ok: res.ok, ms: Date.now() - started, actor: c.actor.id }));
+            if (!res.ok) return failure(res);
+            return json({ estado: resultado, ref: null, message: res.body.message ?? null });
         });
-        console.log(JSON.stringify({ level: "info", msg: "guardify_action", tipo: tipoId, accion, status: res.status, ok: res.ok, ms: Date.now() - started, actor: c.actor.id }));
-        if (!res.ok) return err(res.code, res.message);
-        return json({ estado: resultado, ref: null, message: res.body.message ?? null });
+        return out;
     } catch (e) {
+        if (e instanceof PlanillasError) return planillasFailure(e);
         console.error(JSON.stringify({ level: "error", msg: "guardify_action_failed", tipo: tipoId, accion, error: String(e) }));
         return json({ code: "invalid_request", message: "La app no pudo completar la acción." }, 500);
     }
 }
 
-/** Busca un empleado por su código (para elegir el reemplazo de un turno). Mismo contrato de autenticación que las demás rutas; solo devuelve id, nombre y código. */
+/** Busca un empleado por su código (para elegir el reemplazo de un turno). Mismo contrato de autenticación que las demás rutas; solo devuelve id, nombre y código. Un código repetido no se adivina. */
 export async function handleLookupEmpleado(req: Request, deps: ActionDeps): Promise<Response> {
     try {
-        const envVars = deps.env ?? process.env;
-        const auth = verifyGuardifyApiKey(req.headers, envVars);
-        if (!auth.ok) return json({ error: auth.error, message: auth.message }, auth.status);
-        const claims = verifyActorHeaders(req.headers, (envVars.GUARDIFY_REPORTS_API_KEY ?? "").trim(), (deps.now ?? Date.now)());
-        if (!claims) return json({ error: "unauthorized", message: "Identidad del actor inválida o vencida." }, 401);
+        const a = autenticar(req, "", deps);
+        if (!a.ok) return a.res;
         const env = deps.getEnv();
-        if (!(await resolveActorEmployee(env.prisma, claims.actor))) return err("out_of_scope", "No se pudo identificar a esta persona en la app.");
+        if (!(await resolveActorEmployee(env.prisma, a.claims))) return err("out_of_scope", "No se pudo identificar a esta persona en la app.");
         const codigo = (new URL(req.url).searchParams.get("codigo") ?? "").trim();
         if (!codigo || codigo.length > 40) return err("invalid_request", "Escribe el código del empleado.");
-        const e = await env.prisma.c_empleado.findFirst({ where: { codigo }, select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true } });
-        if (!e) return err("not_found", "No hay un empleado con ese código.");
+        const rows: any[] = await env.prisma.c_empleado.findMany({ where: { codigo }, select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true, estado: true }, take: 2 });
+        if (!rows.length) return err("not_found", "No hay un empleado con ese código.");
+        if (rows.length > 1) return err("conflict", "Hay más de un empleado con ese código: no se puede elegir uno solo.");
+        const e = rows[0];
+        if (String(e.estado ?? "").trim().toUpperCase() === "BA") return err("not_found", "No hay un empleado activo con ese código.");
         return json({ id: Number(e.id), codigo: String(e.codigo), nombre: `${e.nombre ?? ""} ${e.primer_apellido ?? ""} ${e.segundo_apellido ?? ""}`.trim() || null });
     } catch (e) {
         console.error(JSON.stringify({ level: "error", msg: "guardify_lookup_failed", error: String(e) }));
@@ -236,33 +295,37 @@ export const IMPORT_MAX_ROWS = 2000;
  * Carga masiva para Guardify: `POST /api/guardify/actions/imports/inventario-puesto` con `{ modo: "validar" | "aplicar", filas: [...] }`.
  * `validar` hace todas las comprobaciones y devuelve lo que se crearía sin escribir nada; `aplicar` además lo envía a Planillas con el token de Planillas
  * que la persona dejó guardado en la app (sin uno vigente: `409 planillas_session_required`). Repetir una carga no duplica: lo ya cargado se omite.
+ * Dos cargas `aplicar` a la vez de la misma persona no corren juntas (la segunda recibe «conflicto»).
  */
 export async function handleImport(req: Request, tipo: string, deps: ActionDeps): Promise<Response> {
     try {
-        const envVars = deps.env ?? process.env;
-        const auth = verifyGuardifyApiKey(req.headers, envVars);
-        if (!auth.ok) return json({ error: auth.error, message: auth.message }, auth.status);
-        const claims = verifyActorHeaders(req.headers, (envVars.GUARDIFY_REPORTS_API_KEY ?? "").trim(), (deps.now ?? Date.now)());
-        if (!claims) return json({ error: "unauthorized", message: "Identidad del actor inválida o vencida." }, 401);
+        const raw = await leerCuerpo(req);
+        if (raw instanceof Response) return raw;
+        const a = autenticar(req, raw, deps);
+        if (!a.ok) return a.res;
         if (tipo !== "inventario-puesto") return err("invalid_request", `No existe la carga «${tipo}».`, 404);
-        const body: any = await req.json().catch(() => ({}));
+        const body: any = parseJson(raw);
         const modo = body?.modo === "aplicar" ? "aplicar" : body?.modo === "validar" ? "validar" : null;
         if (!modo) return err("invalid_request", "El modo debe ser «validar» o «aplicar».");
         if (!Array.isArray(body?.filas) || body.filas.length === 0) return err("invalid_request", "Debe indicar al menos una fila.");
         if (body.filas.length > IMPORT_MAX_ROWS) return err("invalid_request", `Son demasiadas filas (máximo ${IMPORT_MAX_ROWS} por carga).`);
         const env = deps.getEnv();
-        const actor = await resolveActorEmployee(env.prisma, claims.actor);
+        const actor = await resolveActorEmployee(env.prisma, a.claims);
         if (!actor) return err("out_of_scope", "No se pudo identificar a esta persona en la app.");
-        let planillasToken: string | null = null;
-        if (modo === "aplicar") {
-            planillasToken = await env.tokenPlanillas(actor.id);
-            if (!planillasToken) return err("planillas_session_required", "Para cargar hace falta la sesión de Planillas de la persona: debe abrir MonitoreApp y escribir su contraseña de Planillas, y luego reintentar.");
-        }
-        const res = await cargarInventarioPuesto(env, { filas: body.filas, planillasToken, modo });
-        console.log(JSON.stringify({ level: "info", msg: "guardify_import", tipo, modo, filas: body.filas.length, ok: res.ok, status: res.status, actor: actor.id }));
-        if (!res.ok) return json({ code: res.code, message: res.message, ...(res.errors?.length ? { errores: res.errors } : {}) }, HTTP[res.code] ?? res.status);
-        return json({ modo, creados: { planes: res.body.created_plans, entregas: res.body.created_entregas }, omitidos: res.body.skipped, mensaje: res.body.message });
+        const correr = async () => {
+            let planillasToken: string | null = null;
+            if (modo === "aplicar") {
+                planillasToken = await env.tokenPlanillas(actor.id);
+                if (!planillasToken) return err("planillas_session_required", "Para cargar hace falta la sesión de Planillas de la persona: debe abrir MonitoreApp y escribir su contraseña de Planillas, y luego reintentar.");
+            }
+            const res = await cargarInventarioPuesto(env, { filas: body.filas, planillasToken, modo });
+            console.log(JSON.stringify({ level: "info", msg: "guardify_import", tipo, modo, filas: body.filas.length, ok: res.ok, status: res.status, actor: actor.id }));
+            if (!res.ok) return failure(res);
+            return json({ modo, creados: { planes: res.body.created_plans, entregas: res.body.created_entregas }, omitidos: res.body.skipped, mensaje: res.body.message });
+        };
+        return modo === "aplicar" ? await conCandado(`import:${tipo}`, correr) : await correr();
     } catch (e) {
+        if (e instanceof PlanillasError) return planillasFailure(e);
         console.error(JSON.stringify({ level: "error", msg: "guardify_import_failed", tipo, error: String(e) }));
         return json({ code: "invalid_request", message: "La app no pudo completar la carga." }, 500);
     }

@@ -9,9 +9,9 @@ import { esEjecutivoDelPermiso } from "./permisos";
  */
 export async function aprobarPermisoSolicitud(
     env: ActionEnv,
-    input: { id: number; actorId: number; payload: { id?: unknown }; body: any; planillasToken: string | null; extraCambios?: { prop: string; before: unknown; after: unknown }[] },
+    input: { id: number; actorId: number; payload: { id?: unknown }; /** El cuerpo se lee DESPUÉS de las validaciones, como en la ruta original (un JSON inválido con un registro inexistente da 404, no 500). */ readBody: () => Promise<any>; planillasToken: string | null; extraCambios?: { prop: string; before: unknown; after: unknown }[] },
 ): Promise<ActionHttp> {
-    const { id: idNum, actorId: currentEmployeeId, payload, body, planillasToken } = input;
+    const { id: idNum, actorId: currentEmployeeId, payload, planillasToken } = input;
     if (!planillasToken) {
         await env.report(400, "Token de Planillas no encontrado");
         return fail(400, "planillas_session_required", "Token de Planillas no encontrado");
@@ -45,6 +45,7 @@ export async function aprobarPermisoSolicitud(
         return fail(400, "already_resolved", "La solicitud ya fue completada por el ejecutivo");
     }
 
+    const body = await input.readBody();
     const reemplazoObligatorio = body?.reemplazo_obligatorio !== undefined && body?.reemplazo_obligatorio !== null ? Number(body.reemplazo_obligatorio) : null;
     const horaAccion = parseDateInput(body?.hora_accion);
     const observaciones = String(body?.observaciones || "").trim();
@@ -78,6 +79,18 @@ export async function aprobarPermisoSolicitud(
         const repl = byTurnoId.has(turnoId) ? byTurnoId.get(turnoId) : (row?.reemplazo_id ?? null);
         return { ...row, reemplazo_id: repl ?? null };
     });
+
+    // Entradas que deben ser números enteros: se revisan ANTES de crear nada en Planillas (un valor basura haría fallar la escritura después de que el permiso ya existe allá).
+    const entero = (v: unknown) => v === null || (typeof v === "number" && Number.isInteger(v) && v >= 0);
+    if (!entero(reemplazoObligatorio) || [...byTurnoId.values()].some((r) => !entero(r))) {
+        await env.report(400, "Los reemplazos deben ser empleados válidos");
+        return fail(400, "invalid_request", "Los reemplazos deben ser empleados válidos");
+    }
+    // Sin turnos no hay nada que crear en Planillas.
+    if (turnosUpdated.length === 0) {
+        await env.report(400, "La solicitud no tiene turnos");
+        return fail(400, "invalid_state", "La solicitud no tiene turnos");
+    }
 
     const nowIso = env.nowIso(horaAccion);
 

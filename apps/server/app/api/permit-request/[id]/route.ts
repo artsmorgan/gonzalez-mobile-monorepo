@@ -29,9 +29,8 @@ export async function PUT(
         }
 
         const currentEmployeeId = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
-        const body = await req.json();
         // La lógica (reglas, Planillas, firmas, bitácora y notificación) vive en `utils/guardifyActions/aprobar-permiso.ts`: la comparte la API de acciones de Guardify.
-        const res = await aprobarPermisoSolicitud(buildActionEnv(req, "api/permit-request/[id]", "PUT", { verifyUser: true }), { id: idNum, actorId: currentEmployeeId, payload, body, planillasToken });
+        const res = await aprobarPermisoSolicitud(buildActionEnv(req, "api/permit-request/[id]", "PUT", { verifyUser: true }), { id: idNum, actorId: currentEmployeeId, payload, readBody: () => req.json(), planillasToken });
         if (!res.ok) return NextResponse.json({ status: false, message: res.message }, { status: res.status });
         return NextResponse.json(res.body, { status: res.status });
 

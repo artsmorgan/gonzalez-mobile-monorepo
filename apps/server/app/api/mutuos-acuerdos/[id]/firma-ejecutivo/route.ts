@@ -18,21 +18,6 @@ const parseDateInputToDate = (input: unknown): Date | null => {
   return isNaN(parsed.getTime()) ? null : parsed;
 };
 
-/** Extrae [hora, minuto] desde un valor Date/string de hora de marca. */
-const parseClockParts = (value: unknown): string[] | null => {
-  if (value == null || value === "") return null;
-  const iso = value instanceof Date ? value.toISOString() : String(value);
-  const afterT = iso.includes("T") ? iso.split("T")[1] : iso;
-  const parts = afterT.replace(/\.\d+Z?$/i, "").split(":");
-  if (parts.length < 2) return null;
-  return parts;
-};
-
-const formatClockLabel = (value: unknown): string => {
-  const parts = parseClockParts(value);
-  return parts ? `${parts[0]}:${parts[1]}` : "-Sin hora-";
-};
-
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);

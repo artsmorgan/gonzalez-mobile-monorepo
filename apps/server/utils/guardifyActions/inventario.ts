@@ -22,6 +22,9 @@ export function parseFechaEntregaParts(value: string): Partes | null {
     const year = Number(yyyy);
     if (month < 1 || month > 12 || day < 1 || day > 31) return null;
     if (Number.isNaN(year)) return null;
+    // Calendario real: «31-02-2026» no existe (la fecha se normalizaría a marzo y se mandaría el texto original a Planillas).
+    const real = new Date(Date.UTC(year, month - 1, day));
+    if (real.getUTCFullYear() !== year || real.getUTCMonth() !== month - 1 || real.getUTCDate() !== day) return null;
     return { dd: String(day).padStart(2, "0"), mm: String(month).padStart(2, "0"), yyyy: String(year), hh: "00", mi: "00", ss: "00" };
 }
 
@@ -47,14 +50,17 @@ export async function planificarCargaInventario(prisma: any, articulosRaw: unkno
     for (let i = 0; i < articulosRaw.length; i++) {
         const row = articulosRaw[i] as Record<string, unknown>;
         const codigoPuesto = String(row?.codigo_puesto ?? "").trim();
-        const numero = Number(row?.numero_articulo);
-        const cantidad = Number(row?.cantidad);
+        // Solo texto o número: `true`, listas y objetos no valen como número (`Number(true)` es 1, `Number([5])` es 5).
+        const esNum = (v: unknown) => typeof v === "number" || (typeof v === "string" && v.trim() !== "");
+        const numero = esNum(row?.numero_articulo) ? Number(row?.numero_articulo) : NaN;
+        const cantidad = esNum(row?.cantidad) ? Number(row?.cantidad) : NaN;
         const serie = String(row?.serie ?? "").trim();
         const marca = String(row?.marca ?? "").trim();
         const modelo = String(row?.modelo ?? "").trim() || null;
         const fechaEntrega = String(row?.fecha_entrega ?? "").trim();
 
         if (!codigoPuesto) { validationErrors.push(`Artículo ${i + 1}: código de puesto obligatorio.`); continue; }
+        if (codigoPuesto.length > 40 || serie.length > 120 || marca.length > 120 || (modelo?.length ?? 0) > 120) { validationErrors.push(`Artículo ${i + 1}: algún texto es demasiado largo.`); continue; }
         if (!Number.isFinite(numero) || numero <= 0) { validationErrors.push(`Artículo ${i + 1}: número inválido.`); continue; }
         if (!Number.isFinite(cantidad) || cantidad < 0) { validationErrors.push(`Artículo ${i + 1}: cantidad inválida.`); continue; }
         if (!serie) { validationErrors.push(`Artículo ${i + 1}: serie obligatoria.`); continue; }
