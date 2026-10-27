@@ -1,10 +1,12 @@
-> **Copia del contrato.** El original vive en el repo de Guardify (`artsmorgan/guard-desk-nexus`, `docs/protocolo-acciones.md`, commit c62915c) y MonitoreApp no puede verlo; por eso este repo guarda su propia copia. Si el contrato cambia en Guardify, se actualiza aquí en el mismo cambio. Lo que implementa esta app, ruta por ruta, está en [`guardify-actions-api.md`](./guardify-actions-api.md).
+> **Copia del contrato.** El original vive en el repo de Guardify (`artsmorgan/guard-desk-nexus`, `docs/protocolo-acciones.md`, commit f99a520) y MonitoreApp no puede verlo; por eso este repo guarda su propia copia. Si el contrato cambia en Guardify, se actualiza aquí en el mismo cambio. Lo que implementa esta app, ruta por ruta, está en [`guardify-actions-api.md`](./guardify-actions-api.md).
 
 # Protocolo de acciones (Guardify → app)
 
 Para traer a Guardify funciones de la app que **actúan** sobre un registro (aprobar un permiso, rechazar un mutuo acuerdo, atender una requisición). Guardify **define** los tipos de bandeja, los estados y las acciones; la app **implementa** los endpoints y aplica sus propias reglas de negocio. Guardify nunca escribe en la base de la app ni en la de terceros (Planillas): **llama a la acción que la app ya tiene**.
 
 Esquemas (zod, fuente de verdad): `packages/contracts/src/actions.ts`. Cliente: `apps/console/lib/actions/`. Issue: guard-desk-nexus#25.
+
+**Dos documentos, uno por lado.** Este es el contrato (lo que Guardify define y espera). Lo que la app implementa, ruta por ruta, está en `apps/server/docs/guardify-actions-api.md` del repo de MonitoreApp (`artsmorgan/gonzalez-mobile-monorepo`). MonitoreApp no ve este repo, así que guarda una copia de este contrato en `apps/server/docs/protocolo-acciones.md`. **Regla:** todo cambio a este documento se copia a MonitoreApp en el mismo trabajo, y la cabecera de la copia anota el commit de origen.
 
 ## Reglas
 1. **Los datos salen de la app.** Guardify no inventa ni siembra registros; si la app no entrega un dato, es `null` y Guardify muestra **«-»**. Las pruebas de integración usan datos creados en MonitoreApp (ambiente de pruebas).
