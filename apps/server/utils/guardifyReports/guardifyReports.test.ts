@@ -221,10 +221,10 @@ describe("mapeo de filas", () => {
     });
     it("tiempo de almuerzo: detalle de pausas (pausas_detalle) como texto JSON con fechas de pared", () => {
         const base = { id: 1, inicio: new Date("2026-09-01T12:00:00Z"), fin: new Date("2026-09-01T12:45:00Z"), minutos_almuerzo: 45, es_manual: false };
-        const o = mapTiempoAlmuerzoRow({ ...base, pausas_list: [{ startTime: "2026-09-01 12:10:00", endTime: "2026-09-01 12:13:30", reason: "Llamada del supervisor" }, { startTime: "2026-09-01 12:20:00", endTime: "", reason: "" }] });
+        const o = mapTiempoAlmuerzoRow({ ...base, pausas_list: [{ startTime: "2026-09-01 12:10:00", endTime: "2026-09-01 12:13:30", reason: "motivo uno" }, { startTime: "2026-09-01 12:20:00", endTime: "", reason: "" }] });
         assert.equal(o.pausas, 2);
         assert.deepEqual(JSON.parse(String(o.pausas_detalle)), [
-            { inicio: "2026-09-01T12:10:00", fin: "2026-09-01T12:13:30", motivo: "Llamada del supervisor" },
+            { inicio: "2026-09-01T12:10:00", fin: "2026-09-01T12:13:30", motivo: "motivo uno" },
             { inicio: "2026-09-01T12:20:00", fin: null, motivo: null },
         ]);
     });
