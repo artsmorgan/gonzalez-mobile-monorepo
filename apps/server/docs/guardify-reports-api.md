@@ -83,7 +83,7 @@ de las filas** (`^[a-z][a-z0-9_]*$`): `f.<columna>` o `f.<columna>.<operador>`. 
 | `modulo` | Tabla | Alcance | Columnas |
 |---|---|---|---|
 | `login_marca` | `c_login_marca_almuerzo` | sí (por puesto → sucursal → contrato → cliente/empresa/división) | id, fecha, cedula, empleado, puesto, entrada_teorica, entrada_real, salida_teorica, salida_real, inicio_almuerzo, fin_almuerzo |
-| `tiempo_almuerzo` | `c_empleado_almuerzo` | sí (columnas de estructura de cada fila) | id, inicio, fin, empleado, cedula, minutos, empresa, cliente, division, contrato, sucursal, puesto, pausas, manual |
+| `tiempo_almuerzo` | `c_empleado_almuerzo` | sí (columnas de estructura de cada fila) | id, inicio, fin, empleado, cedula, minutos, empresa, cliente, division, contrato, sucursal, puesto, pausas, **pausas_detalle** (texto JSON `[{inicio, fin, motivo}]`, fechas de pared; `null` si el registro no trae la lista), manual |
 | `ingresos_usuario` | `refresh_token` | no | id, creado, expira, empleado, cedula, id_sesion, dispositivos, revocado |
 
 Lo que **no** se expone a propósito: el token de refresco (`ingresos_usuario`), la firma del empleado
