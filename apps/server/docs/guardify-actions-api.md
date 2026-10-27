@@ -29,7 +29,7 @@ Aprobar un permiso crea el permiso en **Planillas** (`POST {PLANILLAS_URL}/accio
 
 ## Cargas masivas
 ```
-POST /api/guardify/imports/inventario-puesto   { modo: "validar" | "aplicar", filas: [{ codigo_puesto, numero_articulo, cantidad, serie, marca, modelo?, fecha_entrega }] }
+POST /api/guardify/actions/imports/inventario-puesto   { modo: "validar" | "aplicar", filas: [{ codigo_puesto, numero_articulo, cantidad, serie, marca, modelo?, fecha_entrega }] }
   → 200 { modo, creados: { planes, entregas }, omitidos: [...], mensaje }
   → 400 { code, message, errores: ["Artículo 3: serie obligatoria.", …] }      409 { code: "planillas_session_required" }
 ```

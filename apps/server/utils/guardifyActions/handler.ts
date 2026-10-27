@@ -233,7 +233,7 @@ export async function handleLookupEmpleado(req: Request, deps: ActionDeps): Prom
 export const IMPORT_MAX_ROWS = 2000;
 
 /**
- * Carga masiva para Guardify: `POST /api/guardify/imports/inventario-puesto` con `{ modo: "validar" | "aplicar", filas: [...] }`.
+ * Carga masiva para Guardify: `POST /api/guardify/actions/imports/inventario-puesto` con `{ modo: "validar" | "aplicar", filas: [...] }`.
  * `validar` hace todas las comprobaciones y devuelve lo que se crearía sin escribir nada; `aplicar` además lo envía a Planillas con el token de Planillas
  * que la persona dejó guardado en la app (sin uno vigente: `409 planillas_session_required`). Repetir una carga no duplica: lo ya cargado se omite.
  */
