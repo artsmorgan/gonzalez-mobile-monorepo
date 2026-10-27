@@ -1,6 +1,6 @@
 # API de acciones para Guardify
 
-Contrato completo (autenticación, errores, idempotencia): `docs/protocolo-acciones.md` del repo de Guardify (guard-desk-nexus). Aquí, lo que implementa esta app.
+Contrato completo (autenticación, errores, idempotencia): [`protocolo-acciones.md`](./protocolo-acciones.md), copia del que mantiene Guardify (guard-desk-nexus). Aquí, lo que implementa esta app.
 
 ## Rutas (servidor a servidor)
 ```
