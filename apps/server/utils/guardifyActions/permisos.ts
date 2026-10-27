@@ -6,10 +6,15 @@ export function esEjecutivoDelPermiso(existing: { ejecutivo_cuenta?: unknown }, 
     return Number(existing.ejecutivo_cuenta) === actorId || (supervisorDelActor != null && Number(existing.ejecutivo_cuenta) === supervisorDelActor);
 }
 
-/** Qué acciones de Guardify se ofrecen sobre un permiso, para ESTE actor. `aprobar` no se ofrece: crea el permiso en Planillas con el token del ejecutivo. */
-export function accionesDePermiso(existing: { estado?: unknown; ejecutivo_cuenta?: unknown }, actorId: number, supervisorDelActor: number | null): string[] {
+/**
+ * Qué acciones de Guardify se ofrecen sobre un permiso, para ESTE actor: `aprobar` (si nadie lo firmó ya) y `rechazar`, solo si está pendiente y le toca
+ * resolverlo. Que haya un token de Planillas vigente se comprueba al ejecutar `aprobar`, no aquí.
+ */
+export function accionesDePermiso(existing: { estado?: unknown; ejecutivo_cuenta?: unknown; firma_ejecutivo_cuenta_digital?: unknown; firma_ejecutivo_cuenta_manual?: unknown }, actorId: number, supervisorDelActor: number | null): string[] {
     const pendiente = String(existing.estado || "").trim().toLowerCase() === "pendiente";
-    return pendiente && esEjecutivoDelPermiso(existing, actorId, supervisorDelActor) ? ["rechazar"] : [];
+    if (!pendiente || !esEjecutivoDelPermiso(existing, actorId, supervisorDelActor)) return [];
+    const firmado = !!(existing.firma_ejecutivo_cuenta_digital || existing.firma_ejecutivo_cuenta_manual);
+    return firmado ? ["rechazar"] : ["aprobar", "rechazar"];
 }
 
 /**

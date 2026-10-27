@@ -6,10 +6,15 @@ export function puedeRechazarMutuo(existing: { ejecutivo_cuenta?: unknown }, sup
     return supervisorDelActor !== null && Number(supervisorDelActor) === Number(existing.ejecutivo_cuenta);
 }
 
-/** Acciones de Guardify sobre un mutuo acuerdo, para ESTE actor. `aprobar` no se ofrece: crea el cambio de guardia en Planillas con el token del ejecutivo. */
-export function accionesDeMutuo(existing: { estado?: unknown; ejecutivo_cuenta?: unknown; ausente_acepta?: unknown; reemplaza_acepta?: unknown }, supervisorDelActor: number | null): string[] {
+/**
+ * Acciones de Guardify sobre un mutuo acuerdo, para ESTE actor: `aprobar` (si el ejecutivo no lo firmó ya) y `rechazar`, solo si está pendiente, ambos
+ * empleados aceptaron y le toca resolverlo. Que haya un token de Planillas vigente se comprueba al ejecutar `aprobar`, no aquí.
+ */
+export function accionesDeMutuo(existing: { estado?: unknown; ejecutivo_cuenta?: unknown; ausente_acepta?: unknown; reemplaza_acepta?: unknown; firma_ejecutivo_cuenta_digital?: unknown; firma_ejecutivo_cuenta_manual?: unknown }, supervisorDelActor: number | null): string[] {
     const pendiente = (String(existing.estado || "").trim().toLowerCase() || "pendiente") === "pendiente";
-    return pendiente && puedeRechazarMutuo(existing, supervisorDelActor) && !!existing.ausente_acepta && !!existing.reemplaza_acepta ? ["rechazar"] : [];
+    if (!pendiente || !puedeRechazarMutuo(existing, supervisorDelActor) || !existing.ausente_acepta || !existing.reemplaza_acepta) return [];
+    const firmado = !!(existing.firma_ejecutivo_cuenta_digital || existing.firma_ejecutivo_cuenta_manual);
+    return firmado ? ["rechazar"] : ["aprobar", "rechazar"];
 }
 
 /**
