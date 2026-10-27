@@ -2,6 +2,7 @@ import { verifyGuardifyApiKey, MIN_API_KEY_LENGTH } from "../guardifyReports/aut
 import { verifyActorHeaders, resolveActorEmployee, type ActorEmployee, type GuardifyActor } from "./actor";
 import type { ActionEnv, ActionErrorCode, ActionHttp } from "./env";
 import { aprobarMutuoAcuerdo } from "./aprobar-mutuo";
+import { cargarInventarioPuesto } from "./inventario";
 import { aprobarPermisoSolicitud } from "./aprobar-permiso";
 import { accionesDeMutuo, rechazarMutuoAcuerdo } from "./mutuos";
 import { accionesDePermiso, rechazarPermisoSolicitud } from "./permisos";
@@ -225,5 +226,44 @@ export async function handleLookupEmpleado(req: Request, deps: ActionDeps): Prom
     } catch (e) {
         console.error(JSON.stringify({ level: "error", msg: "guardify_lookup_failed", error: String(e) }));
         return json({ code: "invalid_request", message: "No se pudo consultar el empleado." }, 500);
+    }
+}
+
+/** Máximo de filas por carga: cada fila revisa varias tablas y el envío a Planillas es de una vez. */
+export const IMPORT_MAX_ROWS = 2000;
+
+/**
+ * Carga masiva para Guardify: `POST /api/guardify/imports/inventario-puesto` con `{ modo: "validar" | "aplicar", filas: [...] }`.
+ * `validar` hace todas las comprobaciones y devuelve lo que se crearía sin escribir nada; `aplicar` además lo envía a Planillas con el token de Planillas
+ * que la persona dejó guardado en la app (sin uno vigente: `409 planillas_session_required`). Repetir una carga no duplica: lo ya cargado se omite.
+ */
+export async function handleImport(req: Request, tipo: string, deps: ActionDeps): Promise<Response> {
+    try {
+        const envVars = deps.env ?? process.env;
+        const auth = verifyGuardifyApiKey(req.headers, envVars);
+        if (!auth.ok) return json({ error: auth.error, message: auth.message }, auth.status);
+        const claims = verifyActorHeaders(req.headers, (envVars.GUARDIFY_REPORTS_API_KEY ?? "").trim(), (deps.now ?? Date.now)());
+        if (!claims) return json({ error: "unauthorized", message: "Identidad del actor inválida o vencida." }, 401);
+        if (tipo !== "inventario-puesto") return err("invalid_request", `No existe la carga «${tipo}».`, 404);
+        const body: any = await req.json().catch(() => ({}));
+        const modo = body?.modo === "aplicar" ? "aplicar" : body?.modo === "validar" ? "validar" : null;
+        if (!modo) return err("invalid_request", "El modo debe ser «validar» o «aplicar».");
+        if (!Array.isArray(body?.filas) || body.filas.length === 0) return err("invalid_request", "Debe indicar al menos una fila.");
+        if (body.filas.length > IMPORT_MAX_ROWS) return err("invalid_request", `Son demasiadas filas (máximo ${IMPORT_MAX_ROWS} por carga).`);
+        const env = deps.getEnv();
+        const actor = await resolveActorEmployee(env.prisma, claims.actor);
+        if (!actor) return err("out_of_scope", "No se pudo identificar a esta persona en la app.");
+        let planillasToken: string | null = null;
+        if (modo === "aplicar") {
+            planillasToken = await env.tokenPlanillas(actor.id);
+            if (!planillasToken) return err("planillas_session_required", "Para cargar hace falta la sesión de Planillas de la persona: debe abrir MonitoreApp y escribir su contraseña de Planillas, y luego reintentar.");
+        }
+        const res = await cargarInventarioPuesto(env, { filas: body.filas, planillasToken, modo });
+        console.log(JSON.stringify({ level: "info", msg: "guardify_import", tipo, modo, filas: body.filas.length, ok: res.ok, status: res.status, actor: actor.id }));
+        if (!res.ok) return json({ code: res.code, message: res.message, ...(res.errors?.length ? { errores: res.errors } : {}) }, HTTP[res.code] ?? res.status);
+        return json({ modo, creados: { planes: res.body.created_plans, entregas: res.body.created_entregas }, omitidos: res.body.skipped, mensaje: res.body.message });
+    } catch (e) {
+        console.error(JSON.stringify({ level: "error", msg: "guardify_import_failed", tipo, error: String(e) }));
+        return json({ code: "invalid_request", message: "La app no pudo completar la carga." }, 500);
     }
 }

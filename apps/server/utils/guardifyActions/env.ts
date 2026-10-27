@@ -24,9 +24,9 @@ export type ActionEnv = {
 
 export type ActionHttp =
     | { ok: true; status: 200; body: Record<string, any> }
-    | { ok: false; status: number; code: ActionErrorCode; message: string };
+    | { ok: false; status: number; code: ActionErrorCode; message: string; /** Detalle por fila o por dato, en las cargas masivas. */ errors?: string[] };
 
-export const fail = (status: number, code: ActionErrorCode, message: string): ActionHttp => ({ ok: false, status, code, message });
+export const fail = (status: number, code: ActionErrorCode, message: string, errors?: string[]): Extract<ActionHttp, { ok: false }> => ({ ok: false, status, code, message, ...(errors ? { errors } : {}) });
 
 export const parseDateInput = (input: unknown): Date | null => {
     if (!input) return null;

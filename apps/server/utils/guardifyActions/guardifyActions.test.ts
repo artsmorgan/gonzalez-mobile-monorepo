@@ -3,7 +3,8 @@ import crypto from "node:crypto";
 import { describe, it } from "node:test";
 import { ACTOR_MAX_SKEW_MS, resolveActorEmployee, verifyActorHeaders } from "./actor";
 import type { ActionEnv } from "./env";
-import { handleActionDetail, handleActionExecute, handleLookupEmpleado, turnosDe } from "./handler";
+import { handleActionDetail, handleActionExecute, handleImport, handleLookupEmpleado, IMPORT_MAX_ROWS, turnosDe } from "./handler";
+import { cargarInventarioPuesto, formatearParaPlanillas, parseFechaEntregaParts, planificarCargaInventario } from "./inventario";
 import { aprobarMutuoAcuerdo } from "./aprobar-mutuo";
 import { aprobarPermisoSolicitud } from "./aprobar-permiso";
 import { tokenPlanillasVigente } from "./planillas";
@@ -89,12 +90,12 @@ describe("quién puede qué", () => {
 
 type Call = Record<string, any>;
 /** Entorno falso: registra lo que se escribe, lo que se notifica y lo que se manda a Planillas; `tablas` responde las lecturas por la API dinámica. */
-function fakeEnv(opts: { tablas?: Record<string, any>; empleados?: Record<number, any>; rows?: Record<string, Record<number, any>>; notifyFails?: boolean; cambios?: any[]; planillas?: (path: string, body: any) => any; token?: string | null } = {}) {
+function fakeEnv(opts: { tablas?: Record<string, any>; empleados?: Record<number, any>; rows?: Record<string, Record<number, any>>; many?: Record<string, any[]>; notifyFails?: boolean; cambios?: any[]; planillas?: (path: string, body: any) => any; token?: string | null } = {}) {
     const calls: Call[] = [], notifs: { title: string; message: string; recipients: number[]; originators: number[] }[] = [], reports: [number, string][] = [], planillasCalls: { path: string; body: any; token: string }[] = [];
     const table = (n: string) => ({
         findUnique: async ({ where }: any) => (n === "c_empleado" ? opts.empleados?.[where.id] ?? null : opts.rows?.[n]?.[where.id] ?? null),
         findFirst: async ({ where }: any) => (n === "c_empleado" ? Object.values(opts.empleados ?? {}).find((e: any) => e.codigo === where.codigo) ?? null : opts.rows?.[n]?.[where.id] ?? null),
-        findMany: async () => [],
+        findMany: async () => opts.many?.[n] ?? [],
     });
     const env: ActionEnv = {
         call: async (d) => {
@@ -475,5 +476,125 @@ describe("API de acciones: aprobar y buscar reemplazo", () => {
         assert.equal(JSON.stringify(b).includes("SECRETA"), false);
         assert.equal((await get(good(), "NOEXISTE")).status, 404);
         assert.equal((await get(good(), "")).status, 400);
+    });
+});
+
+
+describe("carga masiva del inventario de un puesto", () => {
+    // El catálogo y los puestos que «existen» son estructuras de la prueba: solo ids y códigos.
+    const world = (extra: object = {}) => fakeEnv({ many: { n_articulo_corpo_puesto: [{ id: 1 }, { id: 2 }], e_estructura_puesto: [{ id: 10, codigo: "P-A" }, { id: 11, codigo: "P-B" }], e_estructura_articulo_corpo_puesto_plan: [], e_estructura_articulo_corpo_puesto_entrega: [] }, empleados: { 5: {} }, ...extra });
+    const fila = (over: object = {}) => ({ codigo_puesto: "P-A", numero_articulo: 1, cantidad: 2, serie: "S1", marca: "M1", modelo: "Mo1", fecha_entrega: "05-10-2026", ...over });
+    const cargar = (f: ReturnType<typeof fakeEnv>, filas: unknown, modo: "validar" | "aplicar" = "aplicar", token: string | null = "tp") => cargarInventarioPuesto(f.env, { filas, modo, planillasToken: token });
+
+    it("fechas DD-MM-YYYY o DD/MM/YYYY; hora se ignora; todo lo demás es inválido", () => {
+        assert.deepEqual(parseFechaEntregaParts("5-10-2026"), { dd: "05", mm: "10", yyyy: "2026", hh: "00", mi: "00", ss: "00" });
+        assert.equal(parseFechaEntregaParts("05/10/2026 13:45")?.dd, "05");
+        for (const v of ["2026-10-05", "32-01-2026", "01-13-2026", "", "ayer", "5-10-26"]) assert.equal(parseFechaEntregaParts(v), null, v);
+    });
+    it("sin filas o con filas inválidas: 400 con el detalle por fila y sin tocar Planillas", async () => {
+        for (const filas of [undefined, [], "x"]) { const r: any = await cargar(world(), filas); assert.deepEqual([r.ok, r.status, r.message], [false, 400, "Debe indicar al menos un artículo."]); }
+        const f = world();
+        const r: any = await cargar(f, [fila({ codigo_puesto: "" }), fila({ numero_articulo: 0 }), fila({ cantidad: -1 }), fila({ serie: "" }), fila({ marca: "" }), fila({ fecha_entrega: "mañana" })]);
+        assert.equal(r.status, 400); assert.equal(r.errors.length, 6);
+        assert.match(r.errors[0], /^Artículo 1: código de puesto obligatorio\.$/); assert.match(r.errors[5], /^Artículo 6: fecha de entrega inválida/);
+        assert.equal(f.planillasCalls.length, 0);
+    });
+    it("artículo o puesto que no existen: 404 con la lista; sin escribir", async () => {
+        let f = world();
+        let r: any = await cargar(f, [fila({ numero_articulo: 99 })]);
+        assert.deepEqual([r.status, r.message, r.errors], [404, "Algunos artículos no existen.", ["El artículo #99 no existe."]]);
+        r = await cargar(f, [fila({ codigo_puesto: "NO" })]);
+        assert.deepEqual([r.status, r.message, r.errors], [404, "Algunos códigos de puesto no existen.", ["El código de puesto «NO» no existe."]]);
+        assert.equal(f.planillasCalls.length, 0);
+    });
+    it("modo validar: dice qué se crearía y NO manda nada a Planillas ni pide token", async () => {
+        const f = world();
+        const r: any = await cargar(f, [fila(), fila({ codigo_puesto: "P-B", numero_articulo: 2 })], "validar", null);
+        assert.equal(r.ok, true); assert.equal(r.body.modo, "validar"); assert.deepEqual([r.body.created_plans, r.body.created_entregas, r.body.skipped], [2, 2, []]);
+        assert.equal(f.planillasCalls.length, 0); assert.equal(writes(f.calls).length, 0);
+    });
+    it("modo aplicar sin token: «planillas_session_required»; con token manda a Planillas las filas con la fecha YYYY-MM-DD, sin repetir (puesto, artículo)", async () => {
+        assert.equal(((await cargar(world(), [fila()], "aplicar", null)) as any).code, "planillas_session_required");
+        const f = world();
+        const r: any = await cargar(f, [fila(), fila({ serie: "S2" })]);
+        assert.equal(r.ok, true); assert.deepEqual([r.body.created_plans, r.body.created_entregas], [1, 2]);
+        assert.deepEqual(f.planillasCalls, [{ path: "/articulos-puesto/carga-masiva", token: "tp", body: { items: [{ codigo_puesto: "P-A", numero_articulo: 1, cantidad: 2, serie: "S1", marca: "M1", modelo: "Mo1", fecha_entrega: "2026-10-05" }] } }]);
+    });
+    it("lo que ya existe se omite (plan y entrega repetidos): repetir la carga no duplica", async () => {
+        const f = world({ many: { n_articulo_corpo_puesto: [{ id: 1 }], e_estructura_puesto: [{ id: 10, codigo: "P-A" }], e_estructura_articulo_corpo_puesto_plan: [{ puesto_id: 10, articuloCP_id: 1 }], e_estructura_articulo_corpo_puesto_entrega: [{ puesto_id: 10, nomencladorArticuloCP_id: 1, marca: "M1", serie: "S1", modelo: "Mo1" }] } });
+        const r: any = await cargar(f, [fila()]);
+        assert.equal(r.ok, true); assert.deepEqual([r.body.created_plans, r.body.created_entregas], [0, 0]); assert.equal(r.body.skipped.length, 2);
+        assert.deepEqual(f.planillasCalls[0]!.body, { items: [] });
+    });
+    it("si Planillas dice que no: 500; si lanza, el error sube y no se da por hecho", async () => {
+        const r: any = await cargar(world({ planillas: () => ({ success: false }) }), [fila()]);
+        assert.deepEqual([r.ok, r.status], [false, 500]);
+        await assert.rejects(() => cargar(world({ planillas: () => { throw new Error("401"); } }), [fila()]), /401/);
+    });
+    it("el formato para Planillas no repite (puesto, artículo) y completa el modelo vacío", () => {
+        const out = formatearParaPlanillas([{ ...fila(), modelo: null, fecha_entrega: "05-10-2026 00:00:00" } as any, { ...fila(), serie: "otra", fecha_entrega: "05-10-2026 00:00:00" } as any]);
+        assert.equal(out.items.length, 1); assert.equal(out.items[0]!.modelo, ""); assert.equal(out.items[0]!.fecha_entrega, "2026-10-05");
+    });
+    it("planificar no escribe nada y distingue lo nuevo de lo omitido", async () => {
+        const f = world();
+        const p = await planificarCargaInventario(f.env.prisma, [fila()]);
+        assert.equal(p.kind, "ok"); assert.equal(f.calls.length, 0);
+    });
+
+    describe("API de cargas para Guardify", () => {
+        const env0 = { GUARDIFY_REPORTS_API_KEY: KEY };
+        const good = () => ({ authorization: `Bearer ${KEY}`, ...sign(actorClaims({ cedula: "c" }), KEY) });
+        const req = (h: Record<string, string>, body?: unknown) => new Request("https://app.test/x", { method: "POST", headers: { ...h, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+        const mk = (extra: object = {}) => { const f = world(extra); (f.env.prisma as any).c_empleado.findMany = async (a: any) => (a.where.cedula ? [{ id: 5, supervisor_id: null }] : []); return f; };
+        const deps = (f: ReturnType<typeof fakeEnv>) => ({ getEnv: () => f.env, env: env0, now: () => NOW });
+        const jsonOf = async (r: Response) => r.json() as Promise<any>;
+
+        it("exige llave y actor firmado; la carga debe existir; modo y filas válidos; tope de filas", async () => {
+            const f = mk();
+            assert.equal((await handleImport(req({}, {}), "inventario-puesto", deps(f))).status, 401);
+            assert.equal((await handleImport(req({ authorization: `Bearer ${KEY}` }, {}), "inventario-puesto", deps(f))).status, 401);
+            assert.equal((await handleImport(req(good(), { modo: "validar", filas: [fila()] }), "otra", deps(f))).status, 404);
+            assert.equal((await handleImport(req(good(), { modo: "ya", filas: [fila()] }), "inventario-puesto", deps(f))).status, 400);
+            assert.equal((await handleImport(req(good(), { modo: "validar", filas: [] }), "inventario-puesto", deps(f))).status, 400);
+            assert.equal((await handleImport(req(good(), { modo: "validar", filas: Array(IMPORT_MAX_ROWS + 1).fill(fila()) }), "inventario-puesto", deps(f))).status, 400);
+            assert.equal(f.planillasCalls.length, 0);
+        });
+        it("actor que no se puede identificar: 403 y no se lee nada", async () => {
+            const f = mk(); (f.env.prisma as any).c_empleado.findMany = async () => [];
+            const r = await handleImport(req(good(), { modo: "validar", filas: [fila()] }), "inventario-puesto", deps(f));
+            assert.deepEqual([r.status, (await jsonOf(r)).code], [403, "out_of_scope"]);
+        });
+        it("validar: devuelve lo que se crearía y no pide la sesión de Planillas", async () => {
+            const f = mk({ token: null });
+            const r = await handleImport(req(good(), { modo: "validar", filas: [fila()] }), "inventario-puesto", deps(f));
+            assert.equal(r.status, 200);
+            const b = await jsonOf(r);
+            assert.deepEqual([b.modo, b.creados, b.omitidos], ["validar", { planes: 1, entregas: 1 }, []]);
+            assert.equal(f.planillasCalls.length, 0);
+        });
+        it("validar con errores de datos: 400 con el detalle por fila (`errores`)", async () => {
+            const r = await handleImport(req(good(), { modo: "validar", filas: [fila({ serie: "" })] }), "inventario-puesto", deps(mk()));
+            const b = await jsonOf(r);
+            assert.deepEqual([r.status, b.code, b.errores], [400, "invalid_request", ["Artículo 1: serie obligatoria."]]);
+        });
+        it("aplicar sin sesión de Planillas vigente: 409 «planillas_session_required» y no se toca nada", async () => {
+            const f = mk({ token: null });
+            const r = await handleImport(req(good(), { modo: "aplicar", filas: [fila()] }), "inventario-puesto", deps(f));
+            assert.deepEqual([r.status, (await jsonOf(r)).code], [409, "planillas_session_required"]);
+            assert.equal(f.planillasCalls.length, 0);
+        });
+        it("aplicar con sesión de Planillas: envía y responde lo creado", async () => {
+            const f = mk();
+            const r = await handleImport(req(good(), { modo: "aplicar", filas: [fila()] }), "inventario-puesto", deps(f));
+            assert.equal(r.status, 200);
+            const b = await jsonOf(r);
+            assert.deepEqual([b.modo, b.creados], ["aplicar", { planes: 1, entregas: 1 }]);
+            assert.equal(f.planillasCalls.length, 1); assert.equal(f.planillasCalls[0]!.token, "token-estructural");
+        });
+        it("un error inesperado no se filtra", async () => {
+            const f = mk(); f.env.prisma = new Proxy({}, { get: () => { throw new Error("detalle interno secreto"); } }) as never;
+            const r = await handleImport(req(good(), { modo: "validar", filas: [fila()] }), "inventario-puesto", deps(f));
+            assert.equal(r.status, 500); assert.equal(JSON.stringify(await jsonOf(r)).includes("secreto"), false);
+        });
     });
 });

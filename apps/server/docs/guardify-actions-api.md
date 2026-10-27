@@ -27,6 +27,15 @@ Aprobar un permiso crea el permiso en **Planillas** (`POST {PLANILLAS_URL}/accio
 - Se comprueba **antes** de llamar. Heredado de la ruta original del mutuo: el acuerdo queda `aprobado` antes de crear el cambio de guardia, así que si Planillas lo rechaza queda aprobado sin cambio de guardia; por eso importa no llegar ahí con un token vencido.
 - `aprobar` pide las dos firmas del ejecutivo (`signatures` con `role: "digital"` y `role: "manual"`, imagen como `data:` URL, mínimo 10 caracteres como en la app) y, en permisos, `params`: `{ turnos: [{ id, reemplazoId }], reemplazoObligatorio, observaciones }`.
 
+## Cargas masivas
+```
+POST /api/guardify/imports/inventario-puesto   { modo: "validar" | "aplicar", filas: [{ codigo_puesto, numero_articulo, cantidad, serie, marca, modelo?, fecha_entrega }] }
+  → 200 { modo, creados: { planes, entregas }, omitidos: [...], mensaje }
+  → 400 { code, message, errores: ["Artículo 3: serie obligatoria.", …] }      409 { code: "planillas_session_required" }
+```
+Misma lógica que `POST /api/mantenimiento-equipo/bulk-articulos` (esa ruta ahora llama a `utils/guardifyActions/inventario.ts`): valida cada fila (fecha `DD-MM-YYYY`), comprueba que los artículos y los códigos de puesto existan, **omite lo ya cargado** (plan o entrega repetidos: repetir una carga no duplica) y manda el resto a Planillas (`POST {PLANILLAS_URL}/articulos-puesto/carga-masiva`) con el token de Planillas guardado de la persona. `validar` hace todo menos el envío (no escribe nada y no pide la sesión de Planillas); `aplicar` lo envía. Máximo 2000 filas por carga. La plantilla de Excel y su lectura son de Guardify (la app recibe filas en JSON ya leídas y validadas).
+Las **actividades** no tienen carga masiva en la app (se crean una a una en `/api/activities/created`) y no hay plantilla definida: pendiente.
+
 ## Lo que NO hace
 - **Sin evidencia de dispositivo:** la escritura va por la API dinámica con el token móvil del servidor (`shouldVerifyAccessToken: false`), así que no genera la fila de `c_evidencia_registro` que sí genera una acción hecha desde el teléfono. El rastro queda en la bitácora de la app (`c_cambios_apps_modules`) y en la de Guardify.
 - **Idempotencia por estado**, sin tabla de claves: si el mismo actor repite `rechazar` o `aprobar` sobre un registro que él ya resolvió, devuelve el mismo resultado sin escribir; otro actor recibe `409 already_resolved`.
