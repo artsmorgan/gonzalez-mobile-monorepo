@@ -36,7 +36,8 @@ app debe aceptar el nuevo formato.
 - Una escritura **no se repite sola** porque, si la primera sí llegó al servidor, repetirla duplicaría el registro. La acción en cola se conserva y
   se reintenta en la siguiente sincronización (como ya hacían las colas cuando `authedFetch` devolvía `null`).
 - `idempotent: true` solo debe usarlo quien sepa que el servidor lo garantiza. `idempotencyKey` viaja en `Idempotency-Key` para que el servidor
-  pueda deduplicar; **hoy ningún endpoint la usa**: la idempotencia del lado servidor está pendiente de la revisión del backend (issue #181).
+  pueda deduplicar. **Desde #172/#181 el servidor la honra** en `PUT /api/attendance/[id]` (marcas) y en la API de acciones de Guardify (`docs/idempotencia-servidor.md`);
+  `saveMarca` ya la manda y marca la escritura como `idempotent: true`. Las demás escrituras siguen sin reintento automático hasta que su ruta adopte la clave.
 - El tiempo agotado y la red caída se distinguen (`timeout` / `network`) y no cierran la sesión.
 
 ## Prueba manual (pendiente)

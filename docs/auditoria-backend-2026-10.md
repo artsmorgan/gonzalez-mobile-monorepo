@@ -16,7 +16,7 @@ producción están marcados «requiere infraestructura / proveedor» con la soli
 | 2 | Cuenta de BD y permisos | **Requiere infraestructura / proveedor** | Del código sale que el servidor **escribe** en la BD (no es de solo lectura). Los *grants* reales no se ven desde el repo. Se retiró una escritura peligrosa. |
 | 3 | SQL y rendimiento | **Hallazgos documentados** | SQL crudo solo con texto fijo (sin inyección). Casi todas las listas se leen sin `take`/paginación. |
 | 4 | Validez de la sesión | **Hallazgos documentados** | Access JWT de 1 día sin consulta de revocación; refresh rotado pero no atómico. |
-| 5 | Sincronización | **Parcial** | Autoría corregida (#176 y evidencia); idempotencia solo en salida de marca y almuerzo. |
+| 5 | Sincronización | **Parcial** | Autoría corregida (#176 y evidencia); idempotencia por clave en marcas y en la API de acciones de Guardify (`docs/idempotencia-servidor.md`); las demás altas siguen sin clave. |
 | 6 | Red API–BD | **Requiere infraestructura / proveedor** | Sin datos en el repo. Se comprobó que los logs y `reportError` no guardan secretos. |
 | 7 | Evidencia y firmas | **Corregido el autor; límites documentados** | El autor ya no lo decide el cliente. Ubicación y hora siguen siendo declaradas por el cliente. |
 
@@ -127,10 +127,10 @@ objeto padre; (3) lecturas. Cada issue necesita primero la regla de alcance del 
 
 ## 5. Sincronización
 
-- **Idempotencia de escrituras** (relacionado con #172): solo hay protección en `attendance/[id]` salida (`already_synced`), almuerzo
-  (`lunchDuplicate`) y en la evidencia por registro. Las demás altas (`POST` de incidentes, actas, bitácoras…) **no deduplican**: un reintento tras un
-  tiempo agotado puede duplicar el registro. Por eso la app no reintenta escrituras sola (`docs/causas-de-fallo-api.md`). Propuesta: aceptar
-  `Idempotency-Key` (la app ya puede enviarla) y guardarla por tabla.
+- **Idempotencia de escrituras** (#172): el servidor ahora acepta `Idempotency-Key`, la guarda (SHA-256) en `c_clave_idempotencia` y devuelve el resultado original al
+  reintento (`docs/idempotencia-servidor.md`). Está aplicada en `PUT /api/attendance/[id]` (marcas) y en la API de acciones de Guardify. Las demás altas (`POST` de
+  incidentes, actas, bitácoras…) **todavía no deduplican**: un reintento tras un tiempo agotado puede duplicar el registro, así que la app no las reintenta sola
+  (`docs/causas-de-fallo-api.md`). Añadir una ruta es envolverla con `conIdempotencia` y mandar una clave estable desde su pantalla.
 - **Conflictos:** la última escritura gana; no hay versión ni `If-Match` en las ediciones.
 - **Autoría de acciones sin conexión:** corregida en dos puntos. En el equipo, cada acción lleva su propietario y no se sincroniza con otra sesión
   (`docs/colas-propietario-y-token.md`, #176). En el servidor, la evidencia toma el autor del token (arriba).

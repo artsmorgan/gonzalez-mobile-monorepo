@@ -4,10 +4,15 @@ import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../callDynamicPrisma";
 import { markInternalRequest } from "../internalRequests";
 import { prisma } from "../prismaClient";
+import { dynamicIdempotencyStore } from "../idempotencyDynamicStore";
+import type { IdempotencyStore } from "../idempotency";
 import { reportError } from "../reportError";
 import { sendNotificationByEmployee } from "../sendNotification";
 import type { ActionEnv } from "./env";
 import { makeActionEnv } from "./envFactory";
+
+/** Almacén de claves de idempotencia de las acciones: tabla `c_clave_idempotencia` de la API dinámica, por el mismo `call` de la acción. */
+export const actionIdempotencyStore = (env: ActionEnv): IdempotencyStore => dynamicIdempotencyStore(env.call);
 
 /** Plazo máximo de una llamada a Planillas: sin él, una Planillas colgada deja la acción esperando mientras Guardify reintenta. */
 const PLANILLAS_TIMEOUT_MS = 30_000;

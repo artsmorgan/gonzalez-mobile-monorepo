@@ -56,6 +56,8 @@ Leyenda del resultado: ✅ cumple · ❌ falla (adjuntar captura/log) · ➖ no 
 | 3 | Con un usuario sin permiso, abrir una vista restringida | Mensaje de permiso; **la sesión sigue abierta** | |
 | 4 | Modo avión durante una operación y volver | No se cierra la sesión | |
 | 5 | Operación lenta (red muy mala) | La pantalla no queda cargando para siempre: falla a los 20/30 s con mensaje | |
+| 5b | **Idempotencia (#172):** con la migración `20261027120001_clave_idempotencia` aplicada, hacer que el servidor tarde más de 30 s en responder una marca de entrada | El teléfono reintenta una vez con la misma clave y **no** se crea una segunda marca; la acción pendiente no se pierde | |
+| 5c | Repetir `PUT /api/attendance/{marca}` con la misma `Idempotency-Key` | Misma respuesta con `Idempotent-Replay: true`; la marca no cambia otra vez | |
 | 6 | (Guardify en `on`) Revocar solo la sesión de un guarda | La app avisa «Un administrador cerró tu sesión» y vuelve al inicio | |
 
 ## #177 / #180 Android: permisos y copias de seguridad
