@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { authorizeMarcaAccess, denialBody } from "../../../../../utils/objectAccess";
+import { isSuperAdminEmpleado } from "../../../../../utils/isSuperAdminEmpleado";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
@@ -32,6 +34,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             await reportError(req, "api/attendance/[id]/absent-reason", "PUT", 404, "No se encontró la marca del dia");
             return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 404 });
         }
+        // Issue #181: la marca es de su titular o de quien lo reemplaza (o de un administrador).
+        const access = await authorizeMarcaAccess({ callerId: payload.id, marca: marcaDia, isAdmin: () => isSuperAdminEmpleado(req, Number(payload.id)) });
+        if (!access.allowed) { return NextResponse.json(denialBody(access), { status: access.status }); }
 
         const authEmpleadoId = Number(payload.id);
         const reemplazaId = marcaDia.empleadoReemplaza_id != null ? Number(marcaDia.empleadoReemplaza_id) : 0;

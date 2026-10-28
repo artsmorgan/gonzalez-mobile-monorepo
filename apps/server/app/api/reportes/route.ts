@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../utils/verifyToken";
 import { callDynamicReportesApi } from "../../../utils/callDynamicReportesApi";
 import { reportError } from "../../../utils/reportError";
+import { ReportesApiError } from "../../../utils/reportesAccess";
 
 function parseCreatedByIds(raw: string | null): number[] | undefined {
     if (!raw || raw.trim() === "") return undefined;
@@ -975,8 +976,9 @@ export async function GET(req: NextRequest) {
         return NextResponse.json(payload, { status: 200 });
     } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : "Error desconocido";
-        await reportError(req, "api/reportes", "GET", 500, msg);
-        return NextResponse.json({ status: false, message: msg }, { status: 500 });
+        const status = error instanceof ReportesApiError ? error.httpStatus : 500;
+        await reportError(req, "api/reportes", "GET", status, msg);
+        return NextResponse.json({ status: false, message: msg, ...(status === 403 ? { code: "permission_denied" } : {}) }, { status });
     }
 }
 
@@ -1006,7 +1008,8 @@ export async function POST(req: NextRequest) {
     } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : "Error desconocido";
         console.error(msg);
-        await reportError(req, "api/reportes", "POST", 500, msg);
-        return NextResponse.json({ status: false, message: msg }, { status: 500 });
+        const status = error instanceof ReportesApiError ? error.httpStatus : 500;
+        await reportError(req, "api/reportes", "POST", status, msg);
+        return NextResponse.json({ status: false, message: msg, ...(status === 403 ? { code: "permission_denied" } : {}) }, { status });
     }
 }

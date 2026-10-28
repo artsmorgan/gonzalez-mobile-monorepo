@@ -544,11 +544,14 @@ describe("carga masiva del inventario de un puesto", () => {
         const f = world({ many: { n_articulo_corpo_puesto: [{ id: 1 }], e_estructura_puesto: [{ id: 10, codigo: "P-A" }], e_estructura_articulo_corpo_puesto_plan: [{ puesto_id: 10, articuloCP_id: 1 }], e_estructura_articulo_corpo_puesto_entrega: [{ puesto_id: 10, nomencladorArticuloCP_id: 1, marca: "M1", serie: "S1", modelo: "Mo1" }] } });
         const r: any = await cargar(f, [fila()]);
         assert.equal(r.ok, true); assert.deepEqual([r.body.created_plans, r.body.created_entregas], [0, 0]); assert.equal(r.body.skipped.length, 2);
-        assert.deepEqual(f.planillasCalls[0]!.body, { items: [] });
+        // Issue #181: con todo ya cargado no se llama a Planillas (antes se le mandaba una lista vacía).
+        assert.equal(f.planillasCalls.length, 0);
+        assert.match(r.body.message, /todo ya existía/);
     });
     it("si Planillas dice que no: 500; si lanza, el error sube y no se da por hecho", async () => {
         const r: any = await cargar(world({ planillas: () => ({ success: false }) }), [fila()]);
         assert.deepEqual([r.ok, r.status], [false, 500]);
+        assert.equal(r.message, "Error al cargar los artículos en Planillas");
         await assert.rejects(() => cargar(world({ planillas: () => { throw new Error("401"); } }), [fila()]), /401/);
     });
     it("el formato para Planillas no repite (puesto, artículo) y completa el modelo vacío", () => {

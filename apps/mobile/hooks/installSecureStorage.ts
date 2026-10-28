@@ -5,12 +5,14 @@
  * vayan al Keystore / Keychain. Así los ~140 archivos que usan `AsyncStorage` no cambian y, tras actualizar, no quedan tokens ni datos del
  * empleado en `AsyncStorage`: se migran al abrir la app y la sesión existente se conserva.
  *
- * `expo-secure-store` es un módulo nativo: en un APK anterior (sin el módulo) o en Expo Go se cae a `AsyncStorage` sin error.
+ * `expo-secure-store` es un módulo nativo: en Expo Go (desarrollo) se cae a `AsyncStorage`; en producción, si no está disponible, guardar una
+ * credencial falla con `SecureStorageError` en vez de escribirla en claro (issue #173).
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   createDeviceUidProvider,
   createSecureRouter,
+  SecureStorageError,
   SENSITIVE_STORAGE_KEYS,
   withChunks,
   type SecureBackend,
@@ -68,6 +70,8 @@ export const secureRouter = createSecureRouter({
   plain,
   secure: secureBackend,
   onError: (context, error) => console.warn(`[secure-storage] ${context}:`, error),
+  // Issue #173: en producción las credenciales NUNCA caen a AsyncStorage; el respaldo en claro es solo para desarrollo / Expo Go.
+  allowPlainFallback: __DEV__,
 });
 
 /** Reemplaza los métodos de `AsyncStorage` por los del enrutador (las llaves no sensibles siguen yendo al `AsyncStorage` original). */
@@ -153,6 +157,8 @@ export const guardifyStorage = {
   },
   async set(key: string, value: string): Promise<void> {
     if (await secureBackend.isAvailable()) return chunkedSecure.set(`guardify.${key}`, value);
+    // Issue #173: la credencial del equipo tampoco se guarda en claro fuera de desarrollo.
+    if (!__DEV__) throw new SecureStorageError('secure_unavailable', `guardify.${key}`);
     return plain.setItem(`guardify.${key}`, value);
   },
   async remove(key: string): Promise<void> {

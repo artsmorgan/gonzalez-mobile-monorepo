@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { after, before, describe, it } from "node:test";
 import { GuardifyDevice, GuardifyError, MemoryStorage } from "../../../vendor/guardify-sdk/src/index";
 import { createMockGuardify } from "../scripts/mockGuardify";
-import { RevocationCache, createRevocationFetcher, guardifyDeviceGate, parseDeviceNotApprovedMessage } from "./guardifyDevices";
+import { RevocationCache, createRevocationFetcher, guardifyDeviceGate, parseDeviceNotApprovedMessage, parseSessionRevokedMessage } from "./guardifyDevices";
 
 /**
  * El Guardify simulado (`scripts/mockGuardify.ts`) contra el SDK REAL de dispositivo y contra el cliente de revocaciones del servidor:
@@ -180,7 +180,8 @@ describe("Guardify simulado frente al SDK y al servidor", () => {
             };
             assert.equal(await gate(), null);
             mock.state.sessions.get(r.sessionId)!.revokedAt = Date.now();
-            assert.ok(parseDeviceNotApprovedMessage(await gate()));
+            // Issue #174: lo revocado es la sesión (el equipo sigue activo), así que se avisa con `session_revoked`, no con «equipo bloqueado».
+            assert.ok(parseSessionRevokedMessage(await gate()));
         });
 
         it("sin equipo en el token (app sin Guardify) se rechaza como UNREGISTERED con `on`, y solo se registra con `observe`", async () => {

@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 import authedFetch from './authedFetch';
 import { readStoredPlanillasToken } from './planillasTokenStorage';
+import { pickPlanillasToken } from './planillasSendToken';
 
 interface Params {
   marcaId: number;
@@ -30,7 +31,7 @@ export default async function revertAttendanceLeaving({
     }
 
     const storedPlanillas = await readStoredPlanillasToken();
-    const planillasToken = String(planillasTokenOverride ?? '').trim() || storedPlanillas?.token || null;
+    const planillasToken = pickPlanillasToken(planillasTokenOverride, storedPlanillas?.token);
 
     const response = await authedFetch({
       url: `${apiUrl}/api/attendance/${marcaId}/revert-leaving`,

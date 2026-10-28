@@ -45,6 +45,7 @@ import { saveFile, getFile, deleteFile, getLocalFileDisplayUri } from '@/hooks/f
 import { RootStackParamList } from '../App';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { isPermitRangeInverted, reconcilePermitRange } from '@/hooks/permitDateRange';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'PermitRequest'>;
 type PermitType = 'Con goce' | 'Sin goce';
@@ -558,6 +559,10 @@ export default function PermitRequestScreenV2() {
       setTurnosMessage('Selecciona primero una plaza');
       return;
     }
+    if (isPermitRangeInverted(fechaInicio, fechaFin)) {
+      setTurnosMessage('La fecha fin no puede ser anterior a la fecha inicio.');
+      return;
+    }
     try {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
@@ -757,6 +762,10 @@ export default function PermitRequestScreenV2() {
   };
 
   const executeCreate = async () => {
+    if (isPermitRangeInverted(fechaInicio, fechaFin)) {
+      Alert.alert('Fechas inválidas', 'La fecha fin no puede ser anterior a la fecha inicio.');
+      return;
+    }
     setIsSubmitting(true);
     try {
       const horaAccion = await getHoraAccion();
@@ -1680,7 +1689,12 @@ export default function PermitRequestScreenV2() {
                   display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                   onChange={(_, d) => {
                     setShowDateInicio(false);
-                    if (d) setFechaInicio(d);
+                    if (d) {
+                      // El fin nunca queda antes del inicio: si el inicio elegido es posterior, el fin se ajusta a él.
+                      const r = reconcilePermitRange({ inicio: d, fin: fechaFin }, 'inicio');
+                      setFechaInicio(r.inicio);
+                      setFechaFin(r.fin);
+                    }
                   }}
                 />
               )}
@@ -1696,7 +1710,12 @@ export default function PermitRequestScreenV2() {
                   display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                   onChange={(_, d) => {
                     setShowDateFin(false);
-                    if (d) setFechaFin(d);
+                    if (d) {
+                      // Si el fin elegido es anterior al inicio, el inicio se ajusta a él.
+                      const r = reconcilePermitRange({ inicio: fechaInicio, fin: d }, 'fin');
+                      setFechaInicio(r.inicio);
+                      setFechaFin(r.fin);
+                    }
                   }}
                 />
               )}

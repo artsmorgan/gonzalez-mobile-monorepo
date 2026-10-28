@@ -508,7 +508,6 @@ export default function TrasladoPlazasScreen() {
                         type: planillasType,
                         mimeType: file.mimeType,
                     },
-                    planillasToken: storedPlanillas?.token ?? undefined,
                     synced: false,
                 });
                 await AsyncStorage.setItem('archivos_acciones_actions', JSON.stringify(actions));

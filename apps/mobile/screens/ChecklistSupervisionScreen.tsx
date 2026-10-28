@@ -3814,7 +3814,6 @@ export default function ChecklistSupervisionScreen() {
         hora_inicio: formatTimeHHmm(horaInicio),
         hora_fin: formatTimeHHmm(horaFin),
         isActive: true,
-        ...(planillasToken ? { planillasToken } : {}),
       };
 
       if (editing && editing.id && editing.id !== 0) {
@@ -3864,7 +3863,6 @@ export default function ChecklistSupervisionScreen() {
             id: editing.id,
             id_local: localId,
             requestData: requestDataOffline,
-            ...(planillasToken ? { planillasToken } : {}),
           };
           const uidx = actions.findIndex((a: any) => a.type === 'update' && a.id === editing.id);
           if (uidx !== -1) actions[uidx] = entry;
@@ -4017,7 +4015,6 @@ export default function ChecklistSupervisionScreen() {
             type: 'create' as const,
             id_local: localId,
             requestData: requestDataOffline,
-            ...(planillasToken ? { planillasToken } : {}),
           };
           const existingIdx = actions.findIndex((a: any) => a.type === 'create' && a.id_local === localId);
           if (existingIdx !== -1) actions[existingIdx] = entry;

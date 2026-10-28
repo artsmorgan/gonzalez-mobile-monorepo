@@ -8,7 +8,7 @@ import { useFocusEffect, useIsFocused, useNavigation } from '@react-navigation/n
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, TouchableOpacity, View, ScrollView, AppState, TextInput, Modal, Platform } from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, TouchableOpacity, View, ScrollView, AppState, TextInput, Modal, Platform, RefreshControl } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
@@ -44,6 +44,8 @@ import getCurrentUserDigitalSignature, {
   SIGNATURE_USER_ACTION_SCREEN,
 } from '../hooks/getCurrentUserDigitalSignature';
 import { eventBus } from '@/hooks/eventBus';
+import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { canRefreshLunchMinutes, fitTimerFontSize, shouldConfirmLunchStart } from '@/hooks/lunchTimeScreenRules';
 
 type LunchTimeScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'LunchTime'>;
 
@@ -103,7 +105,9 @@ export default function LunchTimeScreen() {
   const [error, setError] = useState<string | null>(null);
   const [needsManualMinutes, setNeedsManualMinutes] = useState(false);
   const [manualMinutesInput, setManualMinutesInput] = useState('');
-  const [isEditingMinutes, setIsEditingMinutes] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  /** Ancho medido del recuadro del contador, para que el tiempo quepa siempre en una sola línea. */
+  const [timerBoxWidth, setTimerBoxWidth] = useState<number | null>(null);
   const [lunchAlreadyCompleted, setLunchAlreadyCompleted] = useState(false);
   const [inactivityReason, setInactivityReason] = useState('');
   const [inactivities, setInactivities] = useState<InactivityData[]>([]);
@@ -515,7 +519,6 @@ export default function LunchTimeScreen() {
 
     setNeedsManualMinutes(false);
     setManualMinutesInput('');
-    setIsEditingMinutes(false);
   };
 
   const requestPlanillasRevalidationIfNeeded = useCallback(async (horaAccionMs: number): Promise<boolean> => {
@@ -655,33 +658,6 @@ export default function LunchTimeScreen() {
             } catch (err) {
               console.error('Error saving lunch minutes:', err);
               Alert.alert('Error', 'No se pudo guardar la configuración de minutos.');
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const handleUpdateLunchMinutes = async () => {
-    const parsed = parseInt(manualMinutesInput.trim(), 10);
-    if (!isValidLunchMinutes(parsed)) {
-      Alert.alert('Error', 'Ingrese una cantidad válida de minutos (mayor a 0).');
-      return;
-    }
-
-    Alert.alert(
-      'Actualizar minutos de alimentación',
-      `¿Desea actualizar a ${parsed} minutos de alimentación?`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Actualizar',
-          onPress: async () => {
-            try {
-              await saveLunchMinutes(parsed);
-            } catch (err) {
-              console.error('Error updating lunch minutes:', err);
-              Alert.alert('Error', 'No se pudo actualizar los minutos de alimentación.');
             }
           },
         },
@@ -893,16 +869,49 @@ export default function LunchTimeScreen() {
     }
   };
 
-  const handleStart = async () => {
-    if (!timerConfig || timeRemaining <= 0) return;
-    if (await blockIfMarcaExpired()) return;
+  /**
+   * Vuelve a descargar los minutos del horario y actualiza el contador (al deslizar hacia abajo estando arriba del todo). Solo si hay conexión y el
+   * contador está INACTIVO y SIN INICIAR; en cualquier otro caso no cambia nada. La descarga al abrir la pantalla está en `fetchTimerConfig`.
+   */
+  const refreshMinutesFromHorario = async () => {
+    const isIdleAndUnstarted = async () =>
+      canRefreshLunchMinutes({
+        isTimerActive: timerActiveRef.current,
+        hasStartTime: startTimeRef.current != null,
+        counterStarted: await isLunchCounterStarted(),
+        hasPausedInactivity: currentInactivityStartRef.current != null,
+      });
 
-    if (lunchAlreadyCompleted || (await isLunchTimeCompleted())) {
-      setLunchAlreadyCompleted(true);
-      Alert.alert('No disponible', 'Ya registraste un tiempo de alimentación en este turno.');
-      return;
+    if (!(await isIdleAndUnstarted())) return;
+    if (!(await getConnectionStatus())) return;
+
+    const rawMarca = await AsyncStorage.getItem('current_marca');
+    if (!rawMarca) return;
+    const marcaId = Number((JSON.parse(rawMarca) as { id?: unknown })?.id);
+    if (!Number.isFinite(marcaId) || marcaId <= 0) return;
+
+    const serverData = await fetchLunchMinutesByMarcaId(marcaId, { refreshAccessToken, logout });
+    if (!serverData) return;
+
+    // La respuesta tardó: si mientras tanto la persona inició el conteo, no se toca.
+    if (!(await isIdleAndUnstarted())) return;
+    const configObj = await persistLocalLunchMinutesConfig(serverData.minutos, { tiene_almuerzo: serverData.tiene_almuerzo });
+    await applyTimerConfig(serverData.minutos, String(marcaId), configObj);
+  };
+
+  const onPullToRefreshMinutes = async () => {
+    setIsRefreshing(true);
+    try {
+      await refreshMinutesFromHorario();
+    } catch (err) {
+      console.error('Error actualizando los minutos del horario:', err);
+    } finally {
+      setIsRefreshing(false);
     }
+  };
 
+  /** Arranca (o reanuda) el conteo. Las validaciones y la confirmación están en `handleStart`. */
+  const startCounter = async () => {
     const isFirstStartOfSession =
       !firmaEmpleadoRef.current?.trim() && startTimeRef.current == null;
 
@@ -961,6 +970,32 @@ export default function LunchTimeScreen() {
       currentInactivityStart: updatedInactivityStart,
       firma_empleado: firmaEmpleadoRef.current,
     });
+  };
+
+  const handleStart = async () => {
+    if (!timerConfig || timeRemaining <= 0) return;
+    if (await blockIfMarcaExpired()) return;
+
+    if (lunchAlreadyCompleted || (await isLunchTimeCompleted())) {
+      setLunchAlreadyCompleted(true);
+      Alert.alert('No disponible', 'Ya registraste un tiempo de alimentación en este turno.');
+      return;
+    }
+
+    // Ya no hay botón de reiniciar: el primer inicio se confirma. Reanudar una pausa no vuelve a preguntar.
+    if (shouldConfirmLunchStart({ hasStartTime: startTimeRef.current != null })) {
+      Alert.alert(
+        'Iniciar tiempo de alimentación',
+        'Una vez iniciado el conteo no se puede reiniciar: deberá finalizarlo para volver a empezar.\n\n¿Desea iniciarlo ahora?',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Iniciar', onPress: () => { void startCounter(); } },
+        ]
+      );
+      return;
+    }
+
+    await startCounter();
   };
 
   const handleStop = async () => {
@@ -1323,6 +1358,10 @@ export default function LunchTimeScreen() {
     );
   };
 
+  // Tiempo en una sola línea: el tamaño de la letra se ajusta al ancho medido del recuadro (menos su relleno y el margen del texto).
+  const timerLabel = formatTime(timeRemaining);
+  const timerFontSize = fitTimerFontSize(timerLabel, timerBoxWidth == null ? null : timerBoxWidth - 44);
+
   if (isLoading) {
     return (
       <ThemedView style={styles.container}>
@@ -1336,7 +1375,10 @@ export default function LunchTimeScreen() {
     <ThemedView style={styles.fullContainer}>
       <AppHeader onMenuPress={handleMenuPress} title="Tiempo de alimentación" />
 
-      <ScrollView style={styles.scrollView}>
+      <ScrollView
+        style={styles.scrollView}
+        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onPullToRefreshMinutes} {...HIDDEN_REFRESH_CONTROL_PROPS} />}
+      >
         <ThemedView style={styles.container}>
 
           {/* Module Title */}
@@ -1357,32 +1399,6 @@ export default function LunchTimeScreen() {
             </ThemedView>
           )}
 
-          {!isLoadingConfig && !error && (timerConfig || needsManualMinutes || isEditingMinutes) && (
-            <TouchableOpacity
-              style={styles.editMinutesOpenButton}
-              onPress={() => {
-                if (isEditingMinutes) {
-                  setIsEditingMinutes(false);
-                  setManualMinutesInput('');
-                  return;
-                }
-                setManualMinutesInput(
-                  timerConfig?.minutos != null ? String(timerConfig.minutos) : ''
-                );
-                setIsEditingMinutes(true);
-              }}
-              accessibilityLabel={isEditingMinutes ? 'Cancelar edición de minutos' : 'Modificar minutos'}
-            >
-              <ThemedText style={styles.editMinutesOpenButtonText}>
-                <Ionicons
-                  name={isEditingMinutes ? 'close' : 'pencil'}
-                  size={20}
-                  color="#FFFFFF"
-                />
-              </ThemedText>
-            </TouchableOpacity>
-          )}
-
           {/* Timer Section */}
           {isLoadingConfig ? (
             <ThemedView style={styles.loadingContainer}>
@@ -1401,17 +1417,11 @@ export default function LunchTimeScreen() {
                 <ThemedText style={styles.retryButtonText}>Reintentar</ThemedText>
               </TouchableOpacity>
             </ThemedView>
-          ) : needsManualMinutes || isEditingMinutes ? (
+          ) : needsManualMinutes ? (
             <ThemedView style={[styles.timerContainer, styles.manualMinutesContainer]}>
-              <ThemedText style={styles.containerTitle}>
-                {isEditingMinutes
-                  ? 'Actualizar minutos de alimentación'
-                  : 'Configurar minutos de alimentación'}
-              </ThemedText>
+              <ThemedText style={styles.containerTitle}>Configurar minutos de alimentación</ThemedText>
               <ThemedText style={styles.manualMinutesHint}>
-                {isEditingMinutes
-                  ? 'Ingrese la nueva cantidad de minutos. Se actualizará el horario correspondiente.'
-                  : 'No se encontró una duración válida de alimentación. Ingrese la cantidad de minutos para continuar.'}
+                No se encontró una duración válida de alimentación en el horario. Desliza hacia abajo para volver a consultarla o ingresa la cantidad de minutos para continuar.
               </ThemedText>
               <ThemedView style={styles.manualMinutesForm}>
                 <TextInput
@@ -1425,10 +1435,10 @@ export default function LunchTimeScreen() {
                 />
                 <TouchableOpacity
                   style={styles.manualMinutesButton}
-                  onPress={isEditingMinutes ? handleUpdateLunchMinutes : handleAcceptManualMinutes}
+                  onPress={handleAcceptManualMinutes}
                 >
                   <ThemedText style={styles.manualMinutesButtonText}>
-                    {isEditingMinutes ? 'Guardar' : 'Aceptar'}
+                    Aceptar
                   </ThemedText>
                 </TouchableOpacity>
               </ThemedView>
@@ -1446,9 +1456,17 @@ export default function LunchTimeScreen() {
 
               {/* Timer Display */}
               <ThemedView style={styles.timerDisplay}>
-                <ThemedView style={styles.timerDisplayContent}>
-                  <ThemedText style={styles.timerText}>
-                    {formatTime(timeRemaining)}
+                <ThemedView
+                  style={styles.timerDisplayContent}
+                  onLayout={(e) => setTimerBoxWidth(e.nativeEvent.layout.width)}
+                >
+                  <ThemedText
+                    style={[styles.timerText, { fontSize: timerFontSize, lineHeight: timerFontSize + 4 }]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.5}
+                  >
+                    {timerLabel}
                   </ThemedText>
                 </ThemedView>
                 {/* Timer Status */}
@@ -1517,13 +1535,6 @@ export default function LunchTimeScreen() {
                       {getActionIcon('stop')}
                     </TouchableOpacity>
                   )}
-
-                  <TouchableOpacity
-                    style={styles.resetButton}
-                    onPress={() => void handleReset()}
-                  >
-                    {getActionIcon('reset')}
-                  </TouchableOpacity>
                 </View>
 
                 {/* Manual Registration Button - Only visible when timer is stopped */}
@@ -1838,7 +1849,7 @@ const styles = StyleSheet.create({
   timerDisplayContent: {
     backgroundColor: '#64B5F6',
     borderRadius: 20,
-    paddingHorizontal: 40,
+    paddingHorizontal: 12,
     width: '100%'
   },
   timerText: {
@@ -1848,7 +1859,7 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     textAlign: 'center',
     fontFamily: 'monospace',
-    margin: 15,
+    margin: 10,
   },
   statusContainer: {
     backgroundColor: '#007AFF',
@@ -1919,21 +1930,6 @@ const styles = StyleSheet.create({
     width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  resetButton: {
-    backgroundColor: '#FF3B30',
-    paddingVertical: 15,
-    paddingHorizontal: 25,
-    borderRadius: 10,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  resetButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-    textAlign: 'center',
   },
   manualButton: {
     backgroundColor: '#FF9500',
@@ -2264,33 +2260,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     fontWeight: '600',
-  },
-  topEditMinutesRow: {
-    width: '100%',
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    marginBottom: 4,
-  },
-  editMinutesOpenButton: {
-    backgroundColor: '#007AFF',
-    padding: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginBottom: 20,
-    width: '100%',
-  },
-  editMinutesOpenButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  pencilButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#E8F1FF',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   minutesSummaryTextStandalone: {
     fontSize: 14,

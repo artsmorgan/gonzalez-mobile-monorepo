@@ -1,12 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
+import { authorizeSelfOrAdmin, denialBody, isDevRouteEnabled } from "../../../../../utils/objectAccess";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { reportError } from "../../../../../utils/reportError";
 
 export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+    // Ruta de desarrollo: no existe en producción (issue #181).
+    if (!isDevRouteEnabled()) { return NextResponse.json({ status: false, message: "No encontrado" }, { status: 404 }); }
     try {
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
+        // Issue #181: una marca de prueba solo se crea para la propia persona (sin excepción de administrador).
+        const access = await authorizeSelfOrAdmin({ callerId: payload.id, targetId: id });
+        if (!access.allowed) { return NextResponse.json(denialBody(access), { status: access.status }); }
 
         const { dev } = await req.json();
 

@@ -1,6 +1,7 @@
 import Constants from "expo-constants";
 import authedFetch from "./authedFetch";
 import { readStoredPlanillasToken } from "./planillasTokenStorage";
+import { pickPlanillasToken } from "./planillasSendToken";
 
 interface saveMarcaParams {
     data_params: {
@@ -38,7 +39,7 @@ export default async function saveMarca({
 
         const storedPlanillas = await readStoredPlanillasToken();
         const planillasToken =
-          String(planillasTokenOverride ?? '').trim() || storedPlanillas?.token || null;
+          pickPlanillasToken(planillasTokenOverride, storedPlanillas?.token);
 
         const response = await authedFetch({
             url: `${apiUrl}/api/attendance/${marcaId}`,

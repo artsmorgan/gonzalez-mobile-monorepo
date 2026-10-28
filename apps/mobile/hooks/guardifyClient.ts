@@ -20,6 +20,7 @@ import { getEmbeddedAppVersionInfo, resolveRuntimeAppVariant } from './appVarian
 import isDeviceOnline from './isDeviceOnline';
 import { eventBus } from './eventBus';
 import { getDeviceUid, guardifyStorage } from './installSecureStorage';
+import { queueRaw } from './installQueueOwnership';
 import getHoraAccion from './getHoraAccion';
 import { readLastLocationFromStorage } from './updateLastLocation';
 import { parseLocationTimeMs } from './evidenceHeaders';
@@ -350,9 +351,10 @@ export async function beginGuardifyWipe(reason: WipeReason): Promise<void> {
 }
 
 async function countPendingInQueues(): Promise<number> {
-  const keys = await AsyncStorage.getAllKeys();
+  // Acceso sin filtrar (issue #176): el borrado espera el trabajo pendiente de TODOS los usuarios del equipo, no solo del que tiene la sesión.
+  const keys = await queueRaw.getAllKeys();
   const queues = keys.filter((k) => /_actions$/.test(k));
-  const entries = await AsyncStorage.multiGet(queues);
+  const entries = await queueRaw.multiGet(queues);
   return countPendingActions(entries);
 }
 
@@ -363,7 +365,7 @@ async function countPendingInQueues(): Promise<number> {
 export async function wipeAllLocalData(): Promise<{ keys: number; files: number }> {
   const allKeys = await AsyncStorage.getAllKeys();
   const toRemove = allKeys.filter((k) => !shouldKeepKeyOnWipe(k));
-  if (toRemove.length) await AsyncStorage.multiRemove(toRemove);
+  if (toRemove.length) await queueRaw.multiRemove(toRemove); // sin filtrar: el borrado se lleva también las colas de otros usuarios
   let files = 0;
   for (const dir of [Paths.document, Paths.cache]) {
     try {

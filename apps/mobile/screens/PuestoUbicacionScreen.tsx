@@ -704,7 +704,6 @@ export default function PuestoUbicacionScreen() {
                         action: 'update',
                         type: 'puesto_ubicacion',
                         payload: { latitud, longitud, horaAccion },
-                        planillasToken,
                         synced: false,
                     });
 

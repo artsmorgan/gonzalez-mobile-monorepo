@@ -41,18 +41,5 @@ export async function GET(req: NextRequest) {
     }
 }
 
-export async function POST(req: NextRequest) {
-    try {
-        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
-
-        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
-
-        const data = await req.json();
-        const newEmpleado = await prisma.c_empleado.create({ data });
-        return NextResponse.json(newEmpleado, { status: 201 });
-    } catch (error: unknown) {
-        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-        await reportError(req, "api/empleados", "POST", 500, errorMessage);
-        return NextResponse.json({ message: errorMessage }, { status: 500 });
-    }
-}
+// Issue #181: no hay POST. Antes creaba filas de `c_empleado` (tabla de Planillas) con el cuerpo de la petición sin filtrar (asignación masiva),
+// y la app nunca lo usó. El alta de empleados es de Planillas, no de esta API.

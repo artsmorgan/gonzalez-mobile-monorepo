@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { authorizeSelfOrAdmin, denialBody } from "../../../../../../utils/objectAccess";
+import { isSuperAdminEmpleado } from "../../../../../../utils/isSuperAdminEmpleado";
 import { toZonedTime } from "date-fns-tz";
 import axios from "axios";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
@@ -32,7 +34,7 @@ type MarcaFutureReturn = {
 // GET: marcas del usuario para hoy y los próximos 30 días (vía Planillas → c_marca_dia)
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const { valid, expired, message } = await verifyAccessTokenByApi(req);
+    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
     if (!valid) {
       return NextResponse.json(
         { status: false, expired, message },
@@ -46,6 +48,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
       await reportError(req, "api/attendance/user/[id]/next", "GET", 400, "ID inválido");
       return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
     }
+    // Issue #181: solo la propia persona o un administrador.
+    const access = await authorizeSelfOrAdmin({ callerId: payload.id, targetId: empleadoId, isAdmin: () => isSuperAdminEmpleado(req, Number(payload.id)) });
+    if (!access.allowed) { return NextResponse.json(denialBody(access), { status: access.status }); }
 
     const planillasToken =
       decodeURIComponent(req.headers.get("Planillas-Token") ?? "").trim() || null;

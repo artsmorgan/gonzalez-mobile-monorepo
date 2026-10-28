@@ -1,6 +1,6 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import authedFetch from './authedFetch';
+import { readMainStructureCacheString, writeMainStructureCacheString } from './mainStructureCacheStorage';
 
 type BasicResponse = { status: boolean; message?: string;[k: string]: any };
 
@@ -330,11 +330,14 @@ export async function getMainStructure({
     const data: any = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
     if (data?.status && Array.isArray(data.structure)) {
-      await AsyncStorage.setItem('main_structure_cache', JSON.stringify(data.structure));
+      // Issue #178: la caché se guarda por el almacenamiento común (valida, mide en bytes y no pierde la anterior si algo falla).
+      await writeMainStructureCacheString(JSON.stringify(data.structure)).catch((e) =>
+        console.warn('No se pudo actualizar main_structure_cache:', e),
+      );
     }
     return data;
   } catch (error: any) {
-    const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+    const cacheStr = await readMainStructureCacheString().catch(() => null);
     if (cacheStr) {
       try {
         const cached = JSON.parse(cacheStr);

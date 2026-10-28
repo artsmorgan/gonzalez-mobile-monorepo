@@ -12,7 +12,9 @@ import {
   extractPlanillasTokenFromResponse,
   persistStoredPlanillasToken,
 } from '@/hooks/planillasTokenStorage';
-import { persistLegacySession } from '@/hooks/authTokenStorage';
+import { clearAuthStorage, persistLegacySession } from '@/hooks/authTokenStorage';
+import { isSecureStorageError } from '@/hooks/secureStorageRouter';
+import { isPendingWorkKey } from '@/hooks/cleanupGuard';
 import { getGuardifyIdentityReady } from '@/hooks/guardifyClient';
 import { handleDeviceNotApprovedResponse, parseDeviceNotApprovedMessage, reportDeviceNotApproved, describeDeviceStatus } from '@/hooks/deviceNotApproved';
 import {
@@ -324,6 +326,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     
           const keysToDelete = keys.filter((key) => {
             if (exceptions.includes(key)) return false;
+            // Issue #176: el trabajo pendiente (colas, firma manual pendiente y los registros que lo gobiernan) es de quien lo hizo; no se borra
+            // al entrar otro empleado.
+            if (isPendingWorkKey(key)) return false;
             if (key.startsWith(MAIN_STRUCTURE_FRAG_ASYNC_PREFIX)) return false;
             if (MAIN_STRUCTURE_SWEEP_PRESERVE_ASYNC_KEYS.includes(key)) return false;
             return true;
@@ -336,6 +341,16 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       return { success: true, passwordExpired: false };
     } catch (error) {
       console.error('Login error:', error);
+      // Issue #173: si la credencial no se pudo guardar en el almacenamiento seguro NO se guarda en claro; se avisa con su propio mensaje.
+      if (isSecureStorageError(error)) {
+        // Si alguna llave alcanzó a guardarse, no se deja una sesión a medias.
+        await clearAuthStorage().catch(() => undefined);
+        return {
+          success: false,
+          passwordExpired: false,
+          error: 'No se pudo guardar la sesión de forma segura en este equipo. Cierre la aplicación y vuelva a intentarlo.',
+        };
+      }
       return { success: false, passwordExpired: false, error: 'Error de conexión' };
     }
   };

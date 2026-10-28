@@ -71,6 +71,7 @@ import {
 } from '@/hooks/planillasTokenStorage';
 import PlanillasPasswordRevalidationModal from '../components/PlanillasPasswordRevalidationModal';
 import { deleteAllFiles } from '@/hooks/fileStorage';
+import { isPendingWorkKey } from '@/hooks/cleanupGuard';
 import { mergeJobManualsCacheForPuesto } from '@/hooks/jobManualsCacheHelpers';
 import { getIncidentsCache, mergeIncidentsCacheForCorpo, setIncidentsCache } from '@/hooks/incidentsStorage';
 import { mergeLlavesCacheForCorpo } from '@/hooks/llavesCacheHelpers';
@@ -1685,13 +1686,11 @@ export default function MarcarIngresoSalidaScreen() {
             logout,
           });
         } else {
-          const storedPlanillas = await readStoredPlanillasToken();
           await appendAttendanceAction({
             type: 'salida',
             marcaId: attendanceData.marca.id,
             reason: reason ?? '',
             horaAccion: actionHoraAccion,
-            planillasToken: storedPlanillas?.token ?? undefined,
           });
           const rawMarca = await AsyncStorage.getItem('current_marca');
           if (rawMarca) {
@@ -1818,7 +1817,7 @@ export default function MarcarIngresoSalidaScreen() {
 
       const keysToDelete = keys.filter((key) => {
         if (exceptions.includes(key)) return false;
-        if (key.endsWith('_actions')) return false;
+        if (isPendingWorkKey(key)) return false; // colas, firma pendiente y registros de caducidad (issue #176)
         if (key.startsWith(MAIN_STRUCTURE_FRAG_ASYNC_PREFIX)) return false;
         if (MAIN_STRUCTURE_SWEEP_PRESERVE_ASYNC_KEYS.includes(key)) return false;
         return true;
@@ -1965,12 +1964,10 @@ const getActivities = async (marcaId: number) => {
             'Se canceló la salida pendiente de sincronización. No hace falta revertir en el servidor.'
           );
         } else {
-          const storedPlanillas = await readStoredPlanillasToken();
           await appendAttendanceAction({
             type: 'revert_leaving',
             marcaId,
             horaAccion: horaRev,
-            planillasToken: storedPlanillas?.token ?? undefined,
           });
           await patchCurrentMarcaHoraSalida(marcaId, null);
           Alert.alert(

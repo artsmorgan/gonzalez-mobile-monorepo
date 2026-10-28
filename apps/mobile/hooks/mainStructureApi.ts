@@ -4,6 +4,7 @@ import authedFetch from './authedFetch';
 import { mergeMainStructureFragments } from './mergeMainStructureFragments';
 import { persistMainStructureFragments } from './mainStructureFragmentsStorage';
 import { writeMainStructureCacheString } from './mainStructureCacheStorage';
+import { validateMainStructureFragments, validateMainStructureJson } from './mainStructureCacheAtomic';
 
 export type MainStructureTreeNode = Record<string, unknown>;
 
@@ -74,31 +75,32 @@ export function buildMainStructureUrl(
 
 /** Persiste la respuesta del API en el dispositivo (misma lógica que JerarquiaModule en original-proyect). */
 export async function persistMainStructurePayload(data: Record<string, unknown>): Promise<MainStructureTreeNode[]> {
+  // Issue #178: la carga se valida ANTES de borrar o escribir nada; una respuesta rota no debe destruir la caché que ya sirve.
   if (data.fragments && typeof data.fragments === 'object' && !Array.isArray(data.fragments)) {
     const fragments = data.fragments as Record<string, unknown>;
+    const fragmentsCheck = validateMainStructureFragments(fragments);
+    if (!fragmentsCheck.ok) throw new Error(fragmentsCheck.reason);
     await persistMainStructureFragments(fragments);
     return mergeMainStructureFragments(fragments as Record<string, any>) as MainStructureTreeNode[];
   }
 
+  let structureJson: string | null = null;
   let rawStructure: unknown = data.structure;
-  if (typeof rawStructure === 'string' && rawStructure.trim().length > 0) {
-    await persistMainStructureFragments({});
-    await writeMainStructureCacheString(rawStructure);
-    try {
-      rawStructure = JSON.parse(rawStructure);
-    } catch {
+  if (typeof rawStructure === 'string') {
+    const check = validateMainStructureJson(rawStructure);
+    if (check.ok) {
+      structureJson = rawStructure;
+      rawStructure = check.tree;
+    } else {
       rawStructure = null;
     }
-  } else if (typeof rawStructure === 'string') {
-    rawStructure = null;
   }
 
   if (Array.isArray(rawStructure)) {
     const structureTree = rawStructure as MainStructureTreeNode[];
-    if (typeof data.structure !== 'string') {
-      await persistMainStructureFragments({});
-      await writeMainStructureCacheString(JSON.stringify(structureTree));
-    }
+    // Primero la caché nueva completa (si falla, no se tocó nada) y solo después se quitan los fragmentos anteriores.
+    await writeMainStructureCacheString(structureJson ?? JSON.stringify(structureTree));
+    await persistMainStructureFragments({});
     return structureTree;
   }
 

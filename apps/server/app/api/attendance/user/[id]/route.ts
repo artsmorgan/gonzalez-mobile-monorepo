@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { authorizeSelfOrAdmin, denialBody } from "../../../../../utils/objectAccess";
+import { isSuperAdminEmpleado } from "../../../../../utils/isSuperAdminEmpleado";
 import { toZonedTime, format } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
@@ -29,6 +31,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
+        // Issue #181: solo la propia persona o un administrador.
+        const access = await authorizeSelfOrAdmin({ callerId: payload.id, targetId: id, isAdmin: () => isSuperAdminEmpleado(req, Number(payload.id)) });
+        if (!access.allowed) { return NextResponse.json(denialBody(access), { status: access.status }); }
 
         const searchParams = req.nextUrl.searchParams;
         const latitude = searchParams.get("lat");

@@ -89,6 +89,8 @@ import {
 } from './hooks/documentosEntregadosCacheHelpers';
 import { createApreciacionVulnerabilidad, deleteApreciacionVulnerabilidad, deleteApreciacionVulnerabilidadImage, updateApreciacionVulnerabilidad, updateApreciacionVulnerabilidadFirmaSolicitante } from './hooks/apreciacionVulnerabilidadFunctions';
 import { eventBus } from './hooks/eventBus';
+import { shouldCheckVersion } from './hooks/versionCheckThrottle';
+import { runQueueRetention } from './hooks/installQueueOwnership';
 import {
   patchSucursalPuestosUbicacionInFragments,
   writePuestoUbicacionDispositivo,
@@ -201,7 +203,7 @@ import getHoraAccion from './hooks/getHoraAccion';
 import { removeCurrentMarcaIfExpired } from './hooks/currentMarcaExpiry';
 import DeviceStatusModal from './components/DeviceStatusModal';
 import GuardifyGate from './components/GuardifyGate';
-import authedFetch from './hooks/authedFetch';
+import authedFetch, { SESSION_REVOKED_EVENT } from './hooks/authedFetch';
 import updateServerTime from './hooks/updateServerTime';
 import { fetchAndPersistModulesRelease } from './hooks/getModulesRelease';
 import updateLastLocation from './hooks/updateLastLocation';
@@ -783,6 +785,18 @@ function AppContent() {
     };
   }, [showHierarchyUpdateOverlay, hideHierarchyUpdateOverlay]);
 
+  /** Issue #174: si el servidor cerró la sesión (p. ej. la revocó un administrador) se avisa por qué en vez de volver al inicio sin explicación. */
+  useEffect(() => {
+    const onSessionEndedByServer = (payload?: { message?: string; reason?: string | null }) => {
+      const detail = payload?.reason ? `\n\nMotivo: ${payload.reason}` : '';
+      Alert.alert('Sesión cerrada', `${payload?.message ?? 'Un administrador cerró tu sesión.'}${detail}`);
+    };
+    eventBus.on(SESSION_REVOKED_EVENT, onSessionEndedByServer);
+    return () => {
+      eventBus.off(SESSION_REVOKED_EVENT, onSessionEndedByServer);
+    };
+  }, []);
+
   /**
    * Colas de sincronización. Bitácoras: `bitacora_vehiculo_detenido_cache` (`bySucursalId`). Checklists: misma forma en
    * `checklist_supervision_cache` (`checklistSupervisionCacheStorage`). Jerarquía: `loadMainStructureTreeMerged` / fragmentos.
@@ -853,13 +867,26 @@ function AppContent() {
    * (p. ej. "1.0.0" -> 100 vs "1.0.1" -> 101).
    */
   const LAST_APP_VERSION_KEY = 'last_app_version';
+  /** Momento (ms) de la última consulta exitosa de `/api/mobile-versions` (issue #179). */
+  const LAST_APP_VERSION_CHECKED_AT_KEY = 'last_app_version_checked_at';
 
   const versionToComparableNumber = (v: string): number => {
     const n = parseInt(String(v || '').replace(/\./g, ''), 10);
     return Number.isFinite(n) ? n : 0;
   };
 
+  /** Última respuesta real de `/api/mobile-versions` de esta ejecución; se reutiliza mientras no toque consultar de nuevo (issue #179). */
+  const lastVersionPayloadRef = useRef<{ available: boolean; data: any; appVersion: string } | null>(null);
+
   const checkMobileVersionAvailability = useCallback(async () => {
+    // Issue #179: la versión publicada cambia con cada publicación, no cada minuto. Se consulta como máximo cada
+    // `VERSION_CHECK_MIN_INTERVAL_MS`; entre consultas se repite la última respuesta real (sin red) para que el botón de actualización no desaparezca.
+    const lastCheckedRaw = await AsyncStorage.getItem(LAST_APP_VERSION_CHECKED_AT_KEY).catch(() => null);
+    const cached = lastVersionPayloadRef.current;
+    if (cached && !shouldCheckVersion({ lastCheckedAt: lastCheckedRaw ? Number(lastCheckedRaw) : null, now: Date.now() })) {
+      eventBus.emit(MOBILE_VERSION_EVENT, cached);
+      return;
+    }
     const appVersionInfo = getEmbeddedAppVersionInfo();
     const appVersion = String(appVersionInfo?.version || '0.0.0');
     const storedLastVersion = await AsyncStorage.getItem(LAST_APP_VERSION_KEY);
@@ -908,11 +935,14 @@ function AppContent() {
       }
       const lastVersion = serverVersion || storedLastVersion || appVersion;
 
-      eventBus.emit(MOBILE_VERSION_EVENT, {
+      const payload = {
         available: versionToComparableNumber(lastVersion) > versionToComparableNumber(appVersion),
         data: versionData,
         appVersion,
-      });
+      };
+      lastVersionPayloadRef.current = payload;
+      await AsyncStorage.setItem(LAST_APP_VERSION_CHECKED_AT_KEY, String(Date.now())).catch(() => undefined);
+      eventBus.emit(MOBILE_VERSION_EVENT, payload);
     } catch (error) {
       console.error('Error checking mobile versions:', error);
       emitFromLastKnown(null);
@@ -973,14 +1003,12 @@ function AppContent() {
       try {
         const p = JSON.parse(legacyMarca);
         const list = await readAttendanceActions();
-        const storedPlanillas = await readStoredPlanillasToken();
         list.push({
           id: `mig_marca_${Date.now()}`,
           type: 'salida',
           marcaId: Number(p.marcaId),
           reason: String(p.reason ?? ''),
           horaAccion: Number(p.horaAccion),
-          ...(storedPlanillas?.token ? { planillasToken: storedPlanillas.token } : {}),
         });
         await writeAttendanceActions(list);
         await AsyncStorage.removeItem('marca_cache');
@@ -1033,6 +1061,10 @@ function AppContent() {
           console.log('[syncCaches] Esperando employee en memoria para ejecutar checks');
           return;
         }
+
+        // Conexión real con sesión activa: se registra que este usuario se conectó y se eliminan las acciones (y sus archivos) de los usuarios
+        // que llevan más de 2 semanas sin conectarse.
+        await runQueueRetention();
 
         console.log('Conectado — sync cachés (única instancia)');
 
@@ -1264,7 +1296,6 @@ function AppContent() {
               horaAccion: action.horaAccion,
             },
             marcaId: action.marcaId,
-            planillasToken: action.planillasToken,
             refreshAccessToken,
             logout,
           });
@@ -1288,7 +1319,6 @@ function AppContent() {
           const data = await revertAttendanceLeaving({
             marcaId: action.marcaId,
             horaAccion: action.horaAccion,
-            planillasToken: action.planillasToken,
             refreshAccessToken,
             logout,
           });
@@ -3800,8 +3830,6 @@ function AppContent() {
       try {
         if (action.type === 'create') {
           const { createChecklistSupervision } = await import('@/hooks/checklistSupervisionFunctions');
-          const planillasToken =
-            String(action.planillasToken ?? action.requestData?.planillasToken ?? '').trim() || undefined;
           // `firma_supervisor` se guarda como referencia a expo-files; se hidrata al base64/data URI
           // real que espera el endpoint (nunca se envía el nombre de archivo).
           const hydratedFirmaCreate = await hydrateSignatureRef(action.requestData?.firma_supervisor);
@@ -3810,7 +3838,6 @@ function AppContent() {
               ...action.requestData,
               firma_supervisor: hydratedFirmaCreate ?? action.requestData?.firma_supervisor ?? null,
             },
-            planillasToken,
             refreshAccessToken,
             logout,
           });
@@ -3871,8 +3898,6 @@ function AppContent() {
               ...action.requestData,
               firma_supervisor: hydratedFirmaUpdate ?? action.requestData?.firma_supervisor ?? null,
             },
-            planillasToken:
-              String(action.planillasToken ?? action.requestData?.planillasToken ?? '').trim() || undefined,
             refreshAccessToken,
             logout,
           });
@@ -4050,7 +4075,7 @@ function AppContent() {
           const result = await updateHorarioMinutosAlmuerzo(action.horarioId, action.minutos, {
             refreshAccessToken,
             logout,
-          }, action.planillasToken);
+          });
           if (result.status) {
             await clearHorarioMinutosActions();
           }
@@ -6310,8 +6335,8 @@ function AppContent() {
 
             try {
               const storedPlanillas = await readStoredPlanillasToken();
-              const planillasToken =
-                String(action?.planillasToken ?? '').trim() || storedPlanillas?.token || null;
+              // Issue #170: el token se toma del almacén seguro al enviar; las acciones encoladas ya no lo llevan.
+              const planillasToken = storedPlanillas?.token || null;
 
               const response = await authedFetch({
                 url: `${apiUrl}/api/puestos/${action.puesto_id}/ubicacion`,
@@ -8830,8 +8855,7 @@ function AppContent() {
         }
 
         const storedPlanillas = await readStoredPlanillasToken();
-        const planillasToken =
-          String(action.planillasToken ?? '').trim() || storedPlanillas?.token || '';
+        const planillasToken = storedPlanillas?.token || '';
 
         const response = await authedFetch({
           url: `${apiUrl}/api/traslado-plaza/${accionId}/upload-file`,
@@ -8927,7 +8951,6 @@ function AppContent() {
             firma_ejecutivo_cuenta_manual: action.firma_ejecutivo_cuenta_manual,
             firma_ejecutivo_cuenta_digital: action.firma_ejecutivo_cuenta_digital,
             hora_accion: action.hora_accion,
-            planillasToken: action.planillasToken,
             refreshAccessToken,
             logout,
           });
