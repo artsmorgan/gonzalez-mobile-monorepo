@@ -30,6 +30,19 @@ export function mapLoginMarcaRow(r: any): OutRow {
     };
 }
 
+/**
+ * Detalle de las pausas de un almuerzo para Guardify (columna `pausas_detalle`, tipo `pausas`): texto JSON de
+ * `[{ inicio, fin, motivo }]` con las fechas «de pared» (`YYYY-MM-DDTHH:mm:ss`), como el resto de columnas de fecha.
+ * Sin lista (el registro no la trae) → `null`; sin pausas → `"[]"`. Guardify da el formato visible; aquí no se interpreta nada.
+ */
+export function pausasDetalle(pausasList: unknown): string | null {
+    if (!Array.isArray(pausasList)) return null;
+    const out = pausasList
+        .map((p: any) => ({ inicio: fmtDt(p?.startTime ?? p?.inicio), fin: fmtDt(p?.endTime ?? p?.fin), motivo: txt(p?.reason ?? p?.motivo) }))
+        .filter((p) => p.inicio || p.fin || p.motivo);
+    return JSON.stringify(out);
+}
+
 export function mapTiempoAlmuerzoRow(r: any): OutRow {
     return {
         id: Number(r.id),
@@ -45,6 +58,7 @@ export function mapTiempoAlmuerzoRow(r: any): OutRow {
         sucursal: txt(r.corpo_nombre),
         puesto: txt(r.puesto_nombre),
         pausas: Array.isArray(r.pausas_list) ? r.pausas_list.length : 0,
+        pausas_detalle: pausasDetalle(r.pausas_list),
         manual: r.es_manual ? "Sí" : "No",
         // Nunca se expone `firma_empleado` (imagen de la firma).
     };

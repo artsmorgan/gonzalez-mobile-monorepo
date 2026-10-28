@@ -219,6 +219,27 @@ describe("mapeo de filas", () => {
         assert.equal(o.manual, "Sí");
         assert.equal(JSON.stringify(o).includes("base64"), false);
     });
+    it("tiempo de almuerzo: detalle de pausas (pausas_detalle) como texto JSON con fechas de pared", () => {
+        const base = { id: 1, inicio: new Date("2026-09-01T12:00:00Z"), fin: new Date("2026-09-01T12:45:00Z"), minutos_almuerzo: 45, es_manual: false };
+        const o = mapTiempoAlmuerzoRow({ ...base, pausas_list: [{ startTime: "2026-09-01 12:10:00", endTime: "2026-09-01 12:13:30", reason: "motivo uno" }, { startTime: "2026-09-01 12:20:00", endTime: "", reason: "" }] });
+        assert.equal(o.pausas, 2);
+        assert.deepEqual(JSON.parse(String(o.pausas_detalle)), [
+            { inicio: "2026-09-01T12:10:00", fin: "2026-09-01T12:13:30", motivo: "motivo uno" },
+            { inicio: "2026-09-01T12:20:00", fin: null, motivo: null },
+        ]);
+    });
+    it("tiempo de almuerzo: sin pausas → \"[]\" y cantidad 0; sin lista → null (Guardify muestra «-»)", () => {
+        const base = { id: 1, inicio: new Date("2026-09-01T12:00:00Z"), fin: new Date("2026-09-01T12:45:00Z"), es_manual: false };
+        const sin = mapTiempoAlmuerzoRow({ ...base, pausas_list: [] });
+        assert.equal(sin.pausas, 0); assert.equal(sin.pausas_detalle, "[]");
+        const nulo = mapTiempoAlmuerzoRow({ ...base });
+        assert.equal(nulo.pausas, 0); assert.equal(nulo.pausas_detalle, null);
+    });
+    it("tiempo de almuerzo: la cantidad coincide con el detalle, ignora entradas vacías y nunca expone la firma", () => {
+        const o = mapTiempoAlmuerzoRow({ id: 1, firma_empleado: "data:image/png;base64,AAAA", pausas_list: [{ startTime: "2026-09-01 12:10:00", endTime: "2026-09-01 12:11:00", reason: "x" }, {}, null] });
+        assert.equal(JSON.parse(String(o.pausas_detalle)).length, 1);
+        assert.equal(JSON.stringify(o).includes("base64"), false);
+    });
     it("ingresos de usuario: nunca expone el token de refresco", () => {
         const o = mapIngresoUsuarioRow({ id: 9, token: "TOKEN-SECRETO", createdAt: new Date("2026-09-01T00:00:00Z"), expiresAt: new Date("2026-09-08T00:00:00Z"), sessionId: "s-1", device: '["a","b"]', revoked: false, c_empleado: { nombre: "Ana", primer_apellido: "Soto", cedula: "1-1" } });
         assert.equal(JSON.stringify(o).includes("TOKEN-SECRETO"), false);
