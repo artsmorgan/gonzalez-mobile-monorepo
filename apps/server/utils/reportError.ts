@@ -1,4 +1,5 @@
 import { callDynamicPrisma } from "./callDynamicPrisma";
+import { isInternalRequest } from "./internalRequests";
 import { NextRequest } from "next/server";
 import { toZonedTime, format } from "date-fns-tz";
 import { verifyAccessTokenByApi } from '../utils/verifyAccessTokenByApi';
@@ -22,7 +23,8 @@ export async function reportError(
         created_at  DateTime @default(now()) @db.DateTime(0)
     }
     */
-    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+    // Una petición interna (la API de acciones de Guardify) no trae JWT de usuario: no se le reenvía su llave a otro servicio para validarla.
+    const { payload } = isInternalRequest(req) ? { payload: null as { id?: unknown } | null } : await verifyAccessTokenByApi(req);
 
     let now = toZonedTime(new Date(), "America/Costa_Rica");
     if (process.env.NODE_ENV === "development") {
@@ -39,8 +41,8 @@ export async function reportError(
                 endpoint,
                 method,
                 status_code,
-                message,
-                user_id: payload.id,
+                message: message_error,
+                user_id: payload?.id ?? null,
                 created_at: now
             }
         }

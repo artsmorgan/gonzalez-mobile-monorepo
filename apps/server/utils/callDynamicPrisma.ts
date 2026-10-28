@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 import axios from "axios";
 import { resolveUserAccessToken } from "./resolveUserAccessToken";
 import { actorFromRequest } from "./auditFields";
+import { isInternalRequest, markInternalRequest } from "./internalRequests";
 import { llaveroDesdeEntorno, registrarEvidencia, TABLAS_CON_EVIDENCIA } from "./evidencia";
 
 const EVIDENCE_HEADERS = ["x-guardify-device", "x-device-uid", "x-evidence-lat", "x-evidence-lng", "x-evidence-at", "x-evidence-perm"] as const;
@@ -40,6 +41,8 @@ async function registrarEvidenciaDeEscritura(req: NextRequest, data: Record<stri
     }
 }
 
+export { markInternalRequest, isInternalRequest };
+
 type CallDynamicPrismaParams = {
     req: NextRequest;
     data: Record<string, any>;
@@ -61,6 +64,7 @@ export async function callDynamicPrisma({
     if (!req.headers) {
         throw new Error("req.headers no está disponible");
     }
+    if (isInternalRequest(req)) shouldVerifyAccessToken = false;
 
     const accessToken = resolveUserAccessToken(req, token);
     const mobileToken = (mobileAccessToken || process.env.MOBILE_ACCESS_TOKEN || "").trim();
