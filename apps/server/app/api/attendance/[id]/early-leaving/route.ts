@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { authorizeSelfOrAdmin, denialBody } from "../../../../../utils/objectAccess";
+import { isSuperAdminEmpleado } from "../../../../../utils/isSuperAdminEmpleado";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
@@ -6,8 +9,13 @@ import { reportError } from "../../../../../utils/reportError";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
+        // Issue #181: solo la propia persona o un administrador.
+        const access = await authorizeSelfOrAdmin({ callerId: payload.id, targetId: id, isAdmin: () => isSuperAdminEmpleado(req, Number(payload.id)) });
+        if (!access.allowed) { return NextResponse.json(denialBody(access), { status: access.status }); }
 
         const searchParams = req.nextUrl.searchParams;
         const endTime = searchParams.get("endTime");

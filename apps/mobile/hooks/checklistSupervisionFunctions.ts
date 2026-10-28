@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 import authedFetch from './authedFetch';
+import { readStoredPlanillasToken } from './planillasTokenStorage';
 import { hydrateChecklistEvaluationImagesForApi } from './checklistSupervisionEvaluationFiles';
 import { hydrateArticulosPuestoFilesForApi } from '@/utils/articuloMantenimientoFiles';
 
@@ -173,14 +174,16 @@ const buildChecklistHeaders = (planillasToken?: string | null): Record<string, s
   return headers;
 };
 
-const resolvePlanillasTokenFromParams = (
+/** Token explícito si lo hay; si no, el vigente del almacén seguro (las acciones encoladas ya no lo guardan, issue #170). */
+const resolvePlanillasTokenFromParams = async (
   planillasToken?: string | null,
   requestData?: any,
-): string | undefined => {
+): Promise<string | undefined> => {
   const direct = String(planillasToken ?? '').trim();
   if (direct) return direct;
   const fromRequest = String(requestData?.planillasToken ?? '').trim();
-  return fromRequest || undefined;
+  if (fromRequest) return fromRequest;
+  return (await readStoredPlanillasToken())?.token || undefined;
 };
 
 export async function createChecklistSupervision({
@@ -193,7 +196,7 @@ export async function createChecklistSupervision({
     const apiUrl = getApiUrl();
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
     const payload = await requestDataWithHydratedEvaluacion(requestData);
-    const resolvedPlanillasToken = resolvePlanillasTokenFromParams(planillasToken, requestData);
+    const resolvedPlanillasToken = await resolvePlanillasTokenFromParams(planillasToken, requestData);
 
     const response = await authedFetch({
       url: `${apiUrl}/api/checklist-supervision`,
@@ -269,7 +272,7 @@ export async function updateChecklistSupervision({
     const apiUrl = getApiUrl();
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
     const payload = await requestDataWithHydratedEvaluacion(requestData);
-    const resolvedPlanillasToken = resolvePlanillasTokenFromParams(planillasToken, requestData);
+    const resolvedPlanillasToken = await resolvePlanillasTokenFromParams(planillasToken, requestData);
 
     const response = await authedFetch({
       url: `${apiUrl}/api/checklist-supervision/${id}`,

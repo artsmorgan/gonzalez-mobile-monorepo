@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 import authedFetch from './authedFetch';
 import { readStoredPlanillasToken } from './planillasTokenStorage';
+import { pickPlanillasToken } from './planillasSendToken';
 import type {
   BasicResponse,
   ListMarcasMutuoResponse,
@@ -77,7 +78,7 @@ export const listMarcasParaMutuo = async ({
 
     const storedPlanillas = await readStoredPlanillasToken();
     const planillasToken =
-      String(planillasTokenOverride ?? '').trim() || storedPlanillas?.token || null;
+      pickPlanillasToken(planillasTokenOverride, storedPlanillas?.token);
 
     const response = await authedFetch({
       url: `${apiUrl}/api/mutuos-acuerdos/marcas?empleado_id=${encodeURIComponent(String(empleado_id))}&fecha=${encodeURIComponent(fecha)}`,
@@ -192,7 +193,7 @@ export const signMutuoAcuerdoEjecutivo = async ({
 
     const storedPlanillas = await readStoredPlanillasToken();
     const planillasToken =
-      String(planillasTokenOverride ?? '').trim() || storedPlanillas?.token || null;
+      pickPlanillasToken(planillasTokenOverride, storedPlanillas?.token);
 
     const payload = {
       firma_ejecutivo_cuenta_manual: normalizeBase64(String(firma_ejecutivo_cuenta_manual || '')),

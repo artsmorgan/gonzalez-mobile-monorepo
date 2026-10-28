@@ -20,6 +20,9 @@ import {
     type UserLoginOrderKey,
 } from "../../../utils/reports-functions/userLogin";
 import { purgeOldMobileReports } from "../../../utils/purgeOldMobileReports";
+import { authorizeReportesOperation } from "../../../utils/reportesAccess";
+import { slimRefreshTokenRow } from "../../../utils/reportesUserLogin";
+import { isSuperAdminEmpleado } from "../../../utils/isSuperAdminEmpleado";
 import { DEFAULT_REPORT_MAX_ATTEMPTS } from "../../../utils/reportJobQueue";
 import { drainPendingReportJobs } from "../../../utils/runReportJobCycle";
 import { signalReportWorkerActivity } from "../../../utils/reportWorkerSchedule";
@@ -363,6 +366,8 @@ export type ReportesPayload = {
 export type ReportesOperationResult = {
     status: boolean;
     message?: string;
+    /** Código HTTP cuando el fallo no es un error interno (p. ej. 403 por falta de permiso). */
+    httpStatus?: number;
     data?: unknown;
     count?: number;
 };
@@ -612,6 +617,15 @@ export async function executeReportesOperation(
 
         const op = String(payload.operation || "").trim();
 
+        // Control de acceso por operación (issue #169): lo que no esté en la tabla de `utils/reportesAccess.ts` se deniega.
+        const access = await authorizeReportesOperation(op, {
+            empleadoId: auth.empleadoId,
+            isAdmin: () => isSuperAdminEmpleado(req, auth.empleadoId),
+        });
+        if (!access.ok) {
+            return { status: false, message: access.message, httpStatus: access.httpStatus };
+        }
+
         if (op === "purgeOldReports") {
             const result = await purgeOldMobileReports(reportDb);
             return { status: true, data: result };
@@ -833,25 +847,8 @@ export async function executeReportesOperation(
             const mf = normalizeUserLoginModuleFilters(coerceModuleFiltersInput(payload.moduleFilters));
             const orderKey = (payload.order_by || "nombre_usuario") as UserLoginOrderKey;
             const rows = await queryRefreshTokensUserLogin(reportDb, mf, orderKey);
-            const slim = rows.map((r) => ({
-                id: r.id,
-                token: r.token,
-                createdAt: r.createdAt,
-                expiresAt: r.expiresAt,
-                sessionId: r.sessionId,
-                revoked: r.revoked,
-                empleadoId: r.empleadoId,
-                device: r.device,
-                c_empleado: r.c_empleado
-                    ? {
-                          id: r.c_empleado.id,
-                          nombre: r.c_empleado.nombre,
-                          primer_apellido: r.c_empleado.primer_apellido,
-                          segundo_apellido: r.c_empleado.segundo_apellido,
-                          codigo: r.c_empleado.codigo,
-                      }
-                    : null,
-            }));
+            // Sin el token ni su hash: solo metadatos de la sesión y una referencia corta (ver `utils/reportesUserLogin.ts`).
+            const slim = rows.map((r) => slimRefreshTokenRow(r));
             return { status: true, data: slim, count: slim.length };
         }
 

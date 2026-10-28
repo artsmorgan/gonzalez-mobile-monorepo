@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import authedFetch from './authedFetch';
 import { buildPlanillasTokenRequestHeaders, readStoredPlanillasToken } from './planillasTokenStorage';
+import { pickPlanillasToken } from './planillasSendToken';
 
 export const LUNCH_TIME_HORARIO_ACTIONS_KEY = 'lunch_time_horario_actions';
 
@@ -64,7 +65,7 @@ export async function updateHorarioMinutosAlmuerzo(
 ): Promise<{ status: boolean; message?: string }> {
   const storedPlanillas = await readStoredPlanillasToken();
   const planillasToken =
-    String(planillasTokenOverride ?? '').trim() || storedPlanillas?.token || null;
+    pickPlanillasToken(planillasTokenOverride, storedPlanillas?.token);
 
   const response = await authedFetch({
     url: `${getApiUrl()}/api/lunch-time/horario/${horarioId}/minutos-almuerzo`,
@@ -106,13 +107,13 @@ export async function queueHorarioMinutosUpdateAction(
   minutos: number,
   planillasToken?: string | null,
 ): Promise<void> {
-  const token = String(planillasToken ?? '').trim();
+  // Issue #170: el token no se guarda en la cola; al enviar se toma del almacén seguro.
+  void planillasToken;
   const action: LunchHorarioAction = {
     id: 'horario_minutos',
     type: 'update_minutos',
     horarioId,
     minutos,
-    ...(token ? { planillasToken: token } : {}),
   };
   await AsyncStorage.setItem(LUNCH_TIME_HORARIO_ACTIONS_KEY, JSON.stringify([action]));
 }

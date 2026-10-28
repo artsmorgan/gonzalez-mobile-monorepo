@@ -9,9 +9,11 @@
  *   llaves sensibles van al almacén seguro; las demás, al normal.
  * - Migración al abrir: si una llave sensible sigue en `AsyncStorage` (instalación anterior) se copia al almacén seguro, se verifica la
  *   lectura y SOLO ENTONCES se borra del normal. La sesión existente no se pierde.
- * - Si el almacén seguro no está disponible (APK anterior sin el módulo nativo, Expo Go, web) todo sigue en `AsyncStorage` como hasta ahora.
- * - Si una operación del almacén seguro falla, se usa `AsyncStorage` para esa llave: es preferible conservar la sesión a dejar al guarda
- *   sin acceso por un error del Keystore.
+ * - Credenciales NUNCA en claro (issue #173): si el almacén seguro no está disponible o rechaza la escritura de una llave sensible, `setItem`
+ *   lanza `SecureStorageError` (tipado) y no escribe nada en `AsyncStorage`. El respaldo en claro solo existe con `allowPlainFallback`
+ *   (desarrollo / Expo Go). Leer lo que una versión anterior dejó en `AsyncStorage` sigue funcionando para no perder la sesión.
+ * - Borrado que falla (issue #173): no se oculta ni se da por hecho. La llave queda como PENDIENTE (persistida en `secure_pending_deletes`), no
+ *   se vuelve a leer su valor viejo y se reintenta al abrir la app, al leerla y con `retryPendingDeletes()`.
  */
 
 /** Llaves de la sesión que no deben quedar en `AsyncStorage` (el rol del empleado va dentro de `employee_data`). */
@@ -24,6 +26,35 @@ export const SENSITIVE_STORAGE_KEYS = [
   'planillas_token_expires_at',
   'auth_session_mode',
 ] as const;
+
+export type SecureStorageErrorCode = 'secure_unavailable' | 'secure_write_failed';
+
+/** La credencial no se pudo guardar de forma segura; NO se escribió en claro. */
+export class SecureStorageError extends Error {
+  readonly code: SecureStorageErrorCode;
+  readonly key: string;
+  constructor(code: SecureStorageErrorCode, key: string, cause?: unknown) {
+    super(
+      code === 'secure_unavailable'
+        ? `El almacenamiento seguro del equipo no está disponible (${key}).`
+        : `No se pudo guardar ${key} en el almacenamiento seguro del equipo.`,
+    );
+    this.name = 'SecureStorageError';
+    this.code = code;
+    this.key = key;
+    (this as { cause?: unknown }).cause = cause;
+  }
+}
+
+export function isSecureStorageError(e: unknown): e is SecureStorageError {
+  return e instanceof SecureStorageError || (e as { name?: unknown } | null)?.name === 'SecureStorageError';
+}
+
+/** Llaves cuyo borrado seguro falló y se reintenta (solo nombres, nunca valores). Vive en el almacén normal. */
+export const PENDING_SECURE_DELETES_KEY = 'secure_pending_deletes' as const;
+
+/** Intentos de escritura segura antes de rendirse (un fallo pasajero del Keystore no debe cerrar la sesión). */
+const SECURE_WRITE_ATTEMPTS = 2;
 
 export interface PlainStorage {
   getItem(key: string): Promise<string | null>;
@@ -92,6 +123,10 @@ export interface SecureRouter extends PlainStorage {
   ready(): Promise<void>;
   /** ¿Se está usando el almacén seguro? (false si no está disponible). */
   isSecure(): boolean;
+  /** Llaves cuyo borrado seguro falló y siguen pendientes. */
+  getPendingDeletes(): string[];
+  /** Reintenta los borrados pendientes y devuelve los que siguen pendientes. */
+  retryPendingDeletes(): Promise<string[]>;
 }
 
 export function createSecureRouter(opts: {
@@ -99,13 +134,64 @@ export function createSecureRouter(opts: {
   secure: SecureBackend;
   sensitiveKeys?: readonly string[];
   onError?: (context: string, error: unknown) => void;
+  /**
+   * Solo desarrollo / Expo Go: permite guardar credenciales en `AsyncStorage` cuando el almacén seguro no está o falla.
+   * En producción debe ser `false` (valor por defecto): es la degradación a texto plano que corrige el issue #173.
+   */
+  allowPlainFallback?: boolean;
 }): SecureRouter {
   const sensitive = new Set<string>(opts.sensitiveKeys ?? SENSITIVE_STORAGE_KEYS);
   const secure = withChunks(opts.secure);
   const { plain } = opts;
   const report = opts.onError ?? (() => undefined);
+  const allowPlain = opts.allowPlainFallback === true;
   let secureOk = false;
   let readyPromise: Promise<void> | null = null;
+  let migrated = false;
+  const pending = new Set<string>();
+
+  const persistPending = async (): Promise<void> => {
+    try {
+      if (pending.size === 0) await plain.removeItem(PENDING_SECURE_DELETES_KEY);
+      else await plain.setItem(PENDING_SECURE_DELETES_KEY, JSON.stringify([...pending]));
+    } catch (e) {
+      report('registro de borrados pendientes', e); // queda en memoria y se reintenta en esta ejecución
+    }
+  };
+
+  const loadPending = async (): Promise<void> => {
+    try {
+      const raw = await plain.getItem(PENDING_SECURE_DELETES_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) for (const k of parsed) if (typeof k === 'string' && sensitive.has(k)) pending.add(k);
+    } catch (e) {
+      report('lectura de borrados pendientes', e);
+    }
+  };
+
+  /** Intenta borrar una llave pendiente; `true` si ya no está en el almacén seguro. */
+  const tryDeletePending = async (key: string): Promise<boolean> => {
+    try {
+      await secure.remove(key);
+    } catch (e) {
+      report(`reintento de borrado de ${key}`, e);
+      return false;
+    }
+    pending.delete(key);
+    return true;
+  };
+
+  const retryPendingDeletes = async (): Promise<string[]> => {
+    await ready();
+    if (pending.size === 0) return [];
+    if (secureOk) {
+      let changed = false;
+      for (const key of [...pending]) if (await tryDeletePending(key)) changed = true;
+      if (changed) await persistPending();
+    }
+    return [...pending];
+  };
 
   const migrate = async () => {
     for (const key of sensitive) {
@@ -132,10 +218,33 @@ export function createSecureRouter(opts: {
         } catch {
           secureOk = false;
         }
-        if (secureOk) await migrate();
+        await loadPending();
+        if (secureOk) {
+          await migrate();
+          migrated = true;
+          if (pending.size > 0) {
+            let changed = false;
+            for (const key of [...pending]) if (await tryDeletePending(key)) changed = true;
+            if (changed) await persistPending();
+          }
+        }
       })();
     }
     return readyPromise;
+  };
+
+  /** Si el almacén seguro estaba momentáneamente no disponible, lo vuelve a probar (y migra) en vez de quedar fijado en «no disponible». */
+  const reprobe = async (): Promise<void> => {
+    if (secureOk) return;
+    try {
+      secureOk = await secure.isAvailable();
+    } catch {
+      secureOk = false;
+    }
+    if (secureOk && !migrated) {
+      await migrate();
+      migrated = true;
+    }
   };
 
   const useSecure = async (key: string): Promise<boolean> => {
@@ -144,6 +253,12 @@ export function createSecureRouter(opts: {
   };
 
   const getItem = async (key: string): Promise<string | null> => {
+    await ready();
+    // Un borrado pendiente nunca devuelve el valor viejo: se reintenta y, si sigue sin poder borrarse, se trata como ausente.
+    if (pending.has(key)) {
+      if (secureOk && (await tryDeletePending(key))) await persistPending();
+      if (pending.has(key)) return null;
+    }
     if (await useSecure(key)) {
       try {
         const v = await secure.get(key);
@@ -157,26 +272,57 @@ export function createSecureRouter(opts: {
   };
 
   const setItem = async (key: string, value: string): Promise<void> => {
-    if (await useSecure(key)) {
-      try {
-        await secure.set(key, value);
-        await plain.removeItem(key);
-        return;
-      } catch (e) {
-        report(`escritura de ${key}`, e);
+    await ready();
+    if (!sensitive.has(key)) {
+      await plain.setItem(key, value);
+      return;
+    }
+    if (!secureOk) await reprobe();
+    if (!secureOk) {
+      if (allowPlain) {
         await plain.setItem(key, value);
         return;
       }
+      throw new SecureStorageError('secure_unavailable', key);
     }
-    await plain.setItem(key, value);
+
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < SECURE_WRITE_ATTEMPTS; attempt++) {
+      try {
+        await secure.set(key, value);
+        lastError = null;
+        break;
+      } catch (e) {
+        lastError = e;
+        report(`escritura de ${key}`, e);
+      }
+    }
+    if (lastError) {
+      if (allowPlain) {
+        await plain.setItem(key, value);
+        return;
+      }
+      throw new SecureStorageError('secure_write_failed', key, lastError);
+    }
+
+    if (pending.delete(key)) await persistPending(); // el valor nuevo sustituye al que estaba por borrarse
+    try {
+      await plain.removeItem(key);
+    } catch (e) {
+      report(`limpieza de ${key} en AsyncStorage`, e);
+    }
   };
 
   const removeItem = async (key: string): Promise<void> => {
     if (await useSecure(key)) {
       try {
         await secure.remove(key);
+        if (pending.delete(key)) await persistPending();
       } catch (e) {
+        // No se oculta: queda pendiente (persistido), no se vuelve a leer su valor y se reintenta.
         report(`borrado de ${key}`, e);
+        pending.add(key);
+        await persistPending();
       }
     }
     await plain.removeItem(key);
@@ -197,8 +343,19 @@ export function createSecureRouter(opts: {
       for (const [k, v] of pairs) await setItem(k, v);
     },
     async multiRemove(keys) {
-      for (const k of keys) await removeItem(k);
+      // Un error en una llave no debe dejar las demás sin borrar (cerrar sesión debe intentarlas todas).
+      let firstError: unknown = null;
+      for (const k of keys) {
+        try {
+          await removeItem(k);
+        } catch (e) {
+          firstError = firstError ?? e;
+        }
+      }
+      if (firstError) throw firstError;
     },
+    getPendingDeletes: () => [...pending],
+    retryPendingDeletes,
   };
 }
 

@@ -1647,11 +1647,16 @@ export default function MantenimientoEquipoScreen() {
         }
     }, [getConnectionStatus, refreshAccessToken, logout]);
 
+    /** Lectura de la plantilla en curso; se cancela al salir de la pantalla o al elegir otro archivo (issue #175). */
+    const bulkImportAbortRef = useRef<AbortController | null>(null);
+    useEffect(() => () => { bulkImportAbortRef.current?.abort(); }, []);
+
     const handleUploadBulkPlantilla = useCallback(async () => {
         if (!(await getConnectionStatus())) {
             Alert.alert('Sin conexión', 'La validación de códigos de puesto requiere conexión a internet.');
             return;
         }
+        let abortController: AbortController | null = null;
         try {
             const result = await DocumentPicker.getDocumentAsync({
                 type: [
@@ -1663,8 +1668,16 @@ export default function MantenimientoEquipoScreen() {
             });
             if (result.canceled || !result.assets?.[0]) return;
             const asset = result.assets[0];
+            // Issue #175: una lectura anterior se cancela al elegir otro archivo; el tamaño que informa el selector se valida antes de leerlo.
+            bulkImportAbortRef.current?.abort();
+            abortController = new AbortController();
+            bulkImportAbortRef.current = abortController;
             setIsBulkValidatingPlantilla(true);
-            const validation = await parseMantenimientoEquipoPlantillaLocal(asset.uri);
+            const validation = await parseMantenimientoEquipoPlantillaLocal(asset.uri, {
+                fileSize: asset.size,
+                signal: abortController.signal,
+            });
+            if (validation.cancelled) return;
             if (!validation.status) {
                 const errText =
                     validation.errors?.length
@@ -1706,7 +1719,10 @@ export default function MantenimientoEquipoScreen() {
             const msg = e instanceof Error ? e.message : 'No se pudo validar la plantilla.';
             Alert.alert('Error', msg);
         } finally {
-            setIsBulkValidatingPlantilla(false);
+            // Si otra lectura reemplazó a esta, ella se encarga de apagar el indicador.
+            if (!abortController || bulkImportAbortRef.current === abortController) {
+                setIsBulkValidatingPlantilla(false);
+            }
         }
     }, [getConnectionStatus, refreshAccessToken, logout]);
 

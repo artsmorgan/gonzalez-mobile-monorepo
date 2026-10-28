@@ -209,7 +209,8 @@ export function construirEvidencia(base: { tabla: string; registroId: number; ac
     const h = ctx.headers;
     const actorId = Number(ctx.actor?.id);
     const usuarioFirma = firma ? Number(firma.empleadoId) : NaN;
-    const usuarioId = Number.isFinite(usuarioFirma) && usuarioFirma > 0 ? usuarioFirma : Number.isFinite(actorId) && actorId > 0 ? actorId : null;
+    // Issue #181: el autor es la persona autenticada (token). El empleadoId de la firma lo manda el cliente y no puede cambiar de quién es la evidencia.
+    const usuarioId = Number.isFinite(actorId) && actorId > 0 ? actorId : Number.isFinite(usuarioFirma) && usuarioFirma > 0 ? usuarioFirma : null;
     // El equipo tal como lo ve Guardify (su id); sin registrar todavía, el UUID de la instalación.
     const dispositivo = String(h["x-guardify-device"] || h["x-device-uid"] || ctx.actor?.gdev || "").trim() || null;
 

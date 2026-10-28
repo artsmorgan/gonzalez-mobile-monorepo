@@ -162,36 +162,9 @@ export async function pendingAttendanceActionsRequirePlanillasToken(): Promise<b
   return Boolean(legacyMarca && legacyMarca.trim() !== '');
 }
 
+/** Issue #170: el token ya no se copia a las acciones; se toma del almacén seguro al enviar. Se conserva por compatibilidad y no hace nada. */
 export async function attachPlanillasTokenToPlanillasAttendanceActions(
-  planillasToken: string
+  _planillasToken: string
 ): Promise<void> {
-  const token = String(planillasToken ?? '').trim();
-  if (!token) return;
-
-  return withAttendanceActionsLock(async () => {
-    const actions = await readAttendanceActions();
-    let changed = false;
-
-    const next: AttendancePendingAction[] = [];
-    for (const action of actions) {
-      if (!attendanceActionRequiresPlanillasToken(action)) {
-        next.push(action);
-        continue;
-      }
-      if (String(action.planillasToken ?? '').trim() === token) {
-        next.push(action);
-        continue;
-      }
-      changed = true;
-      next.push({ ...action, planillasToken: token });
-    }
-
-    if (changed) {
-      if (next.length === 0) {
-        await AsyncStorage.removeItem(ATTENDANCE_ACTIONS_KEY);
-      } else {
-        await AsyncStorage.setItem(ATTENDANCE_ACTIONS_KEY, JSON.stringify(next));
-      }
-    }
-  });
+  return;
 }

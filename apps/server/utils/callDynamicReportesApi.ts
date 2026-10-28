@@ -5,6 +5,8 @@ import {
     type ReportesPayload,
 } from "../app/api/reportes/create";
 import { isLikelyJwt, resolveUserAccessToken } from "./resolveUserAccessToken";
+import { ReportesApiError } from "./reportesAccess";
+import { buildReportesPayload } from "./reportesPayload";
 
 type CallDynamicReportesParams = {
     req: NextRequest;
@@ -25,15 +27,12 @@ export async function callDynamicReportesApi({ req, body }: CallDynamicReportesP
     const mobileAccessToken = (process.env.MOBILE_ACCESS_TOKEN || "").trim();
     if (!mobileAccessToken) throw new Error("MOBILE_ACCESS_TOKEN no configurado");
 
-    const payload: ReportesPayload = {
-        mobileAccessToken,
-        shouldVerifyAccessToken: true,
-        token: accessToken || undefined,
-        ...body,
-    };
+    // El cuerpo del cliente va primero y los campos de seguridad después: no se pueden sobrescribir (issue #169).
+    const payload: ReportesPayload = buildReportesPayload({ body, mobileAccessToken, accessToken });
 
     const result = await executeReportesOperation(req, payload);
     if (!result.status) {
+        if (result.httpStatus) throw new ReportesApiError(result.message || "Operación no permitida", result.httpStatus);
         throw new Error(result.message || "Error reportes");
     }
     return result;

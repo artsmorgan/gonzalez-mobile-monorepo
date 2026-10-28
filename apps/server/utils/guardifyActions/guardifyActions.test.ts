@@ -12,6 +12,7 @@ import { makeActionEnv, type EnvDeps } from "./envFactory";
 import { PlanillasError } from "./env";
 import { isInternalRequest, markInternalRequest } from "../internalRequests";
 import { accionesDeMutuo, puedeRechazarMutuo, rechazarMutuoAcuerdo } from "./mutuos";
+import { memoryIdempotencyStore, type IdempotencyStore } from "../idempotency";
 import { accionesDePermiso, esEjecutivoDelPermiso, rechazarPermisoSolicitud } from "./permisos";
 
 // Solo estructuras de la lógica (ids, estados, banderas): ningún registro de negocio inventado. Los datos reales se crean en la app y se
@@ -544,11 +545,14 @@ describe("carga masiva del inventario de un puesto", () => {
         const f = world({ many: { n_articulo_corpo_puesto: [{ id: 1 }], e_estructura_puesto: [{ id: 10, codigo: "P-A" }], e_estructura_articulo_corpo_puesto_plan: [{ puesto_id: 10, articuloCP_id: 1 }], e_estructura_articulo_corpo_puesto_entrega: [{ puesto_id: 10, nomencladorArticuloCP_id: 1, marca: "M1", serie: "S1", modelo: "Mo1" }] } });
         const r: any = await cargar(f, [fila()]);
         assert.equal(r.ok, true); assert.deepEqual([r.body.created_plans, r.body.created_entregas], [0, 0]); assert.equal(r.body.skipped.length, 2);
-        assert.deepEqual(f.planillasCalls[0]!.body, { items: [] });
+        // Issue #181: con todo ya cargado no se llama a Planillas (antes se le mandaba una lista vacía).
+        assert.equal(f.planillasCalls.length, 0);
+        assert.match(r.body.message, /todo ya existía/);
     });
     it("si Planillas dice que no: 500; si lanza, el error sube y no se da por hecho", async () => {
         const r: any = await cargar(world({ planillas: () => ({ success: false }) }), [fila()]);
         assert.deepEqual([r.ok, r.status], [false, 500]);
+        assert.equal(r.message, "Error al cargar los artículos en Planillas");
         await assert.rejects(() => cargar(world({ planillas: () => { throw new Error("401"); } }), [fila()]), /401/);
     });
     it("el formato para Planillas no repite (puesto, artículo) y completa el modelo vacío", () => {
@@ -884,5 +888,111 @@ describe("carga de inventario: datos de entrada", () => {
     it("los números como texto numérico siguen valiendo (así vienen del Excel)", async () => {
         const r: any = await cargarInventarioPuesto(world().env, { modo: "validar", planillasToken: null, filas: [fila({ numero_articulo: "1", cantidad: "2" })] });
         assert.equal(r.ok, true);
+    });
+});
+
+describe("API de acciones: idempotencia por clave (protocolo de acciones; issues #172 y #181)", () => {
+    const env0 = { GUARDIFY_REPORTS_API_KEY: KEY };
+    const req = (method: string, headers: Record<string, string>, body?: unknown, url = "https://app.test/x") => { const text = body !== undefined ? JSON.stringify(body) : undefined; return new Request(url, { method, headers: { ...finalize(headers, method, url, text ?? ""), ...(body !== undefined ? { "content-type": "application/json" } : {}) }, body: text }); };
+    const H = (k = IDEM) => ({ ...goodHeaders(), "idempotency-key": k });
+    const jsonOf = async (r: Response) => r.json() as Promise<any>;
+    const mk = (tablas: Record<string, any> = { c_solicitud_permiso: { estado: "pendiente", ejecutivo_cuenta: 5, empleado_id: 8 } }, extra: object = {}) => {
+        const f = fakeEnv({ ...extra, tablas, empleados: { 5: { nombre: "e" }, 8: {} }, many: { n_articulo_corpo_puesto: [{ id: 1 }], e_estructura_puesto: [{ id: 10, codigo: "P-A" }], e_estructura_articulo_corpo_puesto_plan: [], e_estructura_articulo_corpo_puesto_entrega: [] } });
+        (f.env.prisma as any).c_empleado.findMany = async (a: any) => (a.where.cedula ? [{ id: 5, supervisor_id: null }] : []);
+        return f;
+    };
+    const conAlmacen = (f: ReturnType<typeof fakeEnv>, idempotency: IdempotencyStore = memoryIdempotencyStore()) => ({ deps: { getEnv: () => f.env, env: env0, now: () => NOW, idempotency: () => idempotency }, idempotency: idempotency as ReturnType<typeof memoryIdempotencyStore> });
+    const rechazar = (d: any, id = "1", accion = "rechazar", key = IDEM) => handleActionExecute(req("POST", H(key), {}), "permisos", id, accion, d);
+    const fila = { codigo_puesto: "P-A", numero_articulo: 1, cantidad: 2, serie: "S1", marca: "M1", modelo: "Mo1", fecha_entrega: "05-10-2026" };
+    const FIRMA = "firma-con-mas-de-diez-caracteres";
+    const sigs = [{ role: "digital", method: "digital", image: FIRMA }, { role: "manual", method: "manual", image: FIRMA }];
+    const conTurnos = { c_solicitud_permiso: { estado: "pendiente", ejecutivo_cuenta: 5, empleado_id: 8, tipo: "Sin goce", corpo_id: 3, turnos: JSON.stringify([{ id: 21 }]), fecha_inicio: "2026-10-01T00:00:00.000Z", fecha_fin: "2026-10-01T00:00:00.000Z" } };
+    const sucursal = { rows: { e_estructura_sucursal: { 3: {} } } };
+
+    it("el reintento con la misma clave devuelve el mismo resultado y el efecto ocurre una sola vez", async () => {
+        const f = mk();
+        const { deps } = conAlmacen(f);
+        const a = await rechazar(deps);
+        const antes = writes(f.calls).length;
+        const b = await rechazar(deps);
+        assert.equal(a.status, 200);
+        assert.equal(b.status, 200);
+        assert.deepEqual(await jsonOf(b), await jsonOf(a));
+        assert.equal(b.headers.get("idempotent-replay"), "true");
+        assert.ok(antes > 0, "la primera sí escribió");
+        assert.equal(writes(f.calls).length, antes, "el reintento no escribió nada");
+    });
+    it("aunque otra persona haya cambiado el registro después, el reintento recibe el resultado original (no «ya resuelto»)", async () => {
+        const f = mk();
+        const { deps } = conAlmacen(f);
+        const a = await rechazar(deps);
+        const original = await jsonOf(a);
+        f.env.call = async (d) => (d.action === "GET" ? { estado: "aprobado", ejecutivo_cuenta: 5, empleado_id: 8 } : {});
+        const b = await rechazar(deps);
+        assert.deepEqual([b.status, await jsonOf(b)], [200, original]);
+    });
+    it("la misma clave con otra acción u otro registro es 409 conflict y no ejecuta", async () => {
+        const f = mk();
+        const { deps } = conAlmacen(f);
+        await rechazar(deps);
+        const antes = writes(f.calls).length;
+        for (const [id, accion] of [["1", "aprobar"], ["2", "rechazar"]] as const) {
+            const r = await rechazar(deps, id, accion);
+            assert.deepEqual([r.status, (await jsonOf(r)).code], [409, "conflict"], `${id}/${accion}`);
+        }
+        assert.equal(writes(f.calls).length, antes);
+    });
+    it("un resultado que no es 2xx no se recuerda: la clave se puede reintentar (la persona abre sesión en Planillas y reintenta)", async () => {
+        const f = mk(conTurnos, sucursal);
+        const { deps, idempotency } = conAlmacen(f);
+        f.env.tokenPlanillas = async () => null;
+        const sin = await handleActionExecute(req("POST", H(), { signatures: sigs }), "permisos", "1", "aprobar", deps);
+        assert.deepEqual([sin.status, (await jsonOf(sin)).code], [409, "planillas_session_required"]);
+        assert.equal(idempotency.rows.size, 0, "no quedó reservada");
+        f.env.tokenPlanillas = async () => "token-estructural";
+        const con = await handleActionExecute(req("POST", H(), { signatures: sigs }), "permisos", "1", "aprobar", deps);
+        assert.notEqual((await jsonOf(con)).code, "planillas_session_required", "con sesión de Planillas la misma clave ya sigue adelante");
+    });
+    it("una clave mal formada es 400 invalid_request", async () => {
+        const f = mk();
+        const { deps } = conAlmacen(f);
+        for (const k of ["corta", "con espacios dentro 12345", "x".repeat(129)]) {
+            const r = await rechazar(deps, "1", "rechazar", k);
+            assert.deepEqual([r.status, (await jsonOf(r)).code], [400, "invalid_request"], k);
+        }
+    });
+    it("si el almacén no está disponible la acción NO se ejecuta: 503 sin code (Guardify lo lee como «no disponible»)", async () => {
+        const f = mk();
+        const caido: IdempotencyStore = { reservar: async () => { throw new Error("tabla ausente"); }, leer: async () => null, completar: async () => undefined, liberar: async () => undefined };
+        const { deps } = conAlmacen(f, caido);
+        const r = await rechazar(deps);
+        const cuerpo = await jsonOf(r);
+        assert.equal(r.status, 503);
+        assert.equal(cuerpo.code, undefined);
+        assert.equal(cuerpo.error, "store_unavailable");
+        assert.equal(writes(f.calls).length, 0);
+    });
+    it("un error de Planillas (lanzado) libera la clave y se traduce como siempre", async () => {
+        const f = mk(conTurnos, sucursal);
+        const { deps, idempotency } = conAlmacen(f);
+        f.env.planillas = async () => { throw new PlanillasError(503, "caída"); };
+        const r = await handleActionExecute(req("POST", H(), { signatures: sigs }), "permisos", "1", "aprobar", deps);
+        assert.equal(r.status, 502);
+        assert.equal(idempotency.rows.size, 0);
+    });
+    it("carga masiva `aplicar` con clave: el reintento no vuelve a llamar a Planillas; sin clave sigue funcionando; `validar` no reserva nada", async () => {
+        const f = mk();
+        const { deps, idempotency } = conAlmacen(f);
+        const imp = (body: unknown, h: Record<string, string>) => handleImport(req("POST", h, body), "inventario-puesto", deps);
+        const a = await imp({ modo: "aplicar", filas: [fila] }, H());
+        const b = await imp({ modo: "aplicar", filas: [fila] }, H());
+        assert.deepEqual([a.status, b.status], [200, 200]);
+        assert.equal(b.headers.get("idempotent-replay"), "true");
+        assert.equal(f.planillasCalls.length, 1, "Planillas recibió la carga una sola vez");
+        const sinClave = await imp({ modo: "aplicar", filas: [fila] }, goodHeaders());
+        assert.equal(sinClave.status, 200, "los clientes sin clave siguen funcionando");
+        const antes = idempotency.rows.size;
+        await imp({ modo: "validar", filas: [fila] }, H("otra-clave-de-prueba-01"));
+        assert.equal(idempotency.rows.size, antes, "validar no deja reservas");
     });
 });

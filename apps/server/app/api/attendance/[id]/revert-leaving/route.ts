@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { authorizeMarcaAccess, denialBody } from "../../../../../utils/objectAccess";
+import { isSuperAdminEmpleado } from "../../../../../utils/isSuperAdminEmpleado";
 import { prisma } from "../../../../../utils/prismaClient";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { reportError } from "../../../../../utils/reportError";
@@ -6,7 +8,7 @@ import axios from "axios";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, expired, message } = await verifyAccessTokenByApi(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const { id } = await context.params;
@@ -48,6 +50,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             await reportError(req, "api/attendance/[id]/revert-leaving", "PUT", 404, "Marca del dia no encontrada");
             return NextResponse.json({ status: false, message: "Marca del dia no encontrada" }, { status: 404 });
         }
+        // Issue #181: la marca es de su titular o de quien lo reemplaza (o de un administrador).
+        const access = await authorizeMarcaAccess({ callerId: payload.id, marca: marcaDia, isAdmin: () => isSuperAdminEmpleado(req, Number(payload.id)) });
+        if (!access.allowed) { return NextResponse.json(denialBody(access), { status: access.status }); }
 
         if (!marcaDia.empleadoFijo_id) {
             await reportError(req, "api/attendance/[id]/revert-leaving", "PUT", 404, "Empleado no encontrado");

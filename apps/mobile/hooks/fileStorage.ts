@@ -1,5 +1,5 @@
 import { File, Paths } from 'expo-file-system';
-import { MAIN_STRUCTURE_CACHE_FILENAME } from './mainStructureCacheStorage';
+import { MAIN_STRUCTURE_CACHE_FILENAME, MAIN_STRUCTURE_CACHE_TMP_FILENAME } from './mainStructureCacheStorage';
 import { isEmployeeProfilePhotoFileName } from './employeeProfilePhotoStorage';
 
 /** Tipos soportados */
@@ -251,16 +251,19 @@ export async function deleteFile(fileName: string): Promise<void> {
  */
 export async function deleteAllFiles(preserveNames?: ReadonlySet<string>): Promise<void> {
   console.log('Deleting all files...');
+  // Siempre se conservan los archivos que necesita el trabajo pendiente de cualquier usuario, aunque quien llame no los indique (issue #176).
+  const { collectPendingSyncLocalFileNames } = await import('./collectPendingSyncLocalFileNames');
+  const pendingNames = await collectPendingSyncLocalFileNames().catch(() => new Set<string>());
   const entries = Paths.document.list();
   for (const entry of entries) {
     if (entry instanceof File) {
-      if (entry.name === MAIN_STRUCTURE_CACHE_FILENAME) {
+      if (entry.name === MAIN_STRUCTURE_CACHE_FILENAME || entry.name === MAIN_STRUCTURE_CACHE_TMP_FILENAME) {
         continue;
       }
       if (isEmployeeProfilePhotoFileName(entry.name)) {
         continue;
       }
-      if (preserveNames?.has(entry.name)) {
+      if (preserveNames?.has(entry.name) || pendingNames.has(entry.name)) {
         continue;
       }
       try {

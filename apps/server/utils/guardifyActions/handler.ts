@@ -6,6 +6,8 @@ import { cargarInventarioPuesto } from "./inventario";
 import { aprobarPermisoSolicitud } from "./aprobar-permiso";
 import { accionesDeMutuo, rechazarMutuoAcuerdo } from "./mutuos";
 import { accionesDePermiso, rechazarPermisoSolicitud } from "./permisos";
+import { claveValida, type IdempotencyStore } from "../idempotency";
+import { conIdempotencia, readIdempotencyKey } from "../idempotencyHttp";
 
 /**
  * API de acciones para Guardify (`docs/protocolo-acciones.md` de Guardify). Solo servidor a servidor: llave compartida + identidad del actor
@@ -131,7 +133,15 @@ function planillasFailure(e: PlanillasError): Response {
     return json({ error: "planillas_unavailable", message: "Planillas no respondió o falló. Revisa en Planillas antes de reintentar si la operación llegó a completarse." }, 502);
 }
 
-export type ActionDeps = { getEnv: () => ActionEnv; env?: Record<string, string | undefined>; now?: () => number };
+/**
+ * `idempotency`: almacén de claves de idempotencia (tabla `c_clave_idempotencia`). Con él, la misma `Idempotency-Key` sobre la misma acción devuelve el mismo
+ * resultado sin repetir el efecto, y la misma clave con otra acción, otro registro u otra persona es `409 conflict` (protocolo de acciones). Sin él (pruebas)
+ * solo rige la deducción por estado.
+ */
+export type ActionDeps = { getEnv: () => ActionEnv; env?: Record<string, string | undefined>; now?: () => number; idempotency?: (env: ActionEnv) => IdempotencyStore };
+
+/** Cuerpo de los errores de la capa de idempotencia: tipados como el resto, salvo el almacén caído, que es un 503 sin `code` (Guardify lo lee como «app no disponible»). */
+const idemErrorBody = (code: string, message: string) => (code === "store_unavailable" ? { error: code, message } : { code, message });
 
 /** Tope del cuerpo de una petición (las firmas viajan como imagen). */
 export const MAX_BODY_CHARS = 2_500_000;
@@ -223,10 +233,10 @@ export async function handleActionExecute(req: Request, tipoId: string, idStr: s
         if (!impl) return err("invalid_request", `La acción «${accion}» no está disponible para este tipo.`, 404);
         const body: any = parseJson(raw);
         const idem = String(req.headers.get("idempotency-key") ?? body?.idempotencyKey ?? "").trim();
-        if (idem.length < 16) return err("invalid_request", "Falta la clave de idempotencia.");
+        if (!claveValida(idem)) return err("invalid_request", "Falta la clave de idempotencia o no es válida (16 a 128 caracteres visibles, sin espacios).");
         const motivo = typeof body?.reason === "string" && body.reason.trim() ? body.reason.trim().slice(0, 500) : null;
 
-        const out = await conCandado(`${tipoId}:${c.id}`, async () => {
+        const ejecutar = () => conCandado(`${tipoId}:${c.id}`, async () => {
             // Se vuelve a leer el registro DENTRO del candado: lo que decida ahora es lo que está en la base ahora.
             const existing = await c.env.call({ action: "GET", table: c.tipo.table, operation: "findUnique", where: { id: c.id } });
             if (!existing) return err("not_found", "Registro no encontrado");
@@ -259,7 +269,9 @@ export async function handleActionExecute(req: Request, tipoId: string, idStr: s
             if (!res.ok) return failure(res);
             return json({ estado: resultado, ref: null, message: res.body.message ?? null });
         });
-        return out;
+        // La reserva de la clave es el candado entre procesos (el `Set` de arriba solo cubre este); el reintento recibe el resultado original.
+        if (!deps.idempotency) return await ejecutar();
+        return await conIdempotencia(idem, { store: deps.idempotency(c.env), ambito: `${tipoId}:${accion}`, recurso: String(c.id), actorId: c.actor.id, onStoreError: "fail", errorBody: idemErrorBody }, async () => (await ejecutar()) as Response);
     } catch (e) {
         if (e instanceof PlanillasError) return planillasFailure(e);
         console.error(JSON.stringify({ level: "error", msg: "guardify_action_failed", tipo: tipoId, accion, error: String(e) }));
@@ -323,7 +335,11 @@ export async function handleImport(req: Request, tipo: string, deps: ActionDeps)
             if (!res.ok) return failure(res);
             return json({ modo, creados: { planes: res.body.created_plans, entregas: res.body.created_entregas }, omitidos: res.body.skipped, mensaje: res.body.message });
         };
-        return modo === "aplicar" ? await conCandado(`import:${tipo}`, correr) : await correr();
+        if (modo !== "aplicar") return await correr();
+        const clave = readIdempotencyKey(req, body?.idempotencyKey);
+        const aplicar = () => conCandado(`import:${tipo}`, correr) as Promise<Response>;
+        if (!deps.idempotency || clave === null) return await aplicar();
+        return await conIdempotencia(clave, { store: deps.idempotency(env), ambito: `imports:${tipo}:aplicar`, recurso: "-", actorId: actor.id, onStoreError: "fail", errorBody: idemErrorBody }, aplicar);
     } catch (e) {
         if (e instanceof PlanillasError) return planillasFailure(e);
         console.error(JSON.stringify({ level: "error", msg: "guardify_import_failed", tipo, error: String(e) }));

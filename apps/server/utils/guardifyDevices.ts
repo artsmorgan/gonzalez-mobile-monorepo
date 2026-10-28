@@ -7,7 +7,8 @@
  * - `GUARDIFY_DEVICE_ENFORCE` = `off` | `observe` | `on` (sin variable = `off`: todo como hoy).
  *     off      → no hace nada ni consulta a Guardify.
  *     observe  → registra en un log estructurado (`guardify_device`) las peticiones sin equipo o con equipo no activo, SIN cambiar ninguna respuesta.
- *     on       → responde 403 `device_not_approved|<ESTADO>|<motivo>`.
+ *     on       → responde 403 `device_not_approved|<ESTADO>|<motivo>`, o 403 `session_revoked|<motivo>` si lo revocado es solo la sesión
+ *                (issue #174: la app cierra esa sesión con su mensaje en vez de mostrar «equipo bloqueado», porque el equipo sigue activo).
  * - Lista de revocaciones: `GET {GUARDIFY_URL}/api/v1/revocations?since=` con credencial de aplicación
  *   (`Authorization: Basic base64(GUARDIFY_APP_CLIENT_ID:GUARDIFY_APP_CLIENT_SECRET)`), en memoria 30–60 s (`GUARDIFY_REVOCATIONS_TTL_SECONDS`).
  * - Tolerante a fallos: si Guardify no responde se usa la última lista (un equipo ya revocado sigue bloqueado) y nunca se lanza un error
@@ -64,6 +65,8 @@ export type DeviceDecision = {
     cause: "ok" | "off" | "no_device" | "revoked" | "cold_start";
     status?: DeviceStatus;
     reason?: string | null;
+    /** Con `cause: "revoked"`: si lo revocado es el equipo o solo la sesión (issue #174). El equipo, más grave, tiene prioridad. */
+    scope?: "device" | "session";
 };
 
 type TokenPayload = { id?: unknown; gdev?: unknown; gsid?: unknown } | null | undefined;
@@ -141,7 +144,7 @@ export class RevocationCache {
 export function evaluateDevice(payload: TokenPayload, cache: RevocationCache, coldStart: "allow" | "deny" = "allow"): DeviceDecision {
     if (!text(payload?.gdev)) return { allow: false, cause: "no_device", status: "UNREGISTERED", reason: null };
     const revoked = cache.lookup(payload);
-    if (revoked) return { allow: false, cause: "revoked", status: revoked.status, reason: revoked.reason };
+    if (revoked) return { allow: false, cause: "revoked", status: revoked.status, reason: revoked.reason, scope: revoked.deviceId ? "device" : "session" };
     if (!cache.isLoaded) return coldStart === "deny" ? { allow: false, cause: "cold_start", status: "UNKNOWN", reason: null } : { allow: true, cause: "cold_start" };
     return { allow: true, cause: "ok" };
 }
@@ -149,6 +152,16 @@ export function evaluateDevice(payload: TokenPayload, cache: RevocationCache, co
 /** Mensaje de la respuesta 403 de un equipo no aprobado: `device_not_approved|ESTADO|motivo` (la app lo interpreta). */
 export function buildDeviceNotApprovedMessage(status?: string | null, reason?: string | null): string {
     return `device_not_approved|${text(status) ?? "BLOCKED"}|${text(reason)?.replace(/\|/g, "/") ?? ""}`;
+}
+
+/** Mensaje de la respuesta 403 de una sesión revocada con el equipo activo: `session_revoked|motivo` (la app lo interpreta). */
+export function buildSessionRevokedMessage(reason?: string | null): string {
+    return `session_revoked|${text(reason)?.replace(/\|/g, "/") ?? ""}`;
+}
+
+export function parseSessionRevokedMessage(message: unknown): { reason: string | null } | null {
+    const m = /^session_revoked\|([\s\S]*)$/.exec(String(message ?? ""));
+    return m ? { reason: text(m[1]) } : null;
 }
 
 export function parseDeviceNotApprovedMessage(message: unknown): { status: string; reason: string | null } | null {
@@ -254,7 +267,10 @@ export async function guardifyDeviceGate(input: DeviceGateInput, env: Env = proc
                 },
             }),
         );
-        return mode === "on" ? buildDeviceNotApprovedMessage(decision.status, decision.reason) : null;
+        if (mode !== "on") return null;
+        return decision.cause === "revoked" && decision.scope === "session"
+            ? buildSessionRevokedMessage(decision.reason)
+            : buildDeviceNotApprovedMessage(decision.status, decision.reason);
     } catch (e) {
         console.error("[guardify_device] error evaluando el equipo (se deja pasar):", e instanceof Error ? e.message : e);
         return null;

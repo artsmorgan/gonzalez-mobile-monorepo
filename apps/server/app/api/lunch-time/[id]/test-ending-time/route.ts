@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
+import { authorizeMarcaAccess, denialBody, isDevRouteEnabled } from "../../../../../utils/objectAccess";
+import { isSuperAdminEmpleado } from "../../../../../utils/isSuperAdminEmpleado";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "../../../../../utils/prismaClient";
 import { reportError } from "../../../../../utils/reportError";
 
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+    // Ruta de desarrollo: no existe en producción (issue #181).
+    if (!isDevRouteEnabled()) { return NextResponse.json({ status: false, message: "No encontrado" }, { status: 404 }); }
     try {
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
         const resolvedParams = await context.params;
 
         const id = parseInt(resolvedParams.id);
@@ -26,6 +33,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             await reportError(req, "api/lunch-time/[id]/test-ending-time", "GET", 404, "Marca del dia no encontrada");
             return NextResponse.json({ status: false, message: "Marca del dia no encontrada" }, { status: 404 });
         }
+        // Issue #181: la marca es de su titular o de quien lo reemplaza (o de un administrador).
+        const access = await authorizeMarcaAccess({ callerId: payload.id, marca: marcaDia, isAdmin: () => isSuperAdminEmpleado(req, Number(payload.id)) });
+        if (!access.allowed) { return NextResponse.json(denialBody(access), { status: access.status }); }
 
         if (!marcaDia.hora_fin || !marcaDia.hora_inicio) {
             await reportError(req, "api/lunch-time/[id]/test-ending-time", "GET", 400, "Hora de finalización o inicio no establecidas");

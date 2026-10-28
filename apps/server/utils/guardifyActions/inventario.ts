@@ -168,10 +168,14 @@ export async function cargarInventarioPuesto(env: ActionEnv, input: { filas: unk
     if (input.modo === "validar") {
         return { ok: true, status: 200, body: { status: true, modo: "validar", message: `Se crearían ${plan.createdPlans} plan(es) y ${plan.createdEntregas} entrega(s).`, created_plans: plan.createdPlans, created_entregas: plan.createdEntregas, skipped: plan.skipped } };
     }
+    // Issue #181: si todo ya existía no hay nada que enviar; antes se llamaba a Planillas con una lista vacía.
+    if (plan.send.length === 0) {
+        return { ok: true, status: 200, body: { status: true, modo: "aplicar", message: "Se crearon 0 plan(es) y 0 entrega(s): todo ya existía.", created_plans: 0, created_entregas: 0, skipped: plan.skipped } };
+    }
     const planillasResponse = await env.planillas("/articulos-puesto/carga-masiva", formatearParaPlanillas(plan.send), input.planillasToken!);
     if (!planillasResponse.success) {
-        await env.report(500, "Error al actualizar la ubicación del puesto");
-        return fail(500, "invalid_request", "Error al actualizar la ubicación del puesto");
+        await env.report(500, "Error al cargar los artículos en Planillas");
+        return fail(500, "invalid_request", "Error al cargar los artículos en Planillas");
     }
     return { ok: true, status: 200, body: { status: true, modo: "aplicar", message: `Se crearon ${plan.createdPlans} plan(es) y ${plan.createdEntregas} entrega(s).`, created_plans: plan.createdPlans, created_entregas: plan.createdEntregas, skipped: plan.skipped } };
 }

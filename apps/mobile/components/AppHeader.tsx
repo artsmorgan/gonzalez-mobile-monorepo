@@ -2,7 +2,7 @@ import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import React, { useState, useEffect } from 'react';
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { CommonActions, useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
@@ -11,6 +11,7 @@ import { eventBus } from '@/hooks/eventBus';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { shouldShowTrialVersionBanner } from '@/components/TrialVersionBanner';
+import { HOME_RESET_ACTION, shouldResetToHome } from '@/hooks/headerBack';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -61,6 +62,18 @@ export default function AppHeader({ onMenuPress, title }: AppHeaderProps) {
     }
   };
 
+  /**
+   * Regresa a la pantalla anterior. Si no hay ninguna (la persona entró y la app la llevó directo a esta pantalla, así que Home no está en la
+   * pila), va a Home y deja solo Home en la pila.
+   */
+  const handleBackPress = () => {
+    if (shouldResetToHome(navigation.canGoBack())) {
+      navigation.dispatch(CommonActions.reset(HOME_RESET_ACTION as Parameters<typeof CommonActions.reset>[0]));
+      return;
+    }
+    navigation.goBack();
+  };
+
   const handleNotificationsPress = () => {
     navigation.navigate('Notifications');
   };
@@ -71,7 +84,7 @@ export default function AppHeader({ onMenuPress, title }: AppHeaderProps) {
     <ThemedView style={styles.header}>
       <ThemedView style={styles.titleContainer}>
         {route.name !== 'Home' && (
-          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+          <TouchableOpacity style={styles.backButton} onPress={handleBackPress}>
             <Ionicons name="arrow-undo" size={20} color="#ffffff" />
           </TouchableOpacity>
         )}

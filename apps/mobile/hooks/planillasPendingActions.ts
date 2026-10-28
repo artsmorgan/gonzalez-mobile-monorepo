@@ -1,13 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {
-  attachPlanillasTokenToPlanillasAttendanceActions,
-  attendanceActionRequiresPlanillasToken,
-  readAttendanceActions,
-} from './attendanceActionsStorage';
-import {
-  LUNCH_TIME_HORARIO_ACTIONS_KEY,
-  readHorarioMinutosActions,
-} from './lunchTimeHorarioApi';
+import { attendanceActionRequiresPlanillasToken, readAttendanceActions } from './attendanceActionsStorage';
+import { readHorarioMinutosActions } from './lunchTimeHorarioApi';
+import { scrubStoredQueues } from './queueOwnership';
 
 const EVALUATIONS_ACTIONS_KEY = 'evaluations_actions';
 const CHECKLIST_SUPERVISION_ACTIONS_KEY = 'checklist_supervision_actions';
@@ -28,33 +22,13 @@ export function checklistSupervisionActionRequiresPlanillasToken(action: any): b
   return type === 'create' || type === 'update';
 }
 
-export async function attachPlanillasTokenToChecklistSupervisionActions(
-  planillasToken: string,
-): Promise<void> {
-  const token = String(planillasToken ?? '').trim();
-  if (!token) return;
-
-  const actions = await readChecklistSupervisionActions();
-  if (actions.length === 0) return;
-
-  let changed = false;
-  const next = actions.map((action: any) => {
-    if (!checklistSupervisionActionRequiresPlanillasToken(action)) return action;
-    const current = String(action.planillasToken ?? action.requestData?.planillasToken ?? '').trim();
-    const nextRequestData =
-      action.requestData && typeof action.requestData === 'object'
-        ? { ...action.requestData, planillasToken: token }
-        : action.requestData;
-    if (current === token && String(action.requestData?.planillasToken ?? '').trim() === token) {
-      return action;
-    }
-    changed = true;
-    return { ...action, planillasToken: token, requestData: nextRequestData };
+/** Quita el token de Planillas de las colas guardadas (issue #170). */
+export async function scrubPendingPlanillasTokens(): Promise<void> {
+  await scrubStoredQueues({
+    getAllKeys: () => AsyncStorage.getAllKeys(),
+    getItem: (k) => AsyncStorage.getItem(k),
+    setItem: (k, v) => AsyncStorage.setItem(k, v),
   });
-
-  if (changed) {
-    await AsyncStorage.setItem(CHECKLIST_SUPERVISION_ACTIONS_KEY, JSON.stringify(next));
-  }
 }
 
 async function readUnsyncedPuestoUbicacionActions(): Promise<any[]> {
@@ -99,46 +73,11 @@ export async function pendingActionsRequirePlanillasToken(): Promise<boolean> {
   return false;
 }
 
-/** Actualiza el token en todas las colas offline que lo usan al sincronizar. */
+/**
+ * Issue #170: ya NO se copia el token de Planillas dentro de las acciones encoladas (quedaba en claro en AsyncStorage). Cada envío toma el
+ * token vigente del almacén seguro. Se conserva la función para no cambiar a los que la llaman: ahora solo limpia lo que hubiera quedado.
+ */
 export async function attachPlanillasTokenToAllPendingActions(planillasToken: string): Promise<void> {
-  const token = String(planillasToken ?? '').trim();
-  if (!token) return;
-
-  await attachPlanillasTokenToPlanillasAttendanceActions(token);
-
-  await attachPlanillasTokenToChecklistSupervisionActions(token);
-
-  const evalRaw = await AsyncStorage.getItem(EVALUATIONS_ACTIONS_KEY);
-  if (evalRaw) {
-    try {
-      const actions = JSON.parse(evalRaw);
-      if (Array.isArray(actions)) {
-        let changed = false;
-        const next = actions.map((a: any) => {
-          if (a?.type !== 'puesto_ubicacion' || a?.synced !== false) return a;
-          if (String(a.planillasToken ?? '').trim() === token) return a;
-          changed = true;
-          return { ...a, planillasToken: token };
-        });
-        if (changed) {
-          await AsyncStorage.setItem(EVALUATIONS_ACTIONS_KEY, JSON.stringify(next));
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-  }
-
-  const lunchActions = await readHorarioMinutosActions();
-  if (lunchActions.length > 0) {
-    let changed = false;
-    const next = lunchActions.map((a) => {
-      if (String(a.planillasToken ?? '').trim() === token) return a;
-      changed = true;
-      return { ...a, planillasToken: token };
-    });
-    if (changed) {
-      await AsyncStorage.setItem(LUNCH_TIME_HORARIO_ACTIONS_KEY, JSON.stringify(next));
-    }
-  }
+  if (!String(planillasToken ?? '').trim()) return;
+  await scrubPendingPlanillasTokens();
 }

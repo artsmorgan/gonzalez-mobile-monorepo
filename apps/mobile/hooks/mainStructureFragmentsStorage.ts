@@ -1,9 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+  asyncStructureStore,
   clearMainStructureCacheLegacy,
   MAIN_STRUCTURE_FILE_FLAG_ASYNC_KEY,
   MAIN_STRUCTURE_MONOLITH_ASYNC_KEY,
 } from './mainStructureCacheStorage';
+import { persistMainStructureFragmentsSafely } from './mainStructureCacheAtomic';
 
 /** Lista los nombres completos de las claves en AsyncStorage usadas para cada fragmento. */
 export const MAIN_STRUCTURE_FRAGMENT_STORAGE_KEYS = 'main_structure_fragment_storage_keys';
@@ -90,28 +92,16 @@ export async function clearRegisteredMainStructureFragments(): Promise<void> {
  * Actualiza `main_structure_fragment_storage_keys` con el listado de claves físicas guardadas.
  */
 export async function persistMainStructureFragments(fragments: Record<string, unknown>): Promise<void> {
-  await clearRegisteredMainStructureFragments();
-
   const logicalKeys = Object.keys(fragments);
   if (logicalKeys.length === 0) {
+    await clearRegisteredMainStructureFragments();
     await AsyncStorage.setItem(MAIN_STRUCTURE_FRAGMENT_STORAGE_KEYS, JSON.stringify([]));
     // No borrar el caché monolítico aquí: el llamador suele escribir `writeMainStructureCacheString` justo después.
     return;
   }
 
-  await clearMainStructureCacheLegacy();
-
-  const pairs: [string, string][] = [];
-  const storageKeys: string[] = [];
-
-  for (const lk of logicalKeys) {
-    const sk = fragmentToAsyncStorageKey(lk);
-    storageKeys.push(sk);
-    pairs.push([sk, JSON.stringify(fragments[lk])]);
-  }
-
-  await AsyncStorage.multiSet(pairs);
-  await AsyncStorage.setItem(MAIN_STRUCTURE_FRAGMENT_STORAGE_KEYS, JSON.stringify(storageKeys));
+  // Issue #178: valida y escribe los fragmentos nuevos completos ANTES de quitar los anteriores y el monolito legado.
+  await persistMainStructureFragmentsSafely(asyncStructureStore, fragments, clearMainStructureCacheLegacy);
 }
 
 /** Lee todos los fragmentos desde AsyncStorage y los devuelve con las claves lógicas del servidor. */

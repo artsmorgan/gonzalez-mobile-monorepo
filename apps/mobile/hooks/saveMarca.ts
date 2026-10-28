@@ -1,6 +1,8 @@
 import Constants from "expo-constants";
 import authedFetch from "./authedFetch";
 import { readStoredPlanillasToken } from "./planillasTokenStorage";
+import { pickPlanillasToken } from "./planillasSendToken";
+import { actionIdempotencyKey } from "./idempotencyKey";
 
 interface saveMarcaParams {
     data_params: {
@@ -38,7 +40,7 @@ export default async function saveMarca({
 
         const storedPlanillas = await readStoredPlanillasToken();
         const planillasToken =
-          String(planillasTokenOverride ?? '').trim() || storedPlanillas?.token || null;
+          pickPlanillasToken(planillasTokenOverride, storedPlanillas?.token);
 
         const response = await authedFetch({
             url: `${apiUrl}/api/attendance/${marcaId}`,
@@ -55,6 +57,10 @@ export default async function saveMarca({
                     cords: data_params.cords ?? { lat: null, lng: null },
                 }),
             },
+            // Issues #172 y #181: la misma marca reintentada lleva la misma clave, y el servidor devuelve el resultado ya guardado en vez de marcar dos veces; por eso
+            // un reintento tras agotarse el plazo (respuesta perdida) es seguro.
+            idempotencyKey: actionIdempotencyKey('marca', marcaId, data_params.type, data_params.horaAccion),
+            idempotent: true,
             refreshAccessToken,
             logout,
         });

@@ -1,5 +1,13 @@
 import * as XLSX from 'xlsx';
 import type { BulkPlantillaArticulo } from './mantenimientoEquipoBulkArticulos';
+import {
+  CELL_TOO_LONG_MESSAGE,
+  EXCEL_IMPORT_LIMITS,
+  checkCellChars,
+  checkExcelFileSize,
+  checkSheetCount,
+  checkSheetRange,
+} from './excelImportLimits';
 
 export const PLANTILLA_TABLE1_HEADERS = [
   'Código del puesto',
@@ -160,7 +168,7 @@ function findTable1HeaderRow(ws: XLSX.WorkSheet): number | null {
   return null;
 }
 
-function readReferenceCatalog(ws: XLSX.WorkSheet): Map<number, string> {
+function readReferenceCatalog(ws: XLSX.WorkSheet, errors: string[]): Map<number, string> {
   const catalog = new Map<number, string>();
   const ref = ws['!ref'];
   if (!ref) return catalog;
@@ -169,24 +177,99 @@ function readReferenceCatalog(ws: XLSX.WorkSheet): Map<number, string> {
   for (let r = 9; r <= maxRow; r++) {
     const id = parseNumeroArticulo(cellRaw(ws, r, REF_COL_START));
     const nombre = cellDisplay(ws, r, REF_COL_START + 1);
+    if (!checkCellChars(nombre)) {
+      errors.push(`Catálogo, fila ${r}: ${CELL_TOO_LONG_MESSAGE}`);
+      continue;
+    }
     if (id && nombre) catalog.set(id, nombre);
   }
   return catalog;
 }
 
+export type PlantillaParseResult = {
+  status: boolean;
+  message?: string;
+  errors?: string[];
+  data?: BulkPlantillaArticulo[];
+  /** La importación se canceló (el usuario salió o eligió otro archivo): no es un error que mostrar. */
+  cancelled?: boolean;
+};
+
+export type PlantillaParseOptions = {
+  /** Tamaño que informa el selector de archivos (issue #175): se valida ANTES de leer el archivo. */
+  fileSize?: number | null;
+  /** Cancela la lectura (al salir de la pantalla o al elegir otro archivo). */
+  signal?: AbortSignal | null;
+};
+
+const CANCELLED: PlantillaParseResult = { status: false, cancelled: true, message: 'Importación cancelada.' };
+/** Filas por bloque antes de ceder el hilo y revisar la cancelación. */
+const ROWS_PER_CHUNK = 250;
+const yieldToEventLoop = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+/** Lee el archivo y lo procesa con los límites de `excelImportLimits` (issue #175). */
 export async function parseMantenimientoEquipoPlantillaLocal(
   fileUri: string,
-): Promise<{ status: boolean; message?: string; errors?: string[]; data?: BulkPlantillaArticulo[] }> {
+  opts: PlantillaParseOptions = {},
+): Promise<PlantillaParseResult> {
   try {
+    if (opts.signal?.aborted) return CANCELLED;
+    const declaredSizeError = checkExcelFileSize(opts.fileSize);
+    if (declaredSizeError) return { status: false, message: declaredSizeError };
+
     const response = await fetch(fileUri);
     if (!response.ok) {
       return { status: false, message: 'No se pudo leer el archivo seleccionado.' };
     }
+    const headerSize = response.headers?.get?.('content-length');
+    const headerSizeError = checkExcelFileSize(headerSize ? Number(headerSize) : undefined);
+    if (headerSizeError) return { status: false, message: headerSizeError };
+
     const buffer = await response.arrayBuffer();
-    const wb = XLSX.read(buffer, { type: 'array', cellDates: false, cellText: true, cellNF: true });
+    return await parseMantenimientoEquipoPlantillaBuffer(buffer, opts);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'No se pudo leer la plantilla.';
+    return { status: false, message: msg };
+  }
+}
+
+/**
+ * Procesa el contenido del libro. Orden de las defensas (issue #175): tamaño real → cancelación → lectura limitada (solo la primera hoja y
+ * `maxRows + 1` filas) → cantidad de hojas → rango declarado → recorrido por bloques con cancelación y límite de caracteres por celda.
+ */
+export async function parseMantenimientoEquipoPlantillaBuffer(
+  buffer: ArrayBuffer,
+  opts: PlantillaParseOptions = {},
+): Promise<PlantillaParseResult> {
+  const { signal } = opts;
+  try {
+    const sizeError = checkExcelFileSize(buffer.byteLength);
+    if (sizeError) return { status: false, message: sizeError };
+    if (signal?.aborted) return CANCELLED;
+
+    const wb = XLSX.read(buffer, {
+      type: 'array',
+      cellDates: false,
+      cellText: true,
+      cellNF: true,
+      // Solo se usa la primera hoja y nunca más de `maxRows` filas: el resto del libro no se procesa.
+      sheets: 0,
+      sheetRows: EXCEL_IMPORT_LIMITS.maxRows + 1,
+    });
+
+    const sheetCountError = checkSheetCount(wb.SheetNames.length);
+    if (sheetCountError) return { status: false, message: sheetCountError };
+
     const ws = wb.Sheets[wb.SheetNames[0]];
     if (!ws) {
       return { status: false, message: 'El archivo Excel no contiene hojas.' };
+    }
+
+    // `!fullref` conserva el rango declarado completo cuando `sheetRows` recortó la lectura.
+    const declaredRef = ws['!fullref'] ?? ws['!ref'];
+    if (declaredRef) {
+      const rangeError = checkSheetRange(declaredRef);
+      if (rangeError) return { status: false, message: rangeError };
     }
 
     const headerRow = findTable1HeaderRow(ws);
@@ -200,20 +283,26 @@ export async function parseMantenimientoEquipoPlantillaLocal(
       };
     }
 
-    const catalog = readReferenceCatalog(ws);
+    const errors: string[] = [];
+    const catalog = readReferenceCatalog(ws, errors);
     if (catalog.size === 0) {
       return {
         status: false,
         message: 'No se encontró el catálogo de referencia en la plantilla.',
+        ...(errors.length > 0 ? { errors } : {}),
       };
     }
 
     const rows: BulkPlantillaArticulo[] = [];
-    const errors: string[] = [];
     const ref = ws['!ref'];
     const maxRow = ref ? XLSX.utils.decode_range(ref).e.r + 1 : headerRow + 500;
 
     for (let r = headerRow + 1; r <= maxRow; r++) {
+      if ((r - headerRow) % ROWS_PER_CHUNK === 0) {
+        await yieldToEventLoop();
+        if (signal?.aborted) return CANCELLED;
+      }
+
       const codigoPuesto = parseCodigoPuesto(cellRaw(ws, r, 1));
       const numeroRaw = cellRaw(ws, r, 2);
       const cantidadRaw = cellRaw(ws, r, 3);
@@ -242,6 +331,11 @@ export async function parseMantenimientoEquipoPlantillaLocal(
           PLANTILLA_TABLE1_HEADERS,
         )
       ) {
+        continue;
+      }
+
+      if (![codigoPuesto, serie, marca, modelo, fechaEntrega].every(checkCellChars)) {
+        errors.push(`Fila ${r}: ${CELL_TOO_LONG_MESSAGE}`);
         continue;
       }
 

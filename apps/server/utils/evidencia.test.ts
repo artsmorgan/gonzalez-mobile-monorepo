@@ -121,6 +121,13 @@ describe("armado de la evidencia (issue #153)", () => {
         assert.deepEqual([e.latitud, e.longitud, e.ubicacionOrigen, e.capturadoEn], ["9.9341", "-84.0877", "firma", "2026-10-21T08:15:30"]);
         assert.deepEqual([e.dispositivo, e.cedula, e.usuarioId, e.sesionId], ["dev-1", "1-0555-0666", 77, "ses-1"]);
     });
+    it("el autor es SIEMPRE la persona autenticada: un empleadoId distinto dentro de la firma del cliente no lo cambia (issue #181)", () => {
+        const e = construirEvidencia(base, { headers: { "x-device-uid": "dev-1" }, actor, datos: { firma_responsable: firmaApp({ emp: 99 }) }, ahoraMs: AHORA })!;
+        assert.equal(e.usuarioId, 77);
+        // sin sesión autenticada (no ocurre en las rutas, que ya autenticaron) se conserva el comportamiento anterior
+        const sinActor = construirEvidencia(base, { headers: { "x-device-uid": "dev-1" }, actor: null, datos: { firma_responsable: firmaApp({ emp: 99 }) }, ahoraMs: AHORA })!;
+        assert.equal(sinActor.usuarioId, 99);
+    });
     it("sin firma usa las cabeceras de la app (con su hora)", () => {
         const e = construirEvidencia(base, { headers: { "x-device-uid": "dev-1", "x-evidence-lat": "10.5", "x-evidence-lng": "-85.2", "x-evidence-at": String(Date.UTC(2026, 9, 21, 13, 0, 0)) }, actor, datos: {}, ahoraMs: AHORA })!;
         assert.deepEqual([e.latitud, e.longitud, e.ubicacionOrigen, e.capturadoEn, e.sesionId], ["10.5", "-85.2", "cabecera", "2026-10-21T13:00:00", "ses-token"]);

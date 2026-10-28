@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { authorizeMarcaAccess, denialBody } from "../../../../utils/objectAccess";
+import { conIdempotencia, readIdempotencyKey } from "../../../../utils/idempotencyHttp";
+import { dynamicIdempotencyStore } from "../../../../utils/idempotencyDynamicStore";
+import { isSuperAdminEmpleado } from "../../../../utils/isSuperAdminEmpleado";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../utils/prismaClient";
@@ -145,7 +149,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             await reportError(req, "api/attendance/[id]", "PUT", 404, "No se encontró la marca");
             return NextResponse.json({ status: false, message: "No se encontró la marca" }, { status: 404 });
         }
+        // Issue #181: la marca es de su titular o de quien lo reemplaza (o de un administrador).
+        const access = await authorizeMarcaAccess({ callerId: payload.id, marca: marcaDia, isAdmin: () => isSuperAdminEmpleado(req, Number(payload.id)) });
+        if (!access.allowed) { return NextResponse.json(denialBody(access), { status: access.status }); }
 
+        // Issues #172 y #181: con `Idempotency-Key` (la clave de la acción en la cola del teléfono) un reintento —p. ej. tras agotarse el plazo con la respuesta perdida—
+        // devuelve el resultado ya guardado en lugar de marcar otra vez. Va DESPUÉS del control de alcance: la repetición nunca salta la autorización. Sin la
+        // cabecera todo funciona como antes, y si el almacén de claves no está disponible la ruta sigue sin idempotencia (disponibilidad primero).
+        return await conIdempotencia(readIdempotencyKey(req), { store: dynamicIdempotencyStore((d) => callDynamicPrisma({ req, data: d })), ambito: "attendance:PUT", recurso: `${id}:${String(type)}`, actorId: Number(payload.id), onStoreError: "run" }, async () => {
         let empresa 
         let puesto: any;
         let empleado: any;
@@ -317,6 +328,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         }
         
     return NextResponse.json({ status: true, message: type == "entrada" ? "Ingreso de trabajo confirmado" : "Salida de trabajo confirmada", marca: null }, { status: 200 });
+        });
 } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.log(errorMessage);

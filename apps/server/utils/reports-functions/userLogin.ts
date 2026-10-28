@@ -3,6 +3,7 @@ import type { ReportDataAccess } from "../reportDynamicPrisma";
 import { hydratePreexistentRelations } from "../hydratePreexistentIncludes";
 
 import ExcelJS from "exceljs";
+import { tokenRef } from "../reportesUserLogin";
 
 export type UserLoginModuleFilters = {
     creadoDesde?: string | null;
@@ -177,7 +178,7 @@ class ExcelWriter {
 
         const headers = [
             { key: "empleado", header: "Empleado", outlineLevel: 1 },
-            { key: "token", header: "Token", outlineLevel: 1 },
+            { key: "token", header: "Token (últimos 6)", outlineLevel: 1 },
             { key: "createdAt", header: "Creado en", outlineLevel: 1 },
             { key: "expiresAt", header: "Expira en", outlineLevel: 1 },
             { key: "sessionId", header: "Id de sesión", outlineLevel: 1 },
@@ -212,7 +213,7 @@ class ExcelWriter {
             const line = sheet.getRow(r);
             const values = [
                 empName,
-                row.token,
+                tokenRef(row.token), // nunca el token ni su hash completo (issue #169)
                 row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt ?? ""),
                 row.expiresAt instanceof Date ? row.expiresAt.toISOString() : String(row.expiresAt ?? ""),
                 row.sessionId,

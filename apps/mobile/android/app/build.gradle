@@ -114,6 +114,16 @@ android {
     buildFeatures {
         buildConfig true
     }
+    // APK por ABI (issue #179): el APK universal pesa ~130 MB; cada equipo descarga solo el de su arquitectura.
+    // Para desarrollo se puede apagar con -Papk.splitPerAbi=false.
+    splits {
+        abi {
+            enable (findProperty('apk.splitPerAbi') ?: 'true').toBoolean()
+            reset()
+            include "arm64-v8a", "armeabi-v7a", "x86_64"
+            universalApk false
+        }
+    }
     signingConfigs {
         debug {
             storeFile file('debug.keystore')

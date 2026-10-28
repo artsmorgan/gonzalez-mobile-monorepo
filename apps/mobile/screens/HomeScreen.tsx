@@ -31,6 +31,8 @@ import {
   LAST_LOCATION_UPDATED_EVENT,
 } from '@/hooks/updateLastLocation';
 import * as Location from 'expo-location';
+import * as Device from 'expo-device';
+import { pickApkAbi } from '@/hooks/apkAbi';
 import { downloadAndShareLargeAuthedFile } from '@/hooks/downloadReportFileToDevice';
 import { getEmbeddedAppVersionInfo } from '@/hooks/appVariant';
 import { getGuardifySnapshot, installGuardifyUpdate } from '@/hooks/guardifyClient';
@@ -421,9 +423,11 @@ export default function HomeScreen() {
         Alert.alert('Error', 'No se encontró la URL del servidor.');
         return;
       }
+      // Issue #179: se pide el APK de la arquitectura del equipo (el servidor cae al universal si no existe).
+      const abi = pickApkAbi(Device.supportedCpuArchitectures);
       const result = await downloadAndShareLargeAuthedFile({
-        url: `${apiUrl}/api/mobile-versions/${encodeURIComponent(version)}`,
-        fileName: `MonitoreApp-${version}.apk`,
+        url: `${apiUrl}/api/mobile-versions/${encodeURIComponent(version)}${abi ? `?abi=${encodeURIComponent(abi)}` : ''}`,
+        fileName: abi ? `MonitoreApp-${version}-${abi}.apk` : `MonitoreApp-${version}.apk`,
         mimeType: 'application/vnd.android.package-archive',
         dialogTitle: 'Instalar actualización',
         refreshAccessToken,

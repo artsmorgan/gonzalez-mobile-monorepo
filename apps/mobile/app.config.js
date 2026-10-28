@@ -202,6 +202,10 @@ module.exports = ({ config }) => {
         ],
         "expo-audio",
         "expo-video",
+        // Permisos que la app no usa y exclusión de backups (issues #177 y #180): sobrevive a `expo prebuild`.
+        "./plugins/withAndroidSecurityPolicy.js",
+        // APK por arquitectura en vez de uno universal de ~130 MB (issue #179).
+        "./plugins/withAndroidAbiSplits.js",
         [
           "./plugins/withAndroidAppVariantsFinalize.js"
         ]
@@ -216,8 +220,8 @@ module.exports = ({ config }) => {
           process.env.API_SERVER ||
           process.env.NEXT_PUBLIC_API_SERVER ||
           // test https://api-gonzalez-mobile-monorepo-production.up.railway.app
-          // prod https://gonzalez-mobile-app-production.up.railway.app
-          "https://api-gonzalez-mobile-monorepo-production.up.railway.app",
+          // prod https://gonzalez-mobile-server-production.up.railway.app
+          "https://obvious-alternate-nextel-lows.trycloudflare.com",
         /** Debe coincidir con `MOBILE_ACCESS_TOKEN` del servidor (query en `/api/main-structure`). */
         MOBILE_ACCESS_TOKEN:
           process.env.EXPO_PUBLIC_MOBILE_ACCESS_TOKEN ||

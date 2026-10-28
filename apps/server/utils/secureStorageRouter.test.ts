@@ -3,7 +3,9 @@ import { describe, it } from "node:test";
 import {
     createDeviceUidProvider,
     createSecureRouter,
+    isSecureStorageError,
     SECURE_CHUNK_SIZE,
+    SecureStorageError,
     SENSITIVE_STORAGE_KEYS,
     withChunks,
     type PlainStorage,
@@ -19,18 +21,24 @@ function memPlain(initial: Record<string, string> = {}): PlainStorage & { data: 
         async removeItem(k) { data.delete(k); },
     };
 }
-function memSecure(opts: { available?: boolean; failGet?: boolean; failSet?: boolean; maxValue?: number } = {}): SecureBackend & { data: Map<string, string> } {
+type SecureOpts = { available?: boolean; failGet?: boolean; failSet?: boolean; failSetTimes?: number; failRemove?: boolean; maxValue?: number };
+/** Almacén seguro en memoria. `opts` es mutable: una prueba puede cambiar un fallo a mitad de camino. */
+function memSecure(opts: SecureOpts = {}): SecureBackend & { data: Map<string, string>; opts: SecureOpts; removeCalls: string[] } {
     const data = new Map<string, string>();
+    const removeCalls: string[] = [];
     return {
         data,
+        opts,
+        removeCalls,
         async isAvailable() { return opts.available ?? true; },
         async get(k) { if (opts.failGet) throw new Error("keystore"); return data.get(k) ?? null; },
         async set(k, v) {
+            if (opts.failSetTimes && opts.failSetTimes > 0) { opts.failSetTimes -= 1; throw new Error("keystore"); }
             if (opts.failSet) throw new Error("keystore");
             if (opts.maxValue && v.length > opts.maxValue) throw new Error("valor demasiado grande");
             data.set(k, v);
         },
-        async remove(k) { data.delete(k); },
+        async remove(k) { removeCalls.push(k); if (opts.failRemove) throw new Error("keystore"); data.delete(k); },
     };
 }
 
@@ -86,9 +94,9 @@ describe("almacenamiento seguro de la sesión (issue #144)", () => {
         assert.equal(plain.data.get("access_token"), "a");
     });
 
-    it("sin almacén seguro (APK anterior, Expo Go) todo sigue en AsyncStorage", async () => {
+    it("[solo desarrollo] sin almacén seguro (Expo Go) todo sigue en AsyncStorage", async () => {
         const plain = memPlain({ access_token: "a" }); const secure = memSecure({ available: false });
-        const r = createSecureRouter({ plain, secure });
+        const r = createSecureRouter({ plain, secure, allowPlainFallback: true });
         assert.equal(await r.getItem("access_token"), "a");
         await r.setItem("refresh_token", "r");
         assert.equal(plain.data.get("refresh_token"), "r");
@@ -96,14 +104,14 @@ describe("almacenamiento seguro de la sesión (issue #144)", () => {
         assert.equal(r.isSecure(), false);
     });
 
-    it("si el Keystore falla al escribir o leer, se usa AsyncStorage para esa llave", async () => {
+    it("[solo desarrollo] si el Keystore falla al escribir o leer, se usa AsyncStorage para esa llave", async () => {
         const plain = memPlain(); const secure = memSecure({ failSet: true });
-        const r = createSecureRouter({ plain, secure });
+        const r = createSecureRouter({ plain, secure, allowPlainFallback: true });
         await r.setItem("access_token", "t");
         assert.equal(await r.getItem("access_token"), "t");
         assert.equal(plain.data.get("access_token"), "t");
         const secure2 = memSecure({ failGet: true }); const plain2 = memPlain();
-        const r2 = createSecureRouter({ plain: plain2, secure: secure2 });
+        const r2 = createSecureRouter({ plain: plain2, secure: secure2, allowPlainFallback: true });
         await plain2.setItem("employee_data", "{}");
         assert.equal(await r2.getItem("employee_data"), "{}");
     });
@@ -160,5 +168,137 @@ describe("identificador único del equipo (issue #144)", () => {
         await assert.rejects(get(), /disco/);
         fail = false;
         assert.equal(await get(), "uid-x");
+    });
+});
+
+const SECRETO = "secreto-que-no-debe-quedar-en-claro";
+/** Ninguna llave de AsyncStorage contiene el secreto (ni siquiera dentro de otro valor). */
+const sinSecretoEnPlano = (plain: { data: Map<string, string> }) => [...plain.data.entries()].every(([k, v]) => !k.includes(SECRETO) && !v.includes(SECRETO));
+
+describe("sin degradar a texto plano (issue #173, H02)", () => {
+    it("por defecto, si el almacén seguro no está disponible, guardar una credencial falla con un error tipado y NO escribe en AsyncStorage", async () => {
+        const plain = memPlain(); const secure = memSecure({ available: false });
+        const r = createSecureRouter({ plain, secure });
+        for (const key of SENSITIVE_STORAGE_KEYS) {
+            await assert.rejects(() => r.setItem(key, SECRETO), (e: unknown) => isSecureStorageError(e) && e.code === "secure_unavailable" && e.key === key);
+        }
+        assert.equal(plain.data.size, 0);
+        assert.equal(sinSecretoEnPlano(plain), true);
+    });
+    it("por defecto, si el Keystore rechaza la escritura (tras reintentar) falla con un error tipado y NO deja la credencial en claro", async () => {
+        const plain = memPlain(); const secure = memSecure({ failSet: true });
+        const r = createSecureRouter({ plain, secure });
+        await assert.rejects(() => r.setItem("access_token", SECRETO), (e: unknown) => e instanceof SecureStorageError && e.code === "secure_write_failed" && e.key === "access_token");
+        await assert.rejects(() => r.multiSet([["refresh_token", SECRETO]]), SecureStorageError);
+        assert.equal(sinSecretoEnPlano(plain), true);
+        assert.equal(await r.getItem("access_token"), null);
+    });
+    it("un fallo pasajero del Keystore se reintenta y la credencial queda en el almacén seguro", async () => {
+        const plain = memPlain(); const secure = memSecure({ failSetTimes: 1 });
+        const r = createSecureRouter({ plain, secure });
+        await r.setItem("access_token", "t");
+        assert.equal(secure.data.get("access_token"), "t");
+        assert.equal(plain.data.has("access_token"), false);
+    });
+    it("lo que no es sensible sigue yendo a AsyncStorage aunque el almacén seguro no esté", async () => {
+        const plain = memPlain(); const secure = memSecure({ available: false });
+        const r = createSecureRouter({ plain, secure });
+        await r.setItem("current_marca", "{}");
+        assert.equal(plain.data.get("current_marca"), "{}");
+    });
+    it("si el almacén seguro estaba momentáneamente no disponible, vuelve a probarlo y guarda en él (no queda fijado en «no disponible»)", async () => {
+        const plain = memPlain(); const secure = memSecure({ available: false });
+        const r = createSecureRouter({ plain, secure });
+        await assert.rejects(() => r.setItem("access_token", "t1"), SecureStorageError);
+        secure.opts.available = true;
+        await r.setItem("access_token", "t2");
+        assert.equal(secure.data.get("access_token"), "t2");
+        assert.equal(r.isSecure(), true);
+    });
+    it("leer una sesión que quedó en AsyncStorage de una versión anterior sigue funcionando aunque el Keystore no esté (no se pierde la sesión)", async () => {
+        const plain = memPlain({ access_token: "vieja" }); const secure = memSecure({ available: false });
+        const r = createSecureRouter({ plain, secure });
+        assert.equal(await r.getItem("access_token"), "vieja");
+    });
+    it("cableado: el arranque solo permite el respaldo en claro en desarrollo y el inicio de sesión distingue este error", () => {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const fs = require("node:fs") as typeof import("node:fs");
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const path = require("node:path") as typeof import("node:path");
+        const install = fs.readFileSync(path.resolve(__dirname, "..", "..", "mobile", "hooks", "installSecureStorage.ts"), "utf8");
+        assert.match(install, /allowPlainFallback:\s*__DEV__/);
+        const auth = fs.readFileSync(path.resolve(__dirname, "..", "..", "mobile", "contexts", "AuthContext.tsx"), "utf8");
+        assert.match(auth, /isSecureStorageError\(/);
+    });
+});
+
+describe("borrado que falla: pendiente y con reintento (issue #173, H02)", () => {
+    const sesion = { access_token: "a", refresh_token: "r", employee_data: "{}" };
+    const conSesionGuardada = async (opts: SecureOpts = {}) => {
+        const plain = memPlain(); const secure = memSecure(opts);
+        const r = createSecureRouter({ plain, secure });
+        await r.multiSet(Object.entries(sesion));
+        return { plain, secure, r };
+    };
+    it("si el Keystore no deja borrar, cerrar sesión no lanza pero la credencial NO se puede volver a leer, y queda registrada como pendiente", async () => {
+        const { plain, secure, r } = await conSesionGuardada();
+        secure.opts.failRemove = true;
+        await r.multiRemove(Object.keys(sesion)); // no lanza
+        for (const k of Object.keys(sesion)) assert.equal(await r.getItem(k), null, `${k} se sigue leyendo tras cerrar sesión`);
+        assert.ok(secure.data.has("access_token"), "el Keystore sigue teniendo el valor (por eso hay que reintentar)");
+        assert.deepEqual(JSON.parse(plain.data.get("secure_pending_deletes")!).sort(), Object.keys(sesion).sort());
+        assert.deepEqual(r.getPendingDeletes().sort(), Object.keys(sesion).sort());
+    });
+    it("un error de borrado no detiene el resto: se intenta borrar todas las llaves", async () => {
+        const { secure, r } = await conSesionGuardada();
+        secure.opts.failRemove = true;
+        secure.removeCalls.length = 0;
+        await r.multiRemove(Object.keys(sesion));
+        for (const k of Object.keys(sesion)) assert.ok(secure.removeCalls.includes(k), `no se intentó borrar ${k}`);
+    });
+    it("reintenta el borrado y, al lograrlo, deja de estar pendiente", async () => {
+        const { plain, secure, r } = await conSesionGuardada();
+        secure.opts.failRemove = true;
+        await r.multiRemove(Object.keys(sesion));
+        assert.deepEqual((await r.retryPendingDeletes()).sort(), Object.keys(sesion).sort(), "mientras siga fallando, siguen pendientes");
+        secure.opts.failRemove = false;
+        assert.deepEqual(await r.retryPendingDeletes(), []);
+        assert.equal(secure.data.size, 0);
+        assert.deepEqual(JSON.parse(plain.data.get("secure_pending_deletes") ?? "[]"), []);
+    });
+    it("el reintento sobrevive al cierre de la app: al abrir de nuevo se completa solo", async () => {
+        const { plain, secure, r } = await conSesionGuardada();
+        secure.opts.failRemove = true;
+        await r.multiRemove(Object.keys(sesion));
+        secure.opts.failRemove = false;
+        const reabierta = createSecureRouter({ plain, secure }); // otra «ejecución» de la app, mismo almacenamiento
+        await reabierta.ready();
+        assert.equal(secure.data.size, 0, "el Keystore debe quedar vacío");
+        assert.deepEqual(reabierta.getPendingDeletes(), []);
+        assert.equal(await reabierta.getItem("access_token"), null);
+    });
+    it("leer una llave pendiente intenta borrarla antes y nunca devuelve el valor viejo", async () => {
+        const { secure, r } = await conSesionGuardada();
+        secure.opts.failRemove = true;
+        await r.removeItem("access_token");
+        secure.opts.failRemove = false;
+        assert.equal(await r.getItem("access_token"), null);
+        assert.equal(secure.data.has("access_token"), false);
+        assert.deepEqual(r.getPendingDeletes(), []);
+    });
+    it("iniciar sesión de nuevo sobre una llave pendiente guarda el valor nuevo y limpia el pendiente", async () => {
+        const { secure, r } = await conSesionGuardada();
+        secure.opts.failRemove = true;
+        await r.removeItem("access_token");
+        await r.setItem("access_token", "nueva");
+        assert.equal(await r.getItem("access_token"), "nueva");
+        assert.equal(r.getPendingDeletes().includes("access_token"), false);
+    });
+    it("el borrado que sí funciona no deja pendientes ni rastro en claro", async () => {
+        const { plain, secure, r } = await conSesionGuardada();
+        await r.multiRemove(Object.keys(sesion));
+        assert.equal(secure.data.size, 0);
+        assert.deepEqual(r.getPendingDeletes(), []);
+        assert.equal(plain.data.size === 0 || [...plain.data.keys()].every((k) => k === "secure_pending_deletes"), true);
     });
 });
