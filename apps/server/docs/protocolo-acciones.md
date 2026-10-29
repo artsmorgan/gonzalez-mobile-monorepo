@@ -42,7 +42,7 @@ POST {base}/{tipo}/{id}/{accion}?scope      → 200 { estado, ref?, message? }
 - `scope`, paginación, filtros `f.<col>` y orden: **igual que los reportes** (`docs/protocolo-reportes.md`); el alcance falla cerrado.
 - `acciones` del detalle son las que **el actor** puede ejecutar ahora (la app valida su alcance y el estado). Guardify solo muestra esos botones.
 - `datos` trae lo propio del registro que la pantalla necesita para pedir una acción (en `permisos`: `turnos: [{ id, etiqueta, reemplazoId, reemplazoNombre }]`).
-- `params` son los parámetros propios de la acción (en `aprobar` de `permisos`: `{ turnos: [{ id, reemplazoId }], reemplazoObligatorio, observaciones }`); la app valida lo que le toca. Las `signatures` de `aprobar` son dos imágenes (`role: "digital"` y `role: "manual"`, `data:` URL).
+- `params` son los parámetros propios de la acción (en `aprobar` de `permisos`: `{ turnos: [{ id, reemplazoId }], reemplazoObligatorio, observaciones }`); la app valida lo que le toca. En `aprobar`, `signatures` lleva **solo la firma manual**: `[{ role: "manual", method: "manual", image: "data:image/png;base64,…" }]` (PNG o JPEG, hasta 1.000.000 caracteres). **La firma digital la genera el servidor** a partir del actor y de la petición firmada (determinista: la misma petición da la misma firma) y **no se acepta del cliente**: un `role: "digital"` responde `400 invalid_request`; sin manual, `400 signature_required`.
 - **Idempotencia:** la misma `idempotencyKey` sobre el mismo registro devuelve el **mismo resultado** sin repetir el efecto (aunque el estado ya haya cambiado por esa misma acción). Una clave igual con otra acción o registro: `409 conflict`.
 - Los adjuntos se piden con el mecanismo que ya usan los formularios (enlaces firmados por Guardify); este protocolo solo los lista.
 
@@ -58,7 +58,9 @@ La app responde `{ "code": "<código>", "message"?: "…" }` con el estado HTTP 
 | `out_of_scope` | El actor no tiene alcance sobre el registro (o no se pudo resolver) | 403 |
 | `reason_required` / `signature_required` | Falta el motivo o la firma que la app exige | 400 |
 | `planillas_session_required` | La acción escribe en Planillas con el token de la persona y no hay uno vigente: debe abrir la app y entrar a Planillas. **No se cambió nada** | 409 |
-| `invalid_request` | Cuerpo mal formado | 400 / 422 |
+| `invalid_request` | Cuerpo mal formado, firma digital enviada por el cliente, firma manual que no es imagen o pasa del tope, carga sin `Idempotency-Key`, demasiadas filas | 400 / 422 |
+| `unauthorized` | Llave inválida, actor ausente o vencido, o firma del actor que no corresponde a esta petición (método, ruta, consulta y cuerpo). Va también como `error: "unauthorized"` (alias, se quitará en una versión) | 401 |
+| `planillas_unavailable` | La carga masiva llegó a Planillas y esta respondió que no pudo cargarla (el 502 de Planillas sin cuerpo tipado sigue siendo «no disponible») | 502 |
 
 **Importante:** un `404` **sin** el cuerpo tipado significa «la app todavía no tiene esta API» (Guardify lo muestra como no disponible, sin tocar nada); un registro inexistente **debe** responder `404 { "code": "not_found" }`. Lo mismo para `501/502/503/504` sin cuerpo tipado.
 
@@ -77,10 +79,11 @@ La app responde `{ "code": "<código>", "message"?: "…" }` con el estado HTTP 
 La consola lee el Excel y la app valida y carga. **Guardify** (`lib/xlsx-reader.ts`, `lib/imports/inventario.ts`): lector propio de `.xlsx` con límites duros (5 MB, 5000 filas, 60 columnas, descompresión acotada; sin la biblioteca con CVE), revisión fila por fila con el número de fila de la hoja, plantilla vacía descargable (solo encabezados e instrucciones, sin ejemplos inventados) y dos pasos: **revisar** (la app valida sin escribir nada) y **cargar** (se vuelve a leer y revisar el mismo archivo). No guarda el archivo ni los datos; la bitácora deja quién, cuántas filas y el resultado (`app_import.requested`, `.previewed`, `.applied`, `.failed`).
 ```
 POST {base}/imports/inventario-puesto   { modo: "validar" | "aplicar", filas: [{ codigo_puesto, numero_articulo, cantidad, serie, marca, modelo|null, fecha_entrega: "DD-MM-YYYY" }] }
-  → 200 { modo, creados: { planes, entregas }, omitidos: [...], mensaje }
-  → 400/404 { code, message, errores: ["Artículo 3: serie obligatoria.", …] }       409 { code: "planillas_session_required" }
+  → 200 { modo, creados: { planes, entregas }, omitidos: ["Fila N: motivo", …], filas: [{ fila, estado: "creada" | "omitida" | "error", motivo }], resumen: { recibidas, creadas, omitidas, errores }, mensaje, evidencia? }
+  → 400/404 { code, message, errores: ["Artículo 3: serie obligatoria.", …], filas: [...], resumen: {...} }       409 { code: "planillas_session_required" }       502 { code: "planillas_unavailable" }
 ```
-La app comprueba que los artículos y los códigos de puesto existan, **omite lo ya cargado** (repetir la carga no duplica) y, en `aplicar`, lo manda a Planillas con el token de Planillas guardado de la persona (igual que las aprobaciones). `validar` no escribe ni pide esa sesión. Máximo 2000 filas por carga. Permiso de Guardify: `cargas:inventario-puesto` (migración f35). Las **actividades** no tienen carga masiva en la app ni plantilla definida: pendiente.
+`filas` trae el resultado de **cada fila recibida** (`fila` = su posición, 1 = la primera) y `resumen` siempre suma: `creadas + omitidas + errores = recibidas`. Planillas recibe **una sola fila por (puesto, artículo)**: de varias con series distintas viaja una y las demás salen **omitidas** con su motivo (y se envían al repetir la carga); una fila repetida igual dentro de la carga sale omitida («Repetida en la carga»). Con errores de datos se rechaza **toda** la carga (400/404): las filas con error lo dicen y las demás quedan «omitida» con el motivo de que no se procesó nada. **`aplicar` exige `Idempotency-Key`** (sin ella, `400 invalid_request`); `validar` no la necesita.
+La app comprueba que los artículos y los códigos de puesto existan, **omite lo ya cargado** (repetir la carga no duplica) y, en `aplicar`, lo manda a Planillas con el token de Planillas guardado de la persona (igual que las aprobaciones). `validar` no escribe ni pide esa sesión. Máximo **2000 filas por carga** (constante `INVENTARIO_MAX_FILAS`, la misma en Guardify y en la app, hasta que Planillas diga su tope real; Guardify baja su límite de 5000 a 2000). Permiso de Guardify: `cargas:inventario-puesto` (migración f35). Las **actividades** no tienen carga masiva en la app ni plantilla definida: pendiente.
 
 ## Bitácora (Guardify)
 `app_action.requested` (antes de llamar), `app_action.completed` o `app_action.failed` (después), con app, tipo, registro, acción, clave de idempotencia, alcance, motivo, roles de firma que viajaron, estado resultante o código de error. El actor es quien inició sesión en Guardify.

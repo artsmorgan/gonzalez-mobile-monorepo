@@ -411,3 +411,68 @@ export const putJobManualQuizResult = async ({
 };
 
 
+
+type EditJobManualParams = {
+  id: number;
+  /** Lo que cambió (ver `buildEditBody` en `jobManualEdit.ts`). */
+  body: Record<string, unknown>;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+};
+
+/**
+ * Edita un documento ya subido (título, descripción, clasificación, quiz y archivos nuevos; con `nueva_version: true` publica una versión nueva). Solo con
+ * conexión: no pasa por la cola. Responde `{ status, message, code?, version?, version_cambio?, notificados? }`.
+ */
+export const editJobManual = async ({ id, body, refreshAccessToken, logout }: EditJobManualParams): Promise<any> => {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) {
+    throw new Error('Server URL not configured');
+  }
+
+  const response = await authedFetch({
+    url: `${apiUrl}/api/job-manuals/${id}/edit`,
+    init: {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+    // Puede llevar archivos en base64: el plazo de las subidas, no el de una escritura corriente.
+    timeoutMs: 120_000,
+    refreshAccessToken,
+    logout,
+  });
+
+  if (!response) {
+    return { status: false, message: 'Sesión expirada' };
+  }
+  return response.json();
+};
+
+type DeleteJobManualFileParams = {
+  id: number;
+  fileId: number;
+  marcaId: number;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+};
+
+/** Borra AL INSTANTE un archivo del documento (fila y archivo del almacén). Solo con conexión. */
+export const deleteJobManualFile = async ({ id, fileId, marcaId, refreshAccessToken, logout }: DeleteJobManualFileParams): Promise<any> => {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) {
+    throw new Error('Server URL not configured');
+  }
+
+  const response = await authedFetch({
+    url: `${apiUrl}/api/job-manuals/${id}/files/${fileId}?marca_id=${encodeURIComponent(String(marcaId))}`,
+    init: { method: 'DELETE', headers: { 'Content-Type': 'application/json' } },
+    refreshAccessToken,
+    logout,
+  });
+
+  if (!response) {
+    return { status: false, message: 'Sesión expirada' };
+  }
+  return response.json();
+};

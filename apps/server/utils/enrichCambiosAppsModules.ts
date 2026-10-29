@@ -434,6 +434,10 @@ const TABLE_PROP_LABELS: Record<string, Record<string, string>> = {
     title: "Título",
     description: "Descripción",
     quiz: "Cuestionario",
+    classification: "Clasificación",
+    version: "Versión del documento",
+    archivos_agregados: "Archivos agregados",
+    archivo_eliminado: "Archivo eliminado",
   },
   c_producto_no_conforme: {
     firma_persona_identifico_pnc: "Firma persona que identificó",

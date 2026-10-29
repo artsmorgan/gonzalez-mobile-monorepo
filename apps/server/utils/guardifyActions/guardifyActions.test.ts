@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { describe, it } from "node:test";
-import { ACTOR_MAX_SKEW_MS, resolveActorEmployee, verifyActorHeaders } from "./actor";
+import { ACTOR_MAX_SKEW_MS, FIRMA_MANUAL_MAX_CHARS, firmaDigitalDeActor, resolveActorEmployee, validarFirmaManual, verifyActorHeaders } from "./actor";
+import { decodificarFirmaCaptura } from "../evidencia";
 import type { ActionEnv } from "./env";
 import { handleActionDetail, handleActionExecute, handleImport, handleLookupEmpleado, IMPORT_MAX_ROWS, MAX_BODY_CHARS, turnosDe } from "./handler";
-import { cargarInventarioPuesto, formatearParaPlanillas, parseFechaEntregaParts, planificarCargaInventario } from "./inventario";
+import { cargarInventarioPuesto, formatearParaPlanillas, INVENTARIO_MAX_FILAS, parseFechaEntregaParts, planificarCargaInventario } from "./inventario";
 import { aprobarMutuoAcuerdo } from "./aprobar-mutuo";
 import { aprobarPermisoSolicitud } from "./aprobar-permiso";
 import { MARGEN_TOKEN_MS, tokenPlanillasVigente } from "./planillas";
@@ -68,9 +71,11 @@ describe("identidad del actor (protocolo de acciones)", () => {
 describe("quién es el actor en la app", () => {
     const db = (tabla: { findUnique?: (a: any) => any; findMany?: (a: any) => any }) => ({ c_empleado: { findUnique: async () => null, findMany: async () => [], ...tabla } });
     it("primero el id; luego la cédula y el correo, cada uno solo si da UNA persona", async () => {
-        assert.deepEqual(await resolveActorEmployee(db({ findUnique: async () => ({ id: 7, supervisor_id: 3 }) }), { email: "a@b.co", name: "n", externalId: "7" }), { id: 7, supervisorId: 3 });
-        assert.deepEqual(await resolveActorEmployee(db({ findMany: async (a: any) => (a.where.cedula ? [{ id: 5, supervisor_id: null }] : []) }), { email: "a@b.co", name: "n", cedula: "x" }), { id: 5, supervisorId: null });
-        assert.deepEqual(await resolveActorEmployee(db({ findMany: async (a: any) => (a.where.Email ? [{ id: 9, supervisor_id: 1 }] : []) }), { email: "a@b.co", name: "n" }), { id: 9, supervisorId: 1 });
+        assert.deepEqual(await resolveActorEmployee(db({ findUnique: async () => ({ id: 7, supervisor_id: 3 }) }), { email: "a@b.co", name: "n", externalId: "7" }), { id: 7, supervisorId: 3, cedula: null });
+        assert.deepEqual(await resolveActorEmployee(db({ findMany: async (a: any) => (a.where.cedula ? [{ id: 5, supervisor_id: null }] : []) }), { email: "a@b.co", name: "n", cedula: "x" }), { id: 5, supervisorId: null, cedula: null });
+        assert.deepEqual(await resolveActorEmployee(db({ findMany: async (a: any) => (a.where.Email ? [{ id: 9, supervisor_id: 1 }] : []) }), { email: "a@b.co", name: "n" }), { id: 9, supervisorId: 1, cedula: null });
+        // La cédula del actor sale de su registro en la app (va a la evidencia de la acción).
+        assert.equal((await resolveActorEmployee(db({ findMany: async (a: any) => (a.where.cedula ? [{ id: 5, supervisor_id: null, cedula: " 111 " }] : []) }), { email: "a@b.co", name: "n", cedula: "111" }))?.cedula, "111");
     });
     it("dos coincidencias o ninguna: no se adivina", async () => {
         assert.equal(await resolveActorEmployee(db({ findMany: async () => [{ id: 1 }, { id: 2 }] }), { email: "a@b.co", name: "n", cedula: "x" }), null);
@@ -430,8 +435,9 @@ describe("API de acciones: aprobar y buscar reemplazo", () => {
     const good = goodHeaders;
     const H = () => ({ ...good(), "idempotency-key": IDEM });
     const deps = (f: ReturnType<typeof fakeEnv>) => ({ getEnv: () => f.env, env: env0, now: () => NOW });
-    const FIRMA = "firma-con-mas-de-diez-caracteres";
-    const sigs = [{ role: "digital", method: "digital", image: FIRMA }, { role: "manual", method: "manual", image: FIRMA }];
+    // Guardify manda SOLO la firma manual (imagen); la digital la genera el servidor (issue #194).
+    const FIRMA = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+    const sigs = [{ role: "manual", method: "manual", image: FIRMA }];
     const jsonOf = async (r: Response) => r.json() as Promise<any>;
     const permisos = (extra: object = {}) => {
         const f = fakeEnv({ tablas: { c_solicitud_permiso: { estado: "pendiente", ejecutivo_cuenta: 5, empleado_id: 8, tipo: "Sin goce", corpo_id: 3, turnos: JSON.stringify([{ id: 21, puesto: "p", hora_inicio: "06:00", hora_fin: "14:00", tipo_turno: "Diurno", reemplazo_id: null }]), fecha_inicio: "2026-10-01T00:00:00.000Z", fecha_fin: "2026-10-01T00:00:00.000Z" } }, empleados: { 5: {}, 8: {} }, ...extra });
@@ -458,13 +464,21 @@ describe("API de acciones: aprobar y buscar reemplazo", () => {
         assert.equal(r.status, 200); assert.equal((await jsonOf(r)).estado, "aprobado");
         assert.equal(f.planillasCalls.length, 1); assert.equal(f.planillasCalls[0]!.token, "token-estructural"); assert.equal(f.planillasCalls[0]!.body.reemplazo_id, 31); assert.equal(f.planillasCalls[0]!.body.tipo, "PSG");
         const upd = writes(f.calls)[0]!;
-        assert.equal(upd.data.estado, "aprobado"); assert.equal(upd.data.firma_ejecutivo_cuenta_digital, FIRMA); assert.equal(upd.data.observaciones, "ok");
+        assert.equal(upd.data.estado, "aprobado"); assert.equal(upd.data.firma_ejecutivo_cuenta_manual, FIRMA); assert.equal(upd.data.observaciones, "ok");
+        // La firma digital la genera el servidor con la forma de la que arma la app (sesión:empleado:lat:lng:marca de tiempo); el cliente no la manda.
+        assert.ok(decodificarFirmaCaptura(upd.data.firma_ejecutivo_cuenta_digital), "la digital es del servidor");
+        assert.equal(decodificarFirmaCaptura(upd.data.firma_ejecutivo_cuenta_digital)!.empleadoId, "5");
         assert.deepEqual(JSON.parse(upd.data.turnos), [{ id: 21, puesto: "p", hora_inicio: "06:00", hora_fin: "14:00", tipo_turno: "Diurno", reemplazo_id: 31 }]);
     });
-    it("aprobar sin las dos firmas: 400 «signature_required» sin llamar a Planillas", async () => {
+    it("aprobar sin la firma manual: 400 «signature_required»; con una firma digital del cliente o una manual que no es imagen: 400 «invalid_request»; nada llega a Planillas", async () => {
         const f = permisos();
-        const r = await handleActionExecute(req("POST", H(), { signatures: [sigs[0]], params: { turnos: [] } }), "permisos", "1", "aprobar", deps(f));
-        assert.deepEqual([r.status, (await jsonOf(r)).code], [400, "signature_required"]);
+        const prueba = async (signatures: unknown) => { const r = await handleActionExecute(req("POST", H(), { signatures, params: { turnos: [] } }), "permisos", "1", "aprobar", deps(f)); return [r.status, (await jsonOf(r)).code]; };
+        assert.deepEqual(await prueba([]), [400, "signature_required"]);
+        assert.deepEqual(await prueba(undefined), [400, "signature_required"]);
+        assert.deepEqual(await prueba([{ role: "digital", method: "digital", image: FIRMA }, sigs[0]]), [400, "invalid_request"], "no se acepta una digital enviada por el cliente");
+        assert.deepEqual(await prueba([{ role: "manual", method: "manual", image: "firma-con-mas-de-diez-caracteres" }]), [400, "invalid_request"], "la manual debe ser una imagen data:");
+        assert.deepEqual(await prueba([{ role: "manual", method: "manual", image: "data:text/html;base64,AAAA" }]), [400, "invalid_request"]);
+        assert.deepEqual(await prueba([{ role: "manual", method: "manual", image: `data:image/png;base64,${"A".repeat(FIRMA_MANUAL_MAX_CHARS)}` }]), [400, "invalid_request"], "sobre el tope");
         assert.equal(f.planillasCalls.length, 0);
     });
     it("aprobar un mutuo acuerdo con sesión de Planillas; el reintento del mismo actor sobre uno ya aprobado por él da el mismo resultado sin repetir", async () => {
@@ -538,20 +552,26 @@ describe("carga masiva del inventario de un puesto", () => {
         assert.equal(((await cargar(world(), [fila()], "aplicar", null)) as any).code, "planillas_session_required");
         const f = world();
         const r: any = await cargar(f, [fila(), fila({ serie: "S2" })]);
-        assert.equal(r.ok, true); assert.deepEqual([r.body.created_plans, r.body.created_entregas], [1, 2]);
+        // Planillas recibe UNA fila por (puesto, artículo): la segunda serie no viaja y se informa como omitida (issue #195), no se cuenta como creada.
+        assert.equal(r.ok, true); assert.deepEqual([r.body.created_plans, r.body.created_entregas], [1, 1]);
+        assert.deepEqual(r.body.filas.map((x: any) => [x.fila, x.estado]), [[1, "creada"], [2, "omitida"]]);
+        assert.match(r.body.filas[1].motivo, /ya viaja la fila 1/);
+        assert.deepEqual(r.body.resumen, { recibidas: 2, creadas: 1, omitidas: 1, errores: 0 });
         assert.deepEqual(f.planillasCalls, [{ path: "/articulos-puesto/carga-masiva", token: "tp", body: { items: [{ codigo_puesto: "P-A", numero_articulo: 1, cantidad: 2, serie: "S1", marca: "M1", modelo: "Mo1", fecha_entrega: "2026-10-05" }] } }]);
     });
     it("lo que ya existe se omite (plan y entrega repetidos): repetir la carga no duplica", async () => {
         const f = world({ many: { n_articulo_corpo_puesto: [{ id: 1 }], e_estructura_puesto: [{ id: 10, codigo: "P-A" }], e_estructura_articulo_corpo_puesto_plan: [{ puesto_id: 10, articuloCP_id: 1 }], e_estructura_articulo_corpo_puesto_entrega: [{ puesto_id: 10, nomencladorArticuloCP_id: 1, marca: "M1", serie: "S1", modelo: "Mo1" }] } });
         const r: any = await cargar(f, [fila()]);
-        assert.equal(r.ok, true); assert.deepEqual([r.body.created_plans, r.body.created_entregas], [0, 0]); assert.equal(r.body.skipped.length, 2);
+        assert.equal(r.ok, true); assert.deepEqual([r.body.created_plans, r.body.created_entregas], [0, 0]); assert.equal(r.body.skipped.length, 1);
+        assert.deepEqual(r.body.filas.map((x: any) => [x.fila, x.estado]), [[1, "omitida"]]);
+        assert.match(r.body.filas[0].motivo, /Ya existe en la base/);
         // Issue #181: con todo ya cargado no se llama a Planillas (antes se le mandaba una lista vacía).
         assert.equal(f.planillasCalls.length, 0);
         assert.match(r.body.message, /todo ya existía/);
     });
-    it("si Planillas dice que no: 500; si lanza, el error sube y no se da por hecho", async () => {
+    it("si Planillas dice que no: 502 «planillas_unavailable» (no «invalid_request», que el protocolo reserva para 400/422); si lanza, el error sube y no se da por hecho", async () => {
         const r: any = await cargar(world({ planillas: () => ({ success: false }) }), [fila()]);
-        assert.deepEqual([r.ok, r.status], [false, 500]);
+        assert.deepEqual([r.ok, r.status, r.code], [false, 502, "planillas_unavailable"]);
         assert.equal(r.message, "Error al cargar los artículos en Planillas");
         await assert.rejects(() => cargar(world({ planillas: () => { throw new Error("401"); } }), [fila()]), /401/);
     });
@@ -597,23 +617,40 @@ describe("carga masiva del inventario de un puesto", () => {
             assert.equal(f.planillasCalls.length, 0);
         });
         it("validar con errores de datos: 400 con el detalle por fila (`errores`)", async () => {
-            const r = await handleImport(req(good(), { modo: "validar", filas: [fila({ serie: "" })] }), "inventario-puesto", deps(mk()));
+            const r = await handleImport(req(good(), { modo: "validar", filas: [fila({ serie: "" }), fila({ serie: "S9" })] }), "inventario-puesto", deps(mk()));
             const b = await jsonOf(r);
             assert.deepEqual([r.status, b.code, b.errores], [400, "invalid_request", ["Artículo 1: serie obligatoria."]]);
+            // Resultado de CADA fila y que suma lo recibido (issue #195): la que tiene error lo dice; la otra no se procesó porque no se envió nada.
+            assert.deepEqual(b.filas.map((x: any) => [x.fila, x.estado]), [[1, "error"], [2, "omitida"]]);
+            assert.equal(b.filas[0].motivo, "serie obligatoria.");
+            assert.deepEqual(b.resumen, { recibidas: 2, creadas: 0, omitidas: 1, errores: 1 });
         });
         it("aplicar sin sesión de Planillas vigente: 409 «planillas_session_required» y no se toca nada", async () => {
             const f = mk({ token: null });
-            const r = await handleImport(req(good(), { modo: "aplicar", filas: [fila()] }), "inventario-puesto", deps(f));
+            const r = await handleImport(req({ ...good(), "idempotency-key": IDEM }, { modo: "aplicar", filas: [fila()] }), "inventario-puesto", deps(f));
             assert.deepEqual([r.status, (await jsonOf(r)).code], [409, "planillas_session_required"]);
             assert.equal(f.planillasCalls.length, 0);
         });
         it("aplicar con sesión de Planillas: envía y responde lo creado", async () => {
             const f = mk();
-            const r = await handleImport(req(good(), { modo: "aplicar", filas: [fila()] }), "inventario-puesto", deps(f));
+            const r = await handleImport(req({ ...good(), "idempotency-key": IDEM }, { modo: "aplicar", filas: [fila()] }), "inventario-puesto", deps(f));
             assert.equal(r.status, 200);
             const b = await jsonOf(r);
             assert.deepEqual([b.modo, b.creados], ["aplicar", { planes: 1, entregas: 1 }]);
             assert.equal(f.planillasCalls.length, 1); assert.equal(f.planillasCalls[0]!.token, "token-estructural");
+            // Resultado por fila (issue #195): `creadas + omitidas + errores = recibidas`; y la acción deja su evidencia con origen «Guardify» (issue #193).
+            assert.deepEqual(b.filas, [{ fila: 1, estado: "creada", motivo: null }]);
+            assert.deepEqual(b.resumen, { recibidas: 1, creadas: 1, omitidas: 0, errores: 0 });
+            assert.equal(b.evidencia, "registrada");
+        });
+        it("aplicar SIN clave de idempotencia: 400 «invalid_request» y no se toca Planillas (issue #197); validar no la necesita", async () => {
+            const f = mk();
+            for (const h of [good(), { ...good(), "idempotency-key": "corta" }]) {
+                const r = await handleImport(req(h, { modo: "aplicar", filas: [fila()] }), "inventario-puesto", deps(f));
+                assert.deepEqual([r.status, (await jsonOf(r)).code], [400, "invalid_request"]);
+            }
+            assert.equal(f.planillasCalls.length, 0);
+            assert.equal((await handleImport(req(good(), { modo: "validar", filas: [fila()] }), "inventario-puesto", deps(f))).status, 200);
         });
         it("un error inesperado no se filtra", async () => {
             const f = mk(); f.env.prisma = new Proxy({}, { get: () => { throw new Error("detalle interno secreto"); } }) as never;
@@ -754,8 +791,9 @@ describe("aprobar un permiso: entradas y orden", () => {
 
 describe("API de acciones: correcciones de la revisión", () => {
     const env0 = { GUARDIFY_REPORTS_API_KEY: KEY };
-    const FIRMA = "firma-con-mas-de-diez-caracteres";
-    const sigs = [{ role: "digital", method: "digital", image: FIRMA }, { role: "manual", method: "manual", image: FIRMA }];
+    // Guardify manda SOLO la firma manual (imagen); la digital la genera el servidor (issue #194).
+    const FIRMA = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+    const sigs = [{ role: "manual", method: "manual", image: FIRMA }];
     const IDEM = "0123456789abcdef0123";
     const url = (p: string) => `https://app.test${p}`;
     const reqAt = (method: string, p: string, body?: unknown, extra: Record<string, string> = {}, claims?: object) => {
@@ -902,10 +940,11 @@ describe("API de acciones: idempotencia por clave (protocolo de acciones; issues
         return f;
     };
     const conAlmacen = (f: ReturnType<typeof fakeEnv>, idempotency: IdempotencyStore = memoryIdempotencyStore()) => ({ deps: { getEnv: () => f.env, env: env0, now: () => NOW, idempotency: () => idempotency }, idempotency: idempotency as ReturnType<typeof memoryIdempotencyStore> });
-    const rechazar = (d: any, id = "1", accion = "rechazar", key = IDEM) => handleActionExecute(req("POST", H(key), {}), "permisos", id, accion, d);
+    const rechazar = (d: any, id = "1", accion = "rechazar", key = IDEM) => handleActionExecute(req("POST", H(key), accion === "aprobar" ? { signatures: [{ role: "manual", method: "manual", image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==" }] } : {}), "permisos", id, accion, d);
     const fila = { codigo_puesto: "P-A", numero_articulo: 1, cantidad: 2, serie: "S1", marca: "M1", modelo: "Mo1", fecha_entrega: "05-10-2026" };
-    const FIRMA = "firma-con-mas-de-diez-caracteres";
-    const sigs = [{ role: "digital", method: "digital", image: FIRMA }, { role: "manual", method: "manual", image: FIRMA }];
+    // Guardify manda SOLO la firma manual (imagen); la digital la genera el servidor (issue #194).
+    const FIRMA = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+    const sigs = [{ role: "manual", method: "manual", image: FIRMA }];
     const conTurnos = { c_solicitud_permiso: { estado: "pendiente", ejecutivo_cuenta: 5, empleado_id: 8, tipo: "Sin goce", corpo_id: 3, turnos: JSON.stringify([{ id: 21 }]), fecha_inicio: "2026-10-01T00:00:00.000Z", fecha_fin: "2026-10-01T00:00:00.000Z" } };
     const sucursal = { rows: { e_estructura_sucursal: { 3: {} } } };
 
@@ -980,7 +1019,7 @@ describe("API de acciones: idempotencia por clave (protocolo de acciones; issues
         assert.equal(r.status, 502);
         assert.equal(idempotency.rows.size, 0);
     });
-    it("carga masiva `aplicar` con clave: el reintento no vuelve a llamar a Planillas; sin clave sigue funcionando; `validar` no reserva nada", async () => {
+    it("carga masiva `aplicar` con clave: el reintento no vuelve a llamar a Planillas; sin clave se rechaza; `validar` no reserva nada", async () => {
         const f = mk();
         const { deps, idempotency } = conAlmacen(f);
         const imp = (body: unknown, h: Record<string, string>) => handleImport(req("POST", h, body), "inventario-puesto", deps);
@@ -990,9 +1029,355 @@ describe("API de acciones: idempotencia por clave (protocolo de acciones; issues
         assert.equal(b.headers.get("idempotent-replay"), "true");
         assert.equal(f.planillasCalls.length, 1, "Planillas recibió la carga una sola vez");
         const sinClave = await imp({ modo: "aplicar", filas: [fila] }, goodHeaders());
-        assert.equal(sinClave.status, 200, "los clientes sin clave siguen funcionando");
+        assert.equal(sinClave.status, 400, "sin clave, «aplicar» se rechaza (issue #197)");
         const antes = idempotency.rows.size;
         await imp({ modo: "validar", filas: [fila] }, H("otra-clave-de-prueba-01"));
         assert.equal(idempotency.rows.size, antes, "validar no deja reservas");
+    });
+});
+
+describe("API de acciones: evidencia «Guardify», firmas, errores tipados y candados (issues #193 a #197)", () => {
+    const env0 = { GUARDIFY_REPORTS_API_KEY: KEY };
+    const req = (method: string, headers: Record<string, string>, body?: unknown, url = "https://app.test/x") => { const text = body !== undefined ? JSON.stringify(body) : undefined; return new Request(url, { method, headers: { ...finalize(headers, method, url, text ?? ""), ...(body !== undefined ? { "content-type": "application/json" } : {}) }, body: text }); };
+    const H = (k = IDEM) => ({ ...goodHeaders(), "idempotency-key": k });
+    const IDEM2 = "abcdef0123456789abcd";
+    const jsonOf = async (r: Response) => r.json() as Promise<any>;
+    const FIRMA = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+    const sigs = [{ role: "manual", method: "manual", image: FIRMA }];
+    const permiso = (over: object = {}) => ({ estado: "pendiente", ejecutivo_cuenta: 5, empleado_id: 8, tipo: "Sin goce", corpo_id: 3, turnos: JSON.stringify([{ id: 21 }]), fecha_inicio: "2026-10-01T00:00:00.000Z", fecha_fin: "2026-10-01T00:00:00.000Z", ...over });
+    const mk = (reg: Record<string, any> = permiso(), extra: object = {}) => {
+        const f = fakeEnv({ tablas: { c_solicitud_permiso: reg }, empleados: { 5: { nombre: "e" }, 8: {} }, rows: { e_estructura_sucursal: { 3: {} } }, many: { n_articulo_corpo_puesto: [{ id: 1 }], e_estructura_puesto: [{ id: 10, codigo: "P-A" }, { id: 11, codigo: "P-B" }], e_estructura_articulo_corpo_puesto_plan: [], e_estructura_articulo_corpo_puesto_entrega: [] }, ...extra });
+        (f.env.prisma as any).c_empleado.findMany = async (a: any) => (a.where.cedula ? [{ id: 5, supervisor_id: null, cedula: "c1" }] : []);
+        // El registro cambia de verdad cuando se actualiza (como la base real): lo necesitan las pruebas de dos peticiones sobre lo mismo.
+        const call = f.env.call;
+        f.env.call = async (d) => { const r = await call(d); if (d.action === "UPDATE" && d.table === "c_solicitud_permiso") Object.assign(reg, d.data); return r; };
+        return f;
+    };
+    const evid = (f: ReturnType<typeof fakeEnv>) => f.calls.filter((c) => c.table === "c_evidencia_registro");
+    const conAlmacen = (f: ReturnType<typeof fakeEnv>, store = memoryIdempotencyStore(), extra: object = {}) => ({ deps: { getEnv: () => f.env, env: env0, now: () => NOW, idempotency: () => store as IdempotencyStore, ...extra }, store });
+    const aprobar = (d: any, key = IDEM, body: object = { signatures: sigs }) => handleActionExecute(req("POST", H(key), body), "permisos", "1", "aprobar", d);
+    const fila = { codigo_puesto: "P-A", numero_articulo: 1, cantidad: 2, serie: "S1", marca: "M1", modelo: "Mo1", fecha_entrega: "05-10-2026" };
+    const huellaDe = (r: Request) => crypto.createHash("sha256").update(r.headers.get("x-guardify-actor-sig")!, "utf8").digest("hex");
+
+    describe("#193 · evidencia con origen «Guardify»", () => {
+        it("aprobar y rechazar un permiso dejan exactamente UNA fila: origen, actor, tabla, registro y la huella de la petición firmada, sin datos de dispositivo", async () => {
+            const f = mk();
+            const { deps } = conAlmacen(f);
+            const peticion = req("POST", H(), { signatures: sigs });
+            const r = await handleActionExecute(peticion, "permisos", "1", "aprobar", deps);
+            assert.equal(r.status, 200);
+            const filas = evid(f);
+            assert.equal(filas.length, 1);
+            const d = filas[0]!.data;
+            assert.deepEqual([d.tabla, d.registro_id, d.accion, d.ubicacion_origen, d.usuario_id, d.cedula], ["c_solicitud_permiso", 1, "UPDATE", "guardify", 5, "c1"]);
+            assert.deepEqual([d.dispositivo_id, d.latitud, d.longitud], [null, null, null], "sin datos de dispositivo ni ubicación");
+            assert.equal(d.sesion_id, huellaDe(peticion), "la huella de lo que Guardify firmó");
+            assert.match(d.firma, /^[0-9a-f]{64}$/);
+            assert.equal((await jsonOf(r)).evidencia, "registrada");
+            // Rechazar otro permiso: otra fila.
+            const g = mk(permiso());
+            const rr = await handleActionExecute(req("POST", H(IDEM2), {}), "permisos", "1", "rechazar", conAlmacen(g).deps);
+            assert.equal(rr.status, 200);
+            assert.equal(evid(g).length, 1);
+        });
+        it("también un mutuo acuerdo (su tabla) y la carga `aplicar` (un registro por puesto que recibió algo, en una sola escritura)", async () => {
+            const m = fakeEnv({ tablas: { e_mutuos_acuerdos: { estado: null, ejecutivo_cuenta: 5, ausente_acepta: true, reemplaza_acepta: true, empleadoAusente_id: 11, empleadoReemplaza_id: 12, fecha_ausente: "2026-10-01", fecha_reemplaza: "2026-10-02" }, n_ejecutivo_cuenta_coordinador: { coordinador_id: 77 } }, empleados: { 3: { supervisor_id: 5 } }, rows: { c_cambio_guardia: { 1: { id: 1 } } } });
+            (m.env.prisma as any).c_empleado.findMany = async (a: any) => (a.where.cedula ? [{ id: 3, supervisor_id: 5, cedula: "c3" }] : []);
+            const rm = await handleActionExecute(req("POST", H(), { signatures: sigs }), "mutuos-acuerdos", "1", "aprobar", conAlmacen(m).deps);
+            assert.equal(rm.status, 200);
+            assert.deepEqual(evid(m).map((c) => [c.data.tabla, c.data.registro_id, c.data.usuario_id]), [["e_mutuos_acuerdos", 1, 3]]);
+
+            const f = mk();
+            const { deps } = conAlmacen(f);
+            const r = await handleImport(req("POST", H(), { modo: "aplicar", filas: [fila, { ...fila, codigo_puesto: "P-B" }] }), "inventario-puesto", deps);
+            assert.equal(r.status, 200);
+            const e = evid(f);
+            assert.equal(e.length, 1, "una sola escritura");
+            assert.equal(e[0]!.operation, "createMany");
+            assert.deepEqual(e[0]!.data.map((x: any) => [x.tabla, x.registro_id, x.ubicacion_origen, x.usuario_id]), [["e_estructura_puesto", 10, "guardify", 5], ["e_estructura_puesto", 11, "guardify", 5]]);
+            assert.equal((await jsonOf(r)).evidencia, "registrada");
+        });
+        it("el reintento con la misma Idempotency-Key NO crea otra fila; `validar` y una acción que falla no dejan evidencia", async () => {
+            const f = mk();
+            const { deps } = conAlmacen(f);
+            await aprobar(deps);
+            const otra = await aprobar(deps);
+            assert.equal(otra.headers.get("idempotent-replay"), "true");
+            assert.equal(evid(f).length, 1, "el reintento no repite la evidencia");
+            const g = mk();
+            await handleImport(req("POST", H(), { modo: "validar", filas: [fila] }), "inventario-puesto", conAlmacen(g).deps);
+            assert.equal(evid(g).length, 0);
+            const h = mk(permiso({ estado: "aprobado" }));
+            const nope = await aprobar(conAlmacen(h).deps);
+            assert.equal(nope.status, 409);
+            assert.equal(evid(h).length, 0, "una acción rechazada no deja evidencia");
+        });
+        it("si NO se puede escribir la evidencia: la acción no se revierte, se reintenta una vez, queda en el registro de errores y la respuesta lo dice", async () => {
+            const f = mk();
+            const call = f.env.call;
+            let intentos = 0;
+            f.env.call = async (d) => { if (d.table === "c_evidencia_registro") { intentos++; throw new Error("sin base"); } return call(d); };
+            const r = await aprobar(conAlmacen(f).deps);
+            assert.equal(r.status, 200, "la aprobación ya se aplicó");
+            assert.equal((await jsonOf(r)).evidencia, "pendiente");
+            assert.equal(f.planillasCalls.length, 1);
+            assert.ok(f.reports.some(([status, msg]) => status === 500 && /No se pudo registrar la evidencia/.test(msg) && /c_solicitud_permiso 1/.test(msg)), "con lo necesario para reconstruir la fila");
+            assert.equal(intentos, 2, "un reintento");
+        });
+    });
+
+    describe("#194 · firma digital del servidor y firma manual como imagen", () => {
+        it("la digital es determinista (mismo actor y misma petición firmada) y distinta si cambia la petición o el actor; tiene la forma de la que arma la app", () => {
+            const a = firmaDigitalDeActor(5, "a".repeat(64), 1_700_000_000_000);
+            assert.equal(firmaDigitalDeActor(5, "a".repeat(64), 1_700_000_000_000), a);
+            assert.notEqual(firmaDigitalDeActor(5, "b".repeat(64), 1_700_000_000_000), a);
+            assert.notEqual(firmaDigitalDeActor(6, "a".repeat(64), 1_700_000_000_000), a);
+            const d = decodificarFirmaCaptura(a)!;
+            assert.deepEqual([d.sessionId, d.empleadoId, d.latitud, d.longitud, d.timestamp], [`guardify-${"a".repeat(16)}`, "5", "", "", 1_700_000_000_000]);
+            assert.ok(a.length >= 10);
+        });
+        it("la que se guarda sale de la petición firmada: la misma petición da la misma digital; el cliente no puede mandarla", async () => {
+            const guardadas: string[] = [];
+            for (let i = 0; i < 2; i++) {
+                const f = mk();
+                const r = await aprobar(conAlmacen(f).deps);
+                assert.equal(r.status, 200);
+                guardadas.push(writes(f.calls).find((c) => c.table === "c_solicitud_permiso")!.data.firma_ejecutivo_cuenta_digital);
+            }
+            assert.equal(guardadas[0], guardadas[1], "determinista");
+            const f = mk();
+            const r = await aprobar(conAlmacen(f).deps, IDEM, { signatures: [{ role: "digital", method: "digital", image: FIRMA }, ...sigs] });
+            assert.deepEqual([r.status, (await jsonOf(r)).code], [400, "invalid_request"]);
+            assert.equal(f.planillasCalls.length, 0);
+        });
+        it("la manual: solo data:image/png|jpeg en base64 y dentro del tope; faltante = signature_required; otra cosa o demasiado grande = invalid_request", () => {
+            assert.deepEqual(validarFirmaManual(FIRMA), { ok: true, image: FIRMA });
+            assert.equal((validarFirmaManual("data:image/jpeg;base64,/9j/4AAQSkZJRg==") as any).ok, true);
+            for (const falta of [undefined, null, "", "   ", 5]) assert.equal((validarFirmaManual(falta) as any).code, "signature_required", String(falta));
+            for (const mala of ["firma-con-mas-de-diez-caracteres", "data:image/gif;base64,AAAA", "data:image/svg+xml;base64,AAAA", "data:text/html;base64,AAAA", "data:image/png;base64,", "data:image/png;base64,%%%%", "data:image/png,AAAA"]) assert.equal((validarFirmaManual(mala) as any).code, "invalid_request", mala);
+            const grande = `data:image/png;base64,${"A".repeat(FIRMA_MANUAL_MAX_CHARS)}`;
+            assert.match((validarFirmaManual(grande) as any).message, /demasiado grande/);
+            assert.equal((validarFirmaManual(`data:image/png;base64,${"A".repeat(FIRMA_MANUAL_MAX_CHARS - 30)}`) as any).ok, true, "justo bajo el tope");
+        });
+        it("una petición con firmas mal formadas no consume la clave de idempotencia", async () => {
+            const f = mk();
+            const { deps, store } = conAlmacen(f);
+            const mala = await aprobar(deps, IDEM, { signatures: [] });
+            assert.equal(mala.status, 400);
+            assert.equal(store.rows.size, 0);
+            assert.equal((await aprobar(deps)).status, 200, "la misma clave, ya bien formada, sí procede");
+        });
+    });
+
+    describe("#195 · carga masiva: un solo tope y conteo honesto", () => {
+        it("el tope es 2.000 filas, exportado y el mismo en la lógica compartida; 2.000 pasan y 2.001 se rechazan con el mensaje del tope", async () => {
+            assert.equal(INVENTARIO_MAX_FILAS, 2000);
+            assert.equal(IMPORT_MAX_ROWS, INVENTARIO_MAX_FILAS);
+            const f = mk();
+            const { deps } = conAlmacen(f);
+            const filas = (n: number) => Array.from({ length: n }, (_, i) => ({ ...fila, serie: `S${i}` }));
+            const ok = await handleImport(req("POST", H(), { modo: "validar", filas: filas(2000) }), "inventario-puesto", deps);
+            assert.equal(ok.status, 200);
+            const demasiadas = await handleImport(req("POST", H(), { modo: "validar", filas: filas(2001) }), "inventario-puesto", deps);
+            const b = await jsonOf(demasiadas);
+            assert.deepEqual([demasiadas.status, b.code], [400, "invalid_request"]);
+            assert.match(b.message, /máximo 2000 por carga/);
+        });
+        it("filas con el mismo puesto y artículo y series distintas: una viaja y las demás se informan como omitidas con su motivo y su fila; todo suma lo recibido", async () => {
+            const f = mk();
+            const { deps } = conAlmacen(f);
+            const r = await handleImport(req("POST", H(), { modo: "aplicar", filas: [fila, { ...fila, serie: "S2" }, { ...fila, serie: "S3" }, { ...fila, codigo_puesto: "P-B" }] }), "inventario-puesto", deps);
+            const b = await jsonOf(r);
+            assert.deepEqual(b.filas.map((x: any) => [x.fila, x.estado]), [[1, "creada"], [2, "omitida"], [3, "omitida"], [4, "creada"]]);
+            assert.match(b.filas[1].motivo, /ya viaja la fila 1/);
+            assert.deepEqual(b.resumen, { recibidas: 4, creadas: 2, omitidas: 2, errores: 0 });
+            assert.equal(b.resumen.creadas + b.resumen.omitidas + b.resumen.errores, b.resumen.recibidas);
+            assert.deepEqual(b.creados, { planes: 2, entregas: 2 }, "el conteo coincide con lo que llega a Planillas");
+            const enviados = f.planillasCalls[0]!.body.items;
+            assert.deepEqual(enviados.map((i: any) => [i.codigo_puesto, i.serie]), [["P-A", "S1"], ["P-B", "S1"]]);
+            assert.equal(b.omitidos.length, 2, "y siguen las líneas de texto de siempre");
+        });
+        it("una fila repetida igual dentro de la misma carga se informa como repetida; repetir la carga no duplica y el conteo coincide", async () => {
+            const f = mk();
+            const { deps } = conAlmacen(f);
+            const r = await handleImport(req("POST", H(), { modo: "validar", filas: [fila, { ...fila }] }), "inventario-puesto", deps);
+            const b = await jsonOf(r);
+            assert.deepEqual(b.filas.map((x: any) => x.estado), ["creada", "omitida"]);
+            assert.match(b.filas[1].motivo, /Repetida en la carga: igual a la fila 1/);
+            // Con todo ya cargado en la base: todas omitidas, nada que enviar, nada que contar.
+            const g = mk(permiso(), { many: { n_articulo_corpo_puesto: [{ id: 1 }], e_estructura_puesto: [{ id: 10, codigo: "P-A" }], e_estructura_articulo_corpo_puesto_plan: [{ puesto_id: 10, articuloCP_id: 1 }], e_estructura_articulo_corpo_puesto_entrega: [{ puesto_id: 10, nomencladorArticuloCP_id: 1, marca: "M1", serie: "S1", modelo: "Mo1" }] } });
+            const otra = await jsonOf(await handleImport(req("POST", H(), { modo: "aplicar", filas: [fila] }), "inventario-puesto", conAlmacen(g).deps));
+            assert.deepEqual([otra.creados, otra.resumen], [{ planes: 0, entregas: 0 }, { recibidas: 1, creadas: 0, omitidas: 1, errores: 0 }]);
+            assert.equal(g.planillasCalls.length, 0);
+        });
+        it("el error de Planillas sale como «planillas_unavailable» con HTTP 502, no como invalid_request con 500", async () => {
+            const f = mk(permiso(), { planillas: () => ({ success: false }) });
+            const r = await handleImport(req("POST", H(), { modo: "aplicar", filas: [fila] }), "inventario-puesto", conAlmacen(f).deps);
+            assert.deepEqual([r.status, (await jsonOf(r)).code], [502, "planillas_unavailable"]);
+        });
+    });
+
+    describe("#196 · todo error 4xx lleva `code`", () => {
+        const PROTOCOLO = new Set(["not_found", "already_resolved", "invalid_state", "conflict", "out_of_scope", "reason_required", "signature_required", "planillas_session_required", "invalid_request", "unauthorized"]);
+        const ejecutar = (f: ReturnType<typeof fakeEnv>, headers: Record<string, string>, over: { tipo?: string; id?: string; accion?: string; body?: unknown } = {}) =>
+            handleActionExecute(req("POST", headers, over.body ?? { signatures: sigs }), over.tipo ?? "permisos", over.id ?? "1", over.accion ?? "aprobar", conAlmacen(f).deps);
+
+        it("cada rama del 401 (sin llave, llave mala, sin actor, actor vencido, firma de otra ruta o de otro cuerpo) responde { code: \"unauthorized\", message } (y `error` como alias)", async () => {
+            const f = mk();
+            const deps = conAlmacen(f).deps;
+            const mala = { authorization: `Bearer ${"x".repeat(32)}` };
+            const buenaSinActor = { authorization: `Bearer ${KEY}` };
+            const vencido = { authorization: `Bearer ${KEY}`, "x-test-actor": JSON.stringify({ actor: { email: "a@b.co", name: "n", cedula: "c" }, ts: NOW - ACTOR_MAX_SKEW_MS - 1000, tenant: "t" }) };
+            const casos: Array<[string, Response]> = [
+                ["sin llave", await handleActionExecute(req("POST", {}, { signatures: sigs }), "permisos", "1", "aprobar", deps)],
+                ["llave mala", await handleActionExecute(req("POST", mala, { signatures: sigs }), "permisos", "1", "aprobar", deps)],
+                ["sin actor", await handleActionExecute(req("POST", buenaSinActor, { signatures: sigs }), "permisos", "1", "aprobar", deps)],
+                ["actor vencido", await handleActionExecute(req("POST", { ...vencido, "idempotency-key": IDEM }, { signatures: sigs }), "permisos", "1", "aprobar", deps)],
+            ];
+            // Firma hecha para OTRA ruta o para OTRO cuerpo: se reutilizan las cabeceras firmadas de una petición en otra.
+            const ajena = req("POST", H(), { signatures: sigs }, "https://app.test/otra");
+            const robadas = Object.fromEntries(["authorization", "x-guardify-actor", "x-guardify-actor-sig", "idempotency-key"].map((k) => [k, ajena.headers.get(k)!]));
+            casos.push(["firma de otra ruta", await handleActionExecute(new Request("https://app.test/x", { method: "POST", headers: { ...robadas, "content-type": "application/json" }, body: JSON.stringify({ signatures: sigs }) }), "permisos", "1", "aprobar", deps)]);
+            casos.push(["firma de otro cuerpo", await handleActionExecute(new Request("https://app.test/otra", { method: "POST", headers: { ...robadas, "content-type": "application/json" }, body: JSON.stringify({ signatures: sigs, otro: true }) }), "permisos", "1", "aprobar", deps)]);
+            for (const [nombre, r] of casos) {
+                const b = await jsonOf(r);
+                assert.deepEqual([nombre, r.status, b.code, b.error], [nombre, 401, "unauthorized", "unauthorized"]);
+                assert.equal(typeof b.message, "string");
+            }
+            // Las otras rutas también.
+            for (const r of [await handleActionDetail(req("GET", {}), "permisos", "1", deps), await handleLookupEmpleado(req("GET", mala), deps), await handleImport(req("POST", mala, { modo: "validar", filas: [fila] }), "inventario-puesto", deps)]) {
+                assert.deepEqual([r.status, (await jsonOf(r)).code], [401, "unauthorized"]);
+            }
+        });
+        it("la API sin configurar sigue siendo un 503 SIN code (infraestructura: Guardify lo lee como «app no disponible»)", async () => {
+            const r = await handleActionExecute(req("POST", H(), { signatures: sigs }), "permisos", "1", "aprobar", { getEnv: () => mk().env, env: { GUARDIFY_REPORTS_API_KEY: "corta" }, now: () => NOW });
+            const b = await jsonOf(r);
+            assert.deepEqual([r.status, b.code, b.error], [503, undefined, "not_configured"]);
+        });
+        it("recorre las respuestas 4xx del manejador y todas traen un `code` de la lista del protocolo", async () => {
+            const buena = H();
+            const sinClave = goodHeaders();
+            const mkSinActor = () => { const f = mk(); (f.env.prisma as any).c_empleado.findMany = async () => []; return f; };
+            const mkSinRegistro = () => { const f = mk(); f.env.call = async () => null; return f; };
+            const mkSinSesionPlanillas = () => { const f = mk(); f.env.tokenPlanillas = async () => null; return f; };
+            const respuestas: Array<[string, Response]> = [
+                ["ejecutar: sin clave de idempotencia", await ejecutar(mk(), sinClave)],
+                ["ejecutar: clave inválida", await ejecutar(mk(), H("corta"))],
+                ["ejecutar: acción que no existe", await ejecutar(mk(), buena, { accion: "inventada" })],
+                ["ejecutar: tipo desconocido", await ejecutar(mk(), buena, { tipo: "inventado" })],
+                ["ejecutar: id inválido", await ejecutar(mk(), buena, { id: "no-numero" })],
+                ["ejecutar: actor sin resolver", await ejecutar(mkSinActor(), buena)],
+                ["ejecutar: registro inexistente", await ejecutar(mkSinRegistro(), buena)],
+                ["ejecutar: fuera de alcance", await ejecutar(mk(permiso({ ejecutivo_cuenta: 99 })), buena)],
+                ["ejecutar: ya resuelto", await ejecutar(mk(permiso({ estado: "aprobado" })), buena)],
+                ["ejecutar: sin firma manual", await ejecutar(mk(), buena, { body: { signatures: [] } })],
+                ["ejecutar: digital del cliente", await ejecutar(mk(), buena, { body: { signatures: [{ role: "digital", image: FIRMA }, ...sigs] } })],
+                ["ejecutar: cuerpo gigante", await ejecutar(mk(), buena, { body: { signatures: sigs, relleno: "x".repeat(MAX_BODY_CHARS) } })],
+                ["ejecutar: sin sesión de Planillas", await ejecutar(mkSinSesionPlanillas(), buena)],
+                ["detalle: tipo desconocido", await handleActionDetail(req("GET", goodHeaders()), "inventado", "1", conAlmacen(mk()).deps)],
+                ["detalle: id inválido", await handleActionDetail(req("GET", goodHeaders()), "permisos", "0", conAlmacen(mk()).deps)],
+                ["carga: modo inválido", await handleImport(req("POST", buena, { modo: "ya", filas: [fila] }), "inventario-puesto", conAlmacen(mk()).deps)],
+                ["carga: sin filas", await handleImport(req("POST", buena, { modo: "validar", filas: [] }), "inventario-puesto", conAlmacen(mk()).deps)],
+                ["carga: sobre el tope", await handleImport(req("POST", buena, { modo: "validar", filas: Array.from({ length: IMPORT_MAX_ROWS + 1 }, () => fila) }), "inventario-puesto", conAlmacen(mk()).deps)],
+                ["carga: tipo desconocido", await handleImport(req("POST", buena, { modo: "validar", filas: [fila] }), "otra", conAlmacen(mk()).deps)],
+                ["carga: aplicar sin clave", await handleImport(req("POST", sinClave, { modo: "aplicar", filas: [fila] }), "inventario-puesto", conAlmacen(mk()).deps)],
+                ["carga: fila con error", await handleImport(req("POST", buena, { modo: "validar", filas: [{ ...fila, serie: "" }] }), "inventario-puesto", conAlmacen(mk()).deps)],
+                ["carga: artículo inexistente", await handleImport(req("POST", buena, { modo: "validar", filas: [{ ...fila, numero_articulo: 99 }] }), "inventario-puesto", conAlmacen(mk()).deps)],
+                ["carga: puesto inexistente", await handleImport(req("POST", buena, { modo: "validar", filas: [{ ...fila, codigo_puesto: "NO" }] }), "inventario-puesto", conAlmacen(mk()).deps)],
+                ["carga: sin sesión de Planillas", await handleImport(req("POST", buena, { modo: "aplicar", filas: [fila] }), "inventario-puesto", conAlmacen((() => { const f = mk(); f.env.tokenPlanillas = async () => null; return f; })()).deps)],
+                ["buscar empleado: sin código", await handleLookupEmpleado(req("GET", goodHeaders(), undefined, "https://app.test/x?codigo="), conAlmacen(mk()).deps)],
+                ["buscar empleado: no existe", await handleLookupEmpleado(req("GET", goodHeaders(), undefined, "https://app.test/x?codigo=ZZ"), conAlmacen(mk()).deps)],
+            ];
+            const sin4xx: string[] = [];
+            const fuera: string[] = [];
+            for (const [nombre, r] of respuestas) {
+                if (r.status < 400 || r.status >= 500) { sin4xx.push(`${nombre} → ${r.status}`); continue; }
+                const b = await jsonOf(r);
+                if (typeof b.code !== "string" || !PROTOCOLO.has(b.code)) fuera.push(`${nombre} → ${r.status} ${JSON.stringify(b.code)}`);
+            }
+            assert.deepEqual(sin4xx, [], "cada escenario debe producir un 4xx");
+            assert.deepEqual(fuera, []);
+        });
+        it("`unauthorized` está en la tabla de códigos y en el mapa de estados del manejador", () => {
+            const fuente = fs.readFileSync(path.join(__dirname, "handler.ts"), "utf8");
+            assert.match(fuente, /unauthorized: 401/);
+            assert.match(fuente, /planillas_unavailable: 502/);
+            for (const doc of ["protocolo-acciones.md", "guardify-actions-api.md"]) assert.match(fs.readFileSync(path.join(__dirname, "..", "..", "docs", doc), "utf8"), /unauthorized/, doc);
+        });
+    });
+
+    describe("#197 · candado entre procesos también sin clave y con claves distintas", () => {
+        const desbloqueo = () => { let soltar!: () => void; const espera = new Promise<void>((r) => (soltar = r)); return { espera, soltar }; };
+
+        it("dos `aplicar` simultáneos con la MISMA clave: uno ejecuta y el otro recibe 409; Planillas recibe una sola carga", async () => {
+            const { espera, soltar } = desbloqueo();
+            const f = mk(permiso(), { planillas: async () => { await espera; return { success: true, data: { id: 1 } }; } });
+            const { deps } = conAlmacen(f);
+            const primera = handleImport(req("POST", H(), { modo: "aplicar", filas: [fila] }), "inventario-puesto", deps);
+            await new Promise((r) => setTimeout(r, 30));
+            const segunda = await handleImport(req("POST", H(), { modo: "aplicar", filas: [fila] }), "inventario-puesto", deps);
+            assert.deepEqual([segunda.status, (await jsonOf(segunda)).code], [409, "conflict"]);
+            soltar();
+            assert.equal((await primera).status, 200);
+            assert.equal(f.planillasCalls.length, 1);
+        });
+        it("`aplicar` sin clave: 400 y no se toca Planillas", async () => {
+            const f = mk();
+            const r = await handleImport(req("POST", goodHeaders(), { modo: "aplicar", filas: [fila] }), "inventario-puesto", conAlmacen(f).deps);
+            assert.deepEqual([r.status, (await jsonOf(r)).code], [400, "invalid_request"]);
+            assert.equal(f.planillasCalls.length, 0);
+        });
+        it("dos aprobaciones del mismo permiso con claves DISTINTAS: una aplica y la otra espera y recibe «already_resolved»; Planillas recibe UNA sola creación", async () => {
+            const { espera, soltar } = desbloqueo();
+            const f = mk(permiso(), { planillas: async () => { await espera; return { success: true, data: { id: 1 } }; } });
+            const { deps, store } = conAlmacen(f);
+            const a = aprobar(deps, IDEM);
+            await new Promise((r) => setTimeout(r, 30));
+            const b = aprobar(deps, IDEM2);
+            await new Promise((r) => setTimeout(r, 120));
+            soltar();
+            const [ra, rb] = [await a, await b];
+            assert.equal(ra.status, 200);
+            assert.deepEqual([rb.status, (await jsonOf(rb)).code], [409, "already_resolved"]);
+            assert.equal(f.planillasCalls.length, 1, "Planillas recibe una sola creación");
+            assert.equal([...store.rows.values()].filter((r) => r.ambito === "candado").length, 0, "el candado se libera al terminar");
+        });
+        it("el candado ENTRE procesos: otra instancia con el mismo almacén también espera (el candado en memoria de una no basta)", async () => {
+            const { espera, soltar } = desbloqueo();
+            const store = memoryIdempotencyStore();
+            const f1 = mk(permiso(), { planillas: async () => { await espera; return { success: true, data: { id: 1 } }; } });
+            const a = aprobar(conAlmacen(f1, store).deps, IDEM);
+            await new Promise((r) => setTimeout(r, 30));
+            // La reserva del candado vive en el almacén COMPARTIDO (la tabla), no solo en la memoria de este proceso: otra instancia la encontraría ocupada.
+            const candados = [...store.rows.values()].filter((r) => r.ambito === "candado");
+            assert.deepEqual(candados.map((c) => [c.estado, c.recurso]), [["en_curso", "permisos:1"]]);
+            soltar();
+            assert.equal((await a).status, 200);
+            assert.equal([...store.rows.values()].filter((r) => r.ambito === "candado").length, 0);
+        });
+        it("si el candado sigue ocupado pasado el tiempo de espera: 409 conflict, sin ejecutar", async () => {
+            const { espera, soltar } = desbloqueo();
+            const f = mk(permiso(), { planillas: async () => { await espera; return { success: true, data: { id: 1 } }; } });
+            const { deps } = conAlmacen(f, memoryIdempotencyStore(), { lockWaitMs: 60 });
+            const a = aprobar(deps, IDEM);
+            await new Promise((r) => setTimeout(r, 30));
+            const b = await aprobar(deps, IDEM2);
+            assert.deepEqual([b.status, (await jsonOf(b)).code], [409, "conflict"]);
+            soltar();
+            await a;
+            assert.equal(f.planillasCalls.length, 1);
+        });
+        it("el candado de la carga es POR PERSONA y tipo (como dice su comentario), no uno solo para todas", () => {
+            const fuente = fs.readFileSync(path.join(__dirname, "handler.ts"), "utf8");
+            assert.match(fuente, /conCandado\(`import:\$\{tipo\}:\$\{actor\.id\}`/);
+            assert.equal(/conCandado\(`import:\$\{tipo\}`/.test(fuente), false);
+        });
+        it("si el almacén no responde, no se ejecuta nada (503 sin code)", async () => {
+            const caido: IdempotencyStore = { reservar: async () => { throw new Error("sin base"); }, leer: async () => null, completar: async () => undefined, liberar: async () => undefined };
+            const f = mk();
+            const r = await aprobar({ getEnv: () => f.env, env: env0, now: () => NOW, idempotency: () => caido });
+            assert.equal(r.status, 503);
+            assert.equal(f.planillasCalls.length, 0);
+        });
     });
 });

@@ -5,7 +5,7 @@ Aplica la decisión del 23 de oct: **lo que dependa de Planillas o Integra se pi
 
 **Método y límites.** Es una revisión **estática del código** (más la API dinámica `gonzalez-mobile-dynamic-api` cuando el flujo la cruza), no una prueba
 de penetración ni una revisión de la infraestructura. Los puntos que dependen de la base de datos real, de la red o de variables de entorno de
-producción están marcados «requiere infraestructura / proveedor» con la solicitud redactada al final. El inventario de las 284 rutas está en
+producción están marcados «requiere infraestructura / proveedor» con la solicitud redactada al final. El inventario de las 286 rutas está en
 [`auditoria-backend-2026-10-inventario.md`](auditoria-backend-2026-10-inventario.md) (generado con `apps/server/scripts/auditRoutes.ts`).
 
 ## Estado de cada punto
@@ -45,8 +45,8 @@ Todas con pruebas automáticas que fallaban antes (`apps/server/utils/backendAud
 general de alcance**. «Alcance» de una persona en este sistema son sus plazas (`c_empleado_plaza`: división, contrato, sucursal, puesto), y esa
 información vive en tablas de Planillas. Casi todas las rutas reciben un ID (`corpo_id`, `puesto_id`, `empleado_id`, `marcaId`…) y lo usan tal cual.
 
-Cifras del inventario (análisis estático): **284 rutas**, 273 verifican la sesión, 224 reciben algún ID de objeto y **14 tienen control de alcance**
-(las 9 de arriba más `reportes`, los controles previos de super administrador y las dos rutas de acciones de Guardify, que comprueban al actor contra el registro). Las 210 restantes con IDs, por familia (entre paréntesis, las que escriben):
+Cifras del inventario (análisis estático): **286 rutas**, 275 verifican la sesión, 226 reciben algún ID de objeto y **16 tienen control de alcance**
+(las 9 de arriba más `reportes`, los controles previos de super administrador las dos rutas de acciones de Guardify, que comprueban al actor contra el registro, y las dos de edición de documentos, que comprueban el rol y la marca). Las 210 restantes con IDs, por familia (entre paréntesis, las que escriben):
 
 `job-manuals` 15 (7) · `incidents` 14 (6) · `activities` 11 (8) · `articulo-mantenimiento` 11 (6) · `corporate-vehicles` 11 (8) · `puestos` 10 (5) ·
 `permit-request` 9 (2) · `attendance-control` 8 (5) · `non-conforming-product` 8 (3) · `training` 8 (3) · `complaints-master` 7 (2) ·

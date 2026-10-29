@@ -150,3 +150,45 @@ export function memoryIdempotencyStore(): IdempotencyStore & { rows: Map<string,
         },
     };
 }
+
+/** Cuánto espera, como máximo, quien encuentra el candado de un registro ocupado antes de rendirse con «conflicto». */
+export const CANDADO_ESPERA_MS = 2000;
+const CANDADO_SONDEO_MS = 60;
+
+export type CandadoOpciones = { esperaMs?: number; now?: () => Date; sleep?: (ms: number) => Promise<void> };
+
+/**
+ * Candado ENTRE PROCESOS sobre un recurso (issue #197), con la misma tabla y la misma reserva atómica de la idempotencia: dos peticiones con claves
+ * DISTINTAS sobre el mismo registro no se ejecutan a la vez. Quien llega con el candado ocupado ESPERA a que se libere (hasta `esperaMs`); como entonces el
+ * registro ya cambió de estado, su comprobación de estado responde «ya resuelto» en lugar de un conflicto confuso. Si sigue ocupado, `{ ok: false }`.
+ * Un candado «en curso» de más de 10 minutos se considera abandonado (el proceso murió) y se retoma. El candado se libera siempre al terminar.
+ * Un fallo del almacén sale como `IdemStoreError` (quien llama decide si se niega).
+ */
+export async function conCandadoDistribuido<T>(store: IdempotencyStore, llave: string, run: () => Promise<T>, opts: CandadoOpciones = {}): Promise<{ ok: true; value: T } | { ok: false }> {
+    const s = guardStore(store);
+    const now = opts.now ?? (() => new Date());
+    const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    const espera = opts.esperaMs ?? CANDADO_ESPERA_MS;
+    const claveHash = hashClave(`candado:${llave}`);
+    const t0 = now().getTime();
+    let adquirido = false;
+    for (let vueltas = 0; vueltas < 500 && !adquirido; vueltas++) {
+        const ahora = now();
+        const reserva: IdemRecord = { claveHash, ambito: "candado", recurso: llave.slice(0, 80), actorId: null, estado: "en_curso", httpStatus: null, respuesta: null, creado: ahora, expira: new Date(ahora.getTime() + IDEM_EN_CURSO_MAX_MS) };
+        if (await s.reservar(reserva)) { adquirido = true; break; }
+        const previa = await s.leer(claveHash);
+        if (!previa) continue;
+        if (previa.expira.getTime() <= ahora.getTime() || ahora.getTime() - previa.creado.getTime() > IDEM_EN_CURSO_MAX_MS) {
+            await s.liberar(claveHash);
+            continue;
+        }
+        if (ahora.getTime() - t0 >= espera) return { ok: false };
+        await sleep(CANDADO_SONDEO_MS);
+    }
+    if (!adquirido) return { ok: false };
+    try {
+        return { ok: true, value: await run() };
+    } finally {
+        await store.liberar(claveHash).catch(() => undefined);
+    }
+}

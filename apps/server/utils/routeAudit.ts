@@ -110,7 +110,7 @@ export function analyzeRoute(file: string, source: string): RouteFacts {
         queryIds,
         bodyIds: [...bodyIds],
         usesIdentity: /\bpayload\??\.(id|sessionId)\b|\bauth\.empleadoId\b/.test(code),
-        objectScope: /\b(authorizeSelfOrAdmin|authorizeMarcaAccess|authorizeReportesOperation|isSuperAdminEmpleado|handleActionDetail|handleActionExecute)\s*\(/.test(code),
+        objectScope: /\b(authorizeSelfOrAdmin|authorizeMarcaAccess|authorizeReportesOperation|isSuperAdminEmpleado|handleActionDetail|handleActionExecute|autorizarGestionManual)\s*\(/.test(code),
         writes: methods.some((m) => m !== "GET"),
     };
 }

@@ -40,7 +40,7 @@ export function verifyActorHeaders(headers: Pick<Headers, "get">, key: string, n
     return claims;
 }
 
-export type ActorEmployee = { id: number; supervisorId: number | null };
+export type ActorEmployee = { id: number; supervisorId: number | null; cedula: string | null };
 
 /**
  * Quién es el actor en la app. Se prueba, en este orden: `externalId` (id del empleado), `cedula` y correo; cada uno debe dar UNA sola persona
@@ -48,7 +48,7 @@ export type ActorEmployee = { id: number; supervisorId: number | null };
  * un empleado dado de baja (`estado` «BA», lo mismo que rechaza el login) no actúa. Sin coincidencia clara → `null` y la acción se niega (`out_of_scope`).
  */
 export async function resolveActorEmployee(db: any, actor: GuardifyActor): Promise<ActorEmployee | null> {
-    const pick = (e: any): ActorEmployee | null => (String(e.estado ?? "").trim().toUpperCase() === "BA" ? null : { id: Number(e.id), supervisorId: e.supervisor_id != null ? Number(e.supervisor_id) : null });
+    const pick = (e: any): ActorEmployee | null => (String(e.estado ?? "").trim().toUpperCase() === "BA" ? null : { id: Number(e.id), supervisorId: e.supervisor_id != null ? Number(e.supervisor_id) : null, cedula: String(e.cedula ?? "").trim() || null });
     const select = { id: true, supervisor_id: true, cedula: true, estado: true };
     const ced = String(actor.cedula ?? "").trim();
     const ext = Number(actor.externalId);
@@ -70,4 +70,28 @@ export async function resolveActorEmployee(db: any, actor: GuardifyActor): Promi
         if (rows.length === 1) return pick(rows[0]);
     }
     return null;
+}
+
+/**
+ * Firma digital de una aprobación pedida desde Guardify (issue #194). La genera el SERVIDOR a partir del actor ya resuelto y de la huella de la petición
+ * firmada, con la misma forma que la que arma la app (`base64(sesión:empleado:latitud:longitud:marcaDeTiempo)`, ver `decodificarFirmaCaptura`): la sesión
+ * es «guardify-» + el comienzo de la huella, no hay ubicación y la marca de tiempo es la del actor firmado. Determinista: la misma petición da la misma firma.
+ * El cliente nunca la manda.
+ */
+export const firmaDigitalDeActor = (actorId: number, huella: string, ts: number): string =>
+    Buffer.from(`guardify-${String(huella).slice(0, 16)}:${Math.trunc(actorId)}:::${Math.trunc(ts)}`, "utf8").toString("base64");
+
+/** Tope de la firma manual (imagen `data:` en base64), en caracteres: lo bastante para un trazo de firma y muy por debajo del tope del cuerpo. */
+export const FIRMA_MANUAL_MAX_CHARS = 1_000_000;
+
+const IMAGEN_DATA = /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/;
+
+export type FirmaManualValidada = { ok: true; image: string } | { ok: false; code: "signature_required" | "invalid_request"; message: string };
+
+/** La firma manual que manda Guardify: una imagen `data:image/png|jpeg;base64,…` dentro del tope. */
+export function validarFirmaManual(image: unknown): FirmaManualValidada {
+    if (typeof image !== "string" || image.trim() === "") return { ok: false, code: "signature_required", message: "Falta la firma manual del ejecutivo (una imagen)." };
+    if (image.length > FIRMA_MANUAL_MAX_CHARS) return { ok: false, code: "invalid_request", message: `La firma manual es demasiado grande (máximo ${FIRMA_MANUAL_MAX_CHARS} caracteres).` };
+    if (!IMAGEN_DATA.test(image)) return { ok: false, code: "invalid_request", message: "La firma manual debe ser una imagen data:image/png o data:image/jpeg en base64." };
+    return { ok: true, image };
 }

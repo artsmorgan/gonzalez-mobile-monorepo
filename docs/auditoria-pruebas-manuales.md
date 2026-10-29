@@ -134,6 +134,10 @@ Leyenda del resultado: ✅ cumple · ❌ falla (adjuntar captura/log) · ➖ no 
 | 1 | Iniciar sesión y entrar directo a Marcar ingreso/salida; tocar la flecha de regreso | Va a Home y la pila queda solo con Home | |
 | 2 | Desde Home abrir una pantalla y tocar la flecha | Regresa a Home normalmente | |
 
+**Edición de documentos («Documentos»)**
+
+El guion de 12 pasos (versión visible, botón «Editar» solo para roles distintos de OPERATIVO, exigencia de conexión, borrado inmediato de archivos, advertencia al elegir «Nueva versión: Sí», quiz que fuerza la nueva versión y notificaciones) está en `docs/edicion-de-documentos.md`, sección «Prueba manual».
+
 ## Resumen para el PR
 
 Copiar por issue: versión del APK, equipo (marca/modelo/Android), ambiente, fecha, y la tabla de resultados de arriba con las capturas de los ❌.

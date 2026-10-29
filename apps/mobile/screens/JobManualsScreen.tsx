@@ -16,13 +16,16 @@ import { ThemedView } from '../components/ThemedView';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import RecordAudioButton from '@/components/RecordAudioButton';
 import AudioPreviewModal from '@/components/AudioPreviewModal';
-import { ZoomableThumbnailImage, FullscreenMediaModal } from '@/components/FullscreenMediaViewer';
+import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 import { ThemedText } from '../components/ThemedText';
 import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
 import { eventBus } from '../hooks/eventBus';
 import { getManualClassification } from '../hooks/updateNomenclator';
+import JobManualEditModal from '../components/JobManualEditModal';
+import { ManualAudioPlayer, ManualImageViewer, ManualVideoPlayer } from '../components/ManualFilePreview';
+import { canEditManual, OFFLINE_EDIT_MESSAGE } from '../hooks/jobManualEdit';
 import {
   appendJobManualPuestos,
   appendJobManualEmpleados,
@@ -52,8 +55,6 @@ import { useQRScanner } from '../hooks/useQRScanner';
 import authedFetch from '../hooks/authedFetch';
 import { downloadAuthedUrlToDevice } from '@/hooks/downloadReportFileToDevice';
 import getValidAccessTokenOrLogout from '../hooks/getValidAccessTokenOrLogout';
-import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
-import { useVideoPlayer, VideoView } from 'expo-video';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
@@ -254,6 +255,8 @@ export default function JobManualsScreen() {
   const [hasMarca, setHasMarca] = useState(false);
   const [marcaId, setMarcaId] = useState<number | null>(null);
   const [roleName, setRoleName] = useState<RoleName>(null);
+  /** Documento abierto en el formulario de edición (solo con conexión). */
+  const [manualToEdit, setManualToEdit] = useState<JobManualRemote | null>(null);
   const [puestoActualNombre, setPuestoActualNombre] = useState<string>('');
 
   const [isCreating, setIsCreating] = useState(false);
@@ -535,6 +538,23 @@ export default function JobManualsScreen() {
       networkState.isConnected === true &&
       networkState.isInternetReachable === true
     );
+  };
+
+  /** Editar un documento exige conexión (sin acciones en cola), una marca activa y que el documento ya exista en el servidor. */
+  const openEditManual = async (manual: JobManualRemote) => {
+    if (!canEditManual(roleName, manual)) {
+      Alert.alert('No disponible', 'Este documento aún no se ha sincronizado con el servidor.');
+      return;
+    }
+    if (!hasMarca || !marcaId) {
+      Alert.alert('Error', 'Necesitas una marca activa para editar documentos.');
+      return;
+    }
+    if (!(await getConnectionStatus())) {
+      Alert.alert('Sin conexión', OFFLINE_EDIT_MESSAGE);
+      return;
+    }
+    setManualToEdit(manual);
   };
 
   const closeCambiosModal = () => {
@@ -4357,7 +4377,7 @@ export default function JobManualsScreen() {
                     void ensureAutoVisualizacion(manual);
                   }}
                 >
-                  <ThemedText style={styles.manualTitle}>{manual.title}{manual.version && manual.version > 1 ? ` (v${manual.version})` : ''}</ThemedText>
+                  <ThemedText style={styles.manualTitle}>{manual.title}</ThemedText>
                   <ThemedText numberOfLines={2} style={styles.manualDescription}>
                     {manual.description}
                   </ThemedText>
@@ -4367,6 +4387,9 @@ export default function JobManualsScreen() {
                     </ThemedText>
                     <ThemedText style={styles.manualMetaText}>
                       {manual.files?.length || 0} archivo (s)
+                    </ThemedText>
+                    <ThemedText style={[styles.manualMetaText, styles.manualVersionText]}>
+                      Versión {manual.version ?? 1}
                     </ThemedText>
                   </ThemedView>
                   {manual.classification ? (
@@ -4381,22 +4404,31 @@ export default function JobManualsScreen() {
                   ) : null}
                 </TouchableOpacity>
                   {roleName !== 'OPERATIVO' && (
-                    <ThemedView style={styles.manualActionsRow}>
+                    <>
+                      <ThemedView style={styles.manualActionsRow}>
+                        <ScalePressButton
+                          style={styles.manualUpdatePuestosButton}
+                          onPress={() => openUpdManualPuestosModal(manual)}
+                        >
+                          <Ionicons name="git-network-outline" size={18} color="#FFFFFF" />
+                          <ThemedText style={styles.manualUpdatePuestosButtonText}>Act. puestos</ThemedText>
+                        </ScalePressButton>
+                        <ScalePressButton
+                          style={styles.manualUpdatePuestosButton}
+                          onPress={() => openUpdManualEmpleadosModal(manual)}
+                        >
+                          <Ionicons name="people-outline" size={18} color="#FFFFFF" />
+                          <ThemedText style={styles.manualUpdatePuestosButtonText}>Act. empleados</ThemedText>
+                        </ScalePressButton>
+                      </ThemedView>
                       <ScalePressButton
-                        style={styles.manualUpdatePuestosButton}
-                        onPress={() => openUpdManualPuestosModal(manual)}
+                        style={styles.manualEditButton}
+                        onPress={() => void openEditManual(manual)}
                       >
-                        <Ionicons name="git-network-outline" size={18} color="#FFFFFF" />
-                        <ThemedText style={styles.manualUpdatePuestosButtonText}>Act. puestos</ThemedText>
+                        <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+                        <ThemedText style={styles.manualUpdatePuestosButtonText}>Editar</ThemedText>
                       </ScalePressButton>
-                      <ScalePressButton
-                        style={styles.manualUpdatePuestosButton}
-                        onPress={() => openUpdManualEmpleadosModal(manual)}
-                      >
-                        <Ionicons name="people-outline" size={18} color="#FFFFFF" />
-                        <ThemedText style={styles.manualUpdatePuestosButtonText}>Act. empleados</ThemedText>
-                      </ScalePressButton>
-                    </ThemedView>
+                    </>
                   )}
                 </ThemedView>
               ))
@@ -4404,6 +4436,23 @@ export default function JobManualsScreen() {
           </ThemedView>
         </ThemedView>
       </ScrollView>
+
+      <JobManualEditModal
+        visible={manualToEdit !== null}
+        manual={manualToEdit}
+        marcaId={marcaId}
+        classificationOptions={manualClassificationOptions}
+        buildFileUrl={(f) => buildFileUrl(manualToEdit?.id, { ...f, url: '' })}
+        onClose={() => setManualToEdit(null)}
+        onSaved={() => {
+          void refreshManualsList();
+        }}
+        onFileDeleted={() => {
+          void refreshManualsList();
+        }}
+        refreshAccessToken={refreshAccessToken}
+        logout={logout}
+      />
 
       <CambiosAppsModulesModal
         visible={isCambiosModalVisible}
@@ -6507,6 +6556,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#777777',
   },
+  manualVersionText: {
+    fontWeight: '700',
+    color: '#007AFF',
+  },
   manualActionsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -6523,6 +6576,18 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 8,
     backgroundColor: '#007AFF',
+  },
+  /** «Editar»: botón largo debajo de «Act. puestos» y «Act. empleados». */
+  manualEditButton: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#007AFF',
+    marginTop: 8,
   },
   manualChangesButton: {
     flex: 1,
@@ -6905,189 +6970,3 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-
-// Audio player for manuals (similar to VoiceNotesScreen)
-function ManualAudioPlayer({ sourceUrl, label }: { sourceUrl: string; label?: string }) {
-  const player = useAudioPlayer(sourceUrl);
-  const status = useAudioPlayerStatus(player);
-  const [isPlaying, setIsPlaying] = useState(false);
-
-  const duration = status.duration ?? 0;
-  const position = status.currentTime ?? 0;
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const togglePlayPause = () => {
-    if (!player) return;
-    try {
-      if (!isPlaying) {
-        player.play();
-        setIsPlaying(true);
-      } else {
-        player.pause();
-        setIsPlaying(false);
-      }
-    } catch (error) {
-      console.error('Error controlling audio player:', error);
-    }
-  };
-
-  const resetAudio = () => {
-    if (!player) return;
-    try {
-      player.seekTo(0);
-      player.pause();
-      setIsPlaying(false);
-    } catch (error) {
-      console.error('Error resetting audio player:', error);
-    }
-  };
-
-  useEffect(() => {
-    if (!status.playing && isPlaying && position >= duration && duration > 0) {
-      setIsPlaying(false);
-    }
-  }, [status.playing, position, duration, isPlaying]);
-
-  useEffect(() => {
-    // Sincronizar estado de reproducción con el estado del player
-    if (status.playing !== isPlaying) {
-      setIsPlaying(status.playing);
-    }
-  }, [status.playing]);
-
-  return (
-    <ThemedView style={styles.audioPlayerContainer}>
-      {label ? (
-        <ThemedText style={styles.audioLabel}>{label}</ThemedText>
-      ) : null}
-      <ThemedView style={styles.audioPlayer}>
-        <TouchableOpacity
-          style={styles.playButton}
-          onPress={togglePlayPause}
-        >
-          <Ionicons
-            name={isPlaying ? 'pause' : 'play'}
-            size={24}
-            color="#007AFF"
-          />
-        </TouchableOpacity>
-        <ThemedText style={styles.audioTime}>
-          {formatTime(position)} / {formatTime(duration)}
-        </ThemedText>
-        <TouchableOpacity
-          style={styles.resetAudioButton}
-          onPress={resetAudio}
-        >
-          <Ionicons
-            name="refresh"
-            size={24}
-            color="#FFFFFF"
-          />
-        </TouchableOpacity>
-      </ThemedView>
-    </ThemedView>
-  );
-}
-
-// Image viewer that adjusts container based on image dimensions
-function ManualImageViewer({ imageUrl }: { imageUrl: string }) {
-  const [containerStyle, setContainerStyle] = useState<any>(styles.viewerImage);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const maxContainerWidth = Dimensions.get('window').width - 64; // Ancho máximo del contenedor (pantalla - padding del modal)
-
-  const handleImageLoad = (event: any) => {
-    const { width, height } = event.nativeEvent.source;
-    if (width && height) {
-      const aspectRatio = width / height;
-      let containerWidth = maxContainerWidth;
-      let containerHeight: number;
-
-      // Calcular dimensiones del contenedor basándose en las dimensiones reales de la imagen
-      if (height > width) {
-        // Imagen vertical: usar ancho completo disponible y calcular altura proporcional
-        containerHeight = (maxContainerWidth / aspectRatio);
-        // Limitar altura máxima
-        if (containerHeight > 600) {
-          containerHeight = 600;
-          containerWidth = containerHeight * aspectRatio;
-        }
-      } else {
-        // Imagen horizontal: ajustar ancho al tamaño real de la imagen (sin exceder el máximo)
-        containerWidth = Math.min(maxContainerWidth, width);
-        containerHeight = containerWidth / aspectRatio;
-        // Si la altura calculada es muy pequeña, usar altura mínima y ajustar ancho
-        if (containerHeight < 180) {
-          containerHeight = 180;
-          containerWidth = containerHeight * aspectRatio;
-        }
-      }
-
-      setContainerStyle({
-        width: containerWidth,
-        height: containerHeight,
-        borderRadius: 8,
-        marginBottom: 8,
-        backgroundColor: '#F0F0F0',
-        alignSelf: 'center', // Centrar el contenedor
-      });
-    }
-  };
-
-  return (
-    <>
-      <TouchableOpacity activeOpacity={0.85} onPress={() => setIsFullscreen(true)}>
-        <Image
-          source={{ uri: imageUrl }}
-          style={containerStyle}
-          resizeMode="contain"
-          onLoad={handleImageLoad}
-        />
-      </TouchableOpacity>
-      <FullscreenMediaModal
-        visible={isFullscreen}
-        onClose={() => setIsFullscreen(false)}
-        type="image"
-        uri={imageUrl}
-      />
-    </>
-  );
-}
-
-// Video player for manuals using expo-video (sin controles externos, solo VideoView con controles nativos)
-function ManualVideoPlayer({ sourceUrl }: { sourceUrl: string }) {
-  const player = useVideoPlayer(sourceUrl);
-  const maxContainerWidth = Dimensions.get('window').width - 64; // Ancho máximo del contenedor (pantalla - padding del modal)
-
-  return (
-    <View
-      style={{
-        marginBottom: 8,
-        overflow: 'hidden',
-        borderRadius: 8,
-        backgroundColor: '#000000',
-        width: maxContainerWidth,
-        maxWidth: '100%',
-        alignSelf: 'center',
-        position: 'relative',
-      }}
-    >
-      <VideoView
-        player={player}
-        style={{
-          width: '100%',
-          aspectRatio: 16 / 9,
-          backgroundColor: '#000000',
-        }}
-        contentFit="contain"
-        nativeControls={true}
-        allowsFullscreen={false}
-        allowsPictureInPicture={false}
-      />
-    </View>
-  );
-}

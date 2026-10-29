@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { claveValida, ejecutarIdempotente, guardStore, hashClave, IDEM_EN_CURSO_MAX_MS, IDEM_RETENCION_MS, IdemStoreError, memoryIdempotencyStore, type IdempotencyStore, type IdemRun } from "./idempotency";
+import { claveValida, conCandadoDistribuido, ejecutarIdempotente, guardStore, hashClave, IDEM_EN_CURSO_MAX_MS, IDEM_RETENCION_MS, IdemStoreError, memoryIdempotencyStore, type IdempotencyStore, type IdemRun } from "./idempotency";
 import { conIdempotencia, readIdempotencyKey } from "./idempotencyHttp";
 import { dynamicIdempotencyStore } from "./idempotencyDynamicStore";
 import { stripComments } from "./routeAudit";
@@ -303,5 +303,58 @@ describe("clave de idempotencia de la cola y rutas que la usan (#172, #181)", ()
         assert.match(sql, /UNIQUE INDEX `c_clave_idempotencia_clave_hash_key`\(`clave_hash`\)/);
         assert.match(sql, /`clave_hash` VARCHAR\(64\) NOT NULL/);
         assert.equal(/`clave` /.test(sql), false, "no hay columna con la clave en claro");
+    });
+});
+
+describe("candado entre procesos (conCandadoDistribuido, issue #197)", () => {
+    const sinEspera = async () => undefined;
+    it("adquiere, ejecuta y libera siempre (también si la acción lanza)", async () => {
+        const store = memoryIdempotencyStore();
+        const r = await conCandadoDistribuido(store, "permisos:1", async () => 42, { sleep: sinEspera });
+        assert.deepEqual(r, { ok: true, value: 42 });
+        assert.equal(store.rows.size, 0, "liberado");
+        await assert.rejects(() => conCandadoDistribuido(store, "permisos:1", async () => { throw new Error("falla"); }, { sleep: sinEspera }), /falla/);
+        assert.equal(store.rows.size, 0, "liberado aunque falle");
+    });
+    it("con el candado ocupado ESPERA a que se libere y entonces ejecuta; pasado el tiempo de espera, se rinde sin ejecutar", async () => {
+        const store = memoryIdempotencyStore();
+        let soltar!: () => void;
+        const espera = new Promise<void>((r) => (soltar = r));
+        const primero = conCandadoDistribuido(store, "r:1", async () => { await espera; return "primero"; });
+        await new Promise((r) => setTimeout(r, 20));
+        let ejecutadoSegundo = false;
+        const rendido = await conCandadoDistribuido(store, "r:1", async () => { ejecutadoSegundo = true; return "x"; }, { esperaMs: 80 });
+        assert.deepEqual(rendido, { ok: false });
+        assert.equal(ejecutadoSegundo, false);
+        const segundo = conCandadoDistribuido(store, "r:1", async () => "segundo", { esperaMs: 2000 });
+        await new Promise((r) => setTimeout(r, 40));
+        soltar();
+        assert.deepEqual(await primero, { ok: true, value: "primero" });
+        assert.deepEqual(await segundo, { ok: true, value: "segundo" });
+    });
+    it("candados de recursos distintos no se estorban", async () => {
+        const store = memoryIdempotencyStore();
+        let soltar!: () => void;
+        const espera = new Promise<void>((r) => (soltar = r));
+        const a = conCandadoDistribuido(store, "import:inventario-puesto:5", async () => { await espera; return "a"; });
+        await new Promise((r) => setTimeout(r, 20));
+        assert.deepEqual(await conCandadoDistribuido(store, "import:inventario-puesto:6", async () => "b", { esperaMs: 50 }), { ok: true, value: "b" });
+        soltar();
+        await a;
+    });
+    it("un candado abandonado (el proceso murió) se retoma pasados 10 minutos y uno vigente no", async () => {
+        const store = memoryIdempotencyStore();
+        const t0 = new Date("2026-10-27T10:00:00Z");
+        await store.reservar({ claveHash: hashClave("candado:r:2"), ambito: "candado", recurso: "r:2", actorId: null, estado: "en_curso", httpStatus: null, respuesta: null, creado: t0, expira: new Date(t0.getTime() + IDEM_EN_CURSO_MAX_MS) });
+        const vigente = await conCandadoDistribuido(store, "r:2", async () => "x", { esperaMs: 0, now: () => new Date(t0.getTime() + 1000), sleep: sinEspera });
+        assert.deepEqual(vigente, { ok: false });
+        const abandonado = await conCandadoDistribuido(store, "r:2", async () => "retomado", { esperaMs: 0, now: () => new Date(t0.getTime() + IDEM_EN_CURSO_MAX_MS + 1000), sleep: sinEspera });
+        assert.deepEqual(abandonado, { ok: true, value: "retomado" });
+    });
+    it("un fallo del almacén sale como IdemStoreError (quien llama decide) y no se ejecuta nada", async () => {
+        const caido: IdempotencyStore = { reservar: async () => { throw new Error("sin base"); }, leer: async () => null, completar: async () => undefined, liberar: async () => undefined };
+        let ejecutado = false;
+        await assert.rejects(() => conCandadoDistribuido(caido, "r:3", async () => { ejecutado = true; }), (e: unknown) => e instanceof IdemStoreError);
+        assert.equal(ejecutado, false);
     });
 });

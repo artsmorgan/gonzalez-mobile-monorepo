@@ -3,7 +3,7 @@
  * reciben este entorno, para que las rutas de la propia app (con el JWT del empleado) y la API de acciones de Guardify (con la identidad del
  * actor ya verificada) ejecuten EXACTAMENTE el mismo código, y para poder probarla sin base de datos.
  */
-export type ActionErrorCode = "planillas_session_required" | "not_found" | "already_resolved" | "invalid_state" | "conflict" | "out_of_scope" | "reason_required" | "signature_required" | "invalid_request";
+export type ActionErrorCode = "planillas_session_required" | "not_found" | "already_resolved" | "invalid_state" | "conflict" | "out_of_scope" | "reason_required" | "signature_required" | "invalid_request" | "unauthorized" | "planillas_unavailable";
 
 export type ActionEnv = {
     /** Consulta/escritura por la API dinámica (`callDynamicPrisma`) ya atada a la petición. */
@@ -24,9 +24,9 @@ export type ActionEnv = {
 
 export type ActionHttp =
     | { ok: true; status: 200; body: Record<string, any> }
-    | { ok: false; status: number; code: ActionErrorCode; message: string; /** Detalle por fila o por dato, en las cargas masivas. */ errors?: string[] };
+    | { ok: false; status: number; code: ActionErrorCode; message: string; /** Detalle por fila o por dato, en las cargas masivas. */ errors?: string[]; /** Campos extra del cuerpo del error (p. ej. el resultado por fila de una carga rechazada). */ extra?: Record<string, unknown> };
 
-export const fail = (status: number, code: ActionErrorCode, message: string, errors?: string[]): Extract<ActionHttp, { ok: false }> => ({ ok: false, status, code, message, ...(errors ? { errors } : {}) });
+export const fail = (status: number, code: ActionErrorCode, message: string, errors?: string[], extra?: Record<string, unknown>): Extract<ActionHttp, { ok: false }> => ({ ok: false, status, code, message, ...(errors ? { errors } : {}), ...(extra ? { extra } : {}) });
 
 export const parseDateInput = (input: unknown): Date | null => {
     if (!input) return null;

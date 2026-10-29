@@ -3,7 +3,7 @@
 Generado con `scripts/auditRoutes.ts` (análisis estático, ver `utils/routeAudit.ts`). **No lo edites a mano**: vuelve a generarlo.
 «Alcance» = la ruta llama a un control de pertenencia del objeto (`authorizeSelfOrAdmin`, `authorizeMarcaAccess`, `authorizeReportesOperation`, `isSuperAdminEmpleado`).
 
-Total: 284 rutas; con verificación de sesión: 273; con control de alcance: 14.
+Total: 286 rutas; con verificación de sesión: 275; con control de alcance: 16.
 
 | Endpoint | Métodos | Autenticación | IDs de objeto (ruta / query / cuerpo) | BD directa | Identidad | Alcance |
 |---|---|---|---|---|---|---|
@@ -167,7 +167,9 @@ Total: 284 rutas; con verificación de sesión: 273; con control de alcance: 14.
 | `induction-tour-record/corpo/[corpo_id]` | GET | verifyAccessTokenByApi | corpo_id / — / — | no | no | no |
 | `job-manuals` | GET, POST | verifyAccessTokenByApi | — / puesto_id, empleado_id / marca_id, empresa_id, cliente_id, corpo_id, division_id, contrato_id | sí | sí | no |
 | `job-manuals/[id]` | PUT, DELETE | verifyAccessTokenByApi | id / — / — | no | sí | no |
+| `job-manuals/[id]/edit` | PUT | verifyAccessTokenByApi | id / — / — | sí | sí | sí |
 | `job-manuals/[id]/empleados` | POST | verifyAccessTokenByApi | id / — / marca_id | sí | sí | no |
+| `job-manuals/[id]/files/[fileId]` | DELETE | verifyAccessTokenByApi | id, fileId / marca_id / — | sí | sí | sí |
 | `job-manuals/[id]/get-audio/[audio]` | GET | delegada (API dinámica) | id, audio / — / — | no | no | no |
 | `job-manuals/[id]/get-file/[file]` | GET | delegada (API dinámica) | id, file / — / — | no | no | no |
 | `job-manuals/[id]/get-image/[image]` | GET | delegada (API dinámica) | id, image / — / — | no | no | no |

@@ -221,7 +221,7 @@ module.exports = ({ config }) => {
           process.env.NEXT_PUBLIC_API_SERVER ||
           // test https://api-gonzalez-mobile-monorepo-production.up.railway.app
           // prod https://gonzalez-mobile-server-production.up.railway.app
-          "https://obvious-alternate-nextel-lows.trycloudflare.com",
+          "https://reference-misc-len-bloom.trycloudflare.com",
         /** Debe coincidir con `MOBILE_ACCESS_TOKEN` del servidor (query en `/api/main-structure`). */
         MOBILE_ACCESS_TOKEN:
           process.env.EXPO_PUBLIC_MOBILE_ACCESS_TOKEN ||

@@ -20,7 +20,7 @@ import crypto from "node:crypto";
 export const FIRMA_VERSION = 1;
 
 export type AccionEvidencia = "CREATE" | "UPDATE";
-export type UbicacionOrigen = "firma" | "cabecera" | "denegada" | "sin_datos";
+export type UbicacionOrigen = "firma" | "cabecera" | "denegada" | "sin_datos" | "guardify";
 
 /** Campos que entran en la firma, en este orden (ver la especificación). `null` se firma como cadena vacía. */
 export type CamposFirmados = {

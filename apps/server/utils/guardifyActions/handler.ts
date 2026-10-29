@@ -1,12 +1,14 @@
 import { verifyGuardifyApiKey, MIN_API_KEY_LENGTH } from "../guardifyReports/auth";
-import { bindingOf, verifyActorHeaders, resolveActorEmployee, type ActorEmployee, type GuardifyActor } from "./actor";
+import crypto from "node:crypto";
+import { bindingOf, firmaDigitalDeActor, verifyActorHeaders, resolveActorEmployee, validarFirmaManual, type ActorEmployee, type GuardifyActor } from "./actor";
 import { PlanillasError, type ActionEnv, type ActionErrorCode, type ActionHttp } from "./env";
 import { aprobarMutuoAcuerdo } from "./aprobar-mutuo";
-import { cargarInventarioPuesto } from "./inventario";
+import { registrarEvidenciaDeAccion } from "./evidenciaAccion";
+import { cargarInventarioPuesto, INVENTARIO_MAX_FILAS } from "./inventario";
 import { aprobarPermisoSolicitud } from "./aprobar-permiso";
 import { accionesDeMutuo, rechazarMutuoAcuerdo } from "./mutuos";
 import { accionesDePermiso, rechazarPermisoSolicitud } from "./permisos";
-import { claveValida, type IdempotencyStore } from "../idempotency";
+import { CANDADO_ESPERA_MS, claveValida, conCandadoDistribuido, IdemStoreError, type IdempotencyStore } from "../idempotency";
 import { conIdempotencia, readIdempotencyKey } from "../idempotencyHttp";
 
 /**
@@ -44,12 +46,10 @@ export type RunArgs = {
     request: any;
     /** Token de Planillas vigente de la persona, solo para las acciones que lo necesitan. */
     planillasToken: string | null;
-};
-
-/** Imagen de la firma de un rol (`digital` / `manual`) tal como la manda Guardify. */
-const firmaDe = (request: any, role: string): string => {
-    const s = (Array.isArray(request?.signatures) ? request.signatures : []).find((x: any) => x?.role === role);
-    return typeof s?.image === "string" ? s.image : "";
+    /** Firma digital del ejecutivo: la GENERA el servidor a partir del actor y de la petición firmada (issue #194); el cliente no la manda. */
+    firmaDigital: string;
+    /** Firma manual del ejecutivo: la imagen `data:image/png|jpeg` que mandó Guardify, ya validada. */
+    firmaManual: string;
 };
 
 const partesDePermiso = (e: any): number[] => [Number(e?.empleado_id)].filter((n) => n > 0);
@@ -94,8 +94,8 @@ export const ACTION_TYPES: Record<string, ActionTypeImpl> = {
                             reemplazo_obligatorio: p.reemplazoObligatorio ?? null,
                             turnos: (Array.isArray(p.turnos) ? p.turnos : []).map((t: any) => ({ id: t?.id, reemplazo_id: t?.reemplazoId ?? null })),
                             observaciones: typeof p.observaciones === "string" ? p.observaciones : "",
-                            firma_ejecutivo_cuenta_digital: firmaDe(a.request, "digital"),
-                            firma_ejecutivo_cuenta_manual: firmaDe(a.request, "manual"),
+                            firma_ejecutivo_cuenta_digital: a.firmaDigital,
+                            firma_ejecutivo_cuenta_manual: a.firmaManual,
                         }),
                     });
                 },
@@ -112,18 +112,18 @@ export const ACTION_TYPES: Record<string, ActionTypeImpl> = {
             rechazar: { run: (env, a) => rechazarMutuoAcuerdo(env, { id: a.id, actorId: a.actor.id, horaAccion: null, extraCambios: a.extraCambios }) },
             aprobar: {
                 planillas: true,
-                run: (env, a) => aprobarMutuoAcuerdo(env, { id: a.id, actorId: a.actor.id, firmaDigital: firmaDe(a.request, "digital"), firmaManual: firmaDe(a.request, "manual"), horaAccion: null, planillasToken: a.planillasToken, extraCambios: a.extraCambios }),
+                run: (env, a) => aprobarMutuoAcuerdo(env, { id: a.id, actorId: a.actor.id, firmaDigital: a.firmaDigital, firmaManual: a.firmaManual, horaAccion: null, planillasToken: a.planillasToken, extraCambios: a.extraCambios }),
             },
         },
     },
 };
 
-const HTTP: Record<ActionErrorCode, number> = { planillas_session_required: 409, not_found: 404, already_resolved: 409, invalid_state: 409, conflict: 409, out_of_scope: 403, reason_required: 400, signature_required: 400, invalid_request: 400 };
+const HTTP: Record<ActionErrorCode, number> = { planillas_session_required: 409, not_found: 404, already_resolved: 409, invalid_state: 409, conflict: 409, out_of_scope: 403, reason_required: 400, signature_required: 400, invalid_request: 400, unauthorized: 401, planillas_unavailable: 502 };
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 const err = (code: ActionErrorCode, message: string, status = HTTP[code]) => json({ code, message }, status);
 /** Un fallo de la lógica: los de servidor (500) conservan su estado; el resto sale con el estado del código tipado. */
-const failure = (res: Extract<ActionHttp, { ok: false }>) => json({ code: res.code, message: res.message, ...(res.errors?.length ? { errores: res.errors } : {}) }, res.status >= 500 ? res.status : HTTP[res.code]);
+const failure = (res: Extract<ActionHttp, { ok: false }>) => json({ code: res.code, message: res.message, ...(res.errors?.length ? { errores: res.errors } : {}), ...(res.extra ?? {}) }, res.status >= 500 ? res.status : HTTP[res.code]);
 
 /** Planillas respondió con error: se traduce a algo que Guardify pueda explicar. 401 = su sesión de Planillas no sirve; 403 = Planillas no se lo permite; 5xx o sin respuesta = no se completó. */
 function planillasFailure(e: PlanillasError): Response {
@@ -138,7 +138,7 @@ function planillasFailure(e: PlanillasError): Response {
  * resultado sin repetir el efecto, y la misma clave con otra acción, otro registro u otra persona es `409 conflict` (protocolo de acciones). Sin él (pruebas)
  * solo rige la deducción por estado.
  */
-export type ActionDeps = { getEnv: () => ActionEnv; env?: Record<string, string | undefined>; now?: () => number; idempotency?: (env: ActionEnv) => IdempotencyStore };
+export type ActionDeps = { getEnv: () => ActionEnv; env?: Record<string, string | undefined>; now?: () => number; idempotency?: (env: ActionEnv) => IdempotencyStore; /** Cuánto espera una petición a que se libere el candado de un registro ocupado (por defecto 2 s). */ lockWaitMs?: number };
 
 /** Cuerpo de los errores de la capa de idempotencia: tipados como el resto, salvo el almacén caído, que es un 503 sin `code` (Guardify lo lee como «app no disponible»). */
 const idemErrorBody = (code: string, message: string) => (code === "store_unavailable" ? { error: code, message } : { code, message });
@@ -146,23 +146,50 @@ const idemErrorBody = (code: string, message: string) => (code === "store_unavai
 /** Tope del cuerpo de una petición (las firmas viajan como imagen). */
 export const MAX_BODY_CHARS = 2_500_000;
 
-/** Registros con una acción en curso en ESTE proceso: dos intentos a la vez sobre lo mismo no pasan los dos (el segundo recibe «conflicto»). */
+/**
+ * Candado de un registro (issue #197): dos peticiones sobre lo mismo —aunque traigan claves de idempotencia DISTINTAS— no se ejecutan a la vez. Primero
+ * el candado de ESTE proceso y, con almacén, el candado ENTRE procesos (reserva atómica en `c_clave_idempotencia`). Quien lo encuentra ocupado ESPERA
+ * (hasta 2 s) a que se libere: como el registro ya cambió de estado, su comprobación responde «ya resuelto». Si sigue ocupado: `409 conflict`.
+ */
 const enCurso = new Set<string>();
-async function conCandado<T>(llave: string, fn: () => Promise<T>): Promise<T | Response> {
-    if (enCurso.has(llave)) return err("conflict", "Hay otra acción en curso sobre este registro. Espera un momento y revisa su estado.");
+const dormir = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const OCUPADO = "Hay otra acción en curso sobre este registro. Espera un momento y revisa su estado.";
+async function conCandado(llave: string, fn: () => Promise<Response>, deps: ActionDeps, env: ActionEnv): Promise<Response> {
+    const espera = deps.lockWaitMs ?? CANDADO_ESPERA_MS;
+    const t0 = Date.now();
+    while (enCurso.has(llave)) {
+        if (Date.now() - t0 >= espera) return err("conflict", OCUPADO);
+        await dormir(40);
+    }
     enCurso.add(llave);
-    try { return await fn(); } finally { enCurso.delete(llave); }
+    try {
+        if (!deps.idempotency) return await fn();
+        const r = await conCandadoDistribuido(deps.idempotency(env), llave, fn, { esperaMs: Math.max(0, espera - (Date.now() - t0)) });
+        return r.ok ? r.value : err("conflict", OCUPADO);
+    } catch (e) {
+        // El almacén no responde: no se ejecuta nada (como con la clave de idempotencia).
+        if (e instanceof IdemStoreError) return json({ error: "store_unavailable", message: "No se pudo comprobar el candado del registro; no se hizo nada. Reintenta en un momento." }, 503);
+        throw e;
+    } finally {
+        enCurso.delete(llave);
+    }
 }
 
 /** Llave y actor firmado (ligado a esta petición): lo común a todas las rutas. */
-function autenticar(req: Request, raw: string, deps: ActionDeps): { ok: true; claims: GuardifyActor } | { ok: false; res: Response } {
+/** 401 con `code: "unauthorized"` (issue #196); `error` se conserva como alias durante una versión por compatibilidad y se quitará después. */
+const noAutorizado = (message: string) => json({ code: "unauthorized", error: "unauthorized", message }, 401);
+
+function autenticar(req: Request, raw: string, deps: ActionDeps): { ok: true; claims: GuardifyActor; ts: number; huella: string } | { ok: false; res: Response } {
     const envVars = deps.env ?? process.env;
     const auth = verifyGuardifyApiKey(req.headers, envVars);
-    if (!auth.ok) return { ok: false, res: json({ error: auth.error, message: auth.message }, auth.status) };
+    // 401: llave inválida. 503: la API no está configurada (infraestructura: sin `code`, Guardify lo lee como «app no disponible»).
+    if (!auth.ok) return { ok: false, res: auth.status === 401 ? noAutorizado(auth.message) : json({ error: auth.error, message: auth.message }, auth.status) };
     const key = (envVars.GUARDIFY_REPORTS_API_KEY ?? "").trim();
     const claims = key.length < MIN_API_KEY_LENGTH ? null : verifyActorHeaders(req.headers, key, (deps.now ?? Date.now)(), bindingOf(req.method, req.url, raw));
-    if (!claims) return { ok: false, res: json({ error: "unauthorized", message: "Identidad del actor inválida o vencida." }, 401) };
-    return { ok: true, claims: claims.actor };
+    if (!claims) return { ok: false, res: noAutorizado("Identidad del actor inválida o vencida.") };
+    // La huella de lo que Guardify firmó (método, ruta, consulta y cuerpo): va a la evidencia de la acción.
+    const huella = crypto.createHash("sha256").update((req.headers.get("x-guardify-actor-sig") ?? "").trim(), "utf8").digest("hex");
+    return { ok: true, claims: claims.actor, ts: claims.ts, huella };
 }
 
 const leerCuerpo = async (req: Request): Promise<string | Response> => {
@@ -172,7 +199,7 @@ const leerCuerpo = async (req: Request): Promise<string | Response> => {
 };
 const parseJson = (raw: string): any => { try { return raw ? JSON.parse(raw) : {}; } catch { return {}; } };
 
-type Ctx = { tipo: ActionTypeImpl; id: number; actor: ActorEmployee; claims: GuardifyActor; env: ActionEnv };
+type Ctx = { tipo: ActionTypeImpl; id: number; actor: ActorEmployee; claims: GuardifyActor; env: ActionEnv; ts: number; huella: string };
 
 /** Llave, actor firmado, actor resuelto a una persona de la app y registro: lo común a las dos rutas de acciones. */
 async function prepare(req: Request, raw: string, tipoId: string, idStr: string, deps: ActionDeps): Promise<{ ok: true; c: Ctx; existing: any } | { ok: false; res: Response }> {
@@ -187,7 +214,7 @@ async function prepare(req: Request, raw: string, tipoId: string, idStr: string,
     if (!actor) return { ok: false, res: err("out_of_scope", "No se pudo identificar a esta persona en la app.") };
     const existing = await env.call({ action: "GET", table: tipo.table, operation: "findUnique", where: { id } });
     if (!existing) return { ok: false, res: err("not_found", "Registro no encontrado") };
-    return { ok: true, c: { tipo, id, actor, claims: a.claims, env }, existing };
+    return { ok: true, c: { tipo, id, actor, claims: a.claims, env, ts: a.ts, huella: a.huella }, existing };
 }
 
 const iso = (d: unknown): string | null => { const t = d ? new Date(d as string) : null; return t && !isNaN(t.getTime()) ? t.toISOString() : null; };
@@ -236,7 +263,20 @@ export async function handleActionExecute(req: Request, tipoId: string, idStr: s
         if (!claveValida(idem)) return err("invalid_request", "Falta la clave de idempotencia o no es válida (16 a 128 caracteres visibles, sin espacios).");
         const motivo = typeof body?.reason === "string" && body.reason.trim() ? body.reason.trim().slice(0, 500) : null;
 
-        const ejecutar = () => conCandado(`${tipoId}:${c.id}`, async () => {
+        // Firmas de `aprobar` (issue #194): la digital la genera el servidor y NO se acepta del cliente; la manual debe ser una imagen dentro del tope.
+        // Se revisan ANTES de reservar la clave de idempotencia: una petición mal formada no la consume.
+        let firmaDigital = "";
+        let firmaManual = "";
+        if (accion === "aprobar") {
+            const firmas: any[] = Array.isArray(body?.signatures) ? body.signatures : [];
+            if (firmas.some((x) => x?.role === "digital")) return err("invalid_request", "La firma digital la genera el servidor: no se acepta una firma digital enviada por el cliente. Envía solo la firma manual (una imagen).");
+            const manual = validarFirmaManual(firmas.find((x) => x?.role === "manual")?.image);
+            if (!manual.ok) return err(manual.code, manual.message);
+            firmaManual = manual.image;
+            firmaDigital = firmaDigitalDeActor(c.actor.id, c.huella, c.ts);
+        }
+
+        const ejecutar = () => conCandado(`${tipoId}:${c.id}`, async (): Promise<Response> => {
             // Se vuelve a leer el registro DENTRO del candado: lo que decida ahora es lo que está en la base ahora.
             const existing = await c.env.call({ action: "GET", table: c.tipo.table, operation: "findUnique", where: { id: c.id } });
             if (!existing) return err("not_found", "Registro no encontrado");
@@ -262,13 +302,15 @@ export async function handleActionExecute(req: Request, tipoId: string, idStr: s
                 if (!planillasToken) return err("planillas_session_required", "Para esta acción hace falta la sesión de Planillas de la persona: debe abrir MonitoreApp y escribir su contraseña de Planillas, y luego reintentar.");
             }
             const res = await impl.run(c.env, {
-                id: c.id, actor: c.actor, claims: c.claims, motivo, request: body, planillasToken,
+                id: c.id, actor: c.actor, claims: c.claims, motivo, request: body, planillasToken, firmaDigital, firmaManual,
                 extraCambios: [...(motivo ? [{ prop: accion === "rechazar" ? "motivo_rechazo" : "observacion_guardify", before: null, after: motivo }] : []), { prop: "origen", before: null, after: `Guardify (${c.claims.email})` }],
             });
             console.log(JSON.stringify({ level: "info", msg: "guardify_action", tipo: tipoId, accion, status: res.status, ok: res.ok, ms: Date.now() - started, actor: c.actor.id }));
             if (!res.ok) return failure(res);
-            return json({ estado: resultado, ref: null, message: res.body.message ?? null });
-        });
+            // Evidencia con origen «Guardify» (issue #193). Si no se puede escribir NO se revierte la acción: se informa y queda en el registro de errores.
+            const evidencia = await registrarEvidenciaDeAccion(c.env, { tabla: c.tipo.table, registroIds: [c.id], usuarioId: c.actor.id, cedula: c.actor.cedula, huella: c.huella });
+            return json({ estado: resultado, ref: null, message: res.body.message ?? null, evidencia: evidencia ? "registrada" : "pendiente" });
+        }, deps, c.env);
         // La reserva de la clave es el candado entre procesos (el `Set` de arriba solo cubre este); el reintento recibe el resultado original.
         if (!deps.idempotency) return await ejecutar();
         return await conIdempotencia(idem, { store: deps.idempotency(c.env), ambito: `${tipoId}:${accion}`, recurso: String(c.id), actorId: c.actor.id, onStoreError: "fail", errorBody: idemErrorBody }, async () => (await ejecutar()) as Response);
@@ -301,13 +343,13 @@ export async function handleLookupEmpleado(req: Request, deps: ActionDeps): Prom
 }
 
 /** Máximo de filas por carga: cada fila revisa varias tablas y el envío a Planillas es de una vez. */
-export const IMPORT_MAX_ROWS = 2000;
+export const IMPORT_MAX_ROWS = INVENTARIO_MAX_FILAS;
 
 /**
  * Carga masiva para Guardify: `POST /api/guardify/actions/imports/inventario-puesto` con `{ modo: "validar" | "aplicar", filas: [...] }`.
  * `validar` hace todas las comprobaciones y devuelve lo que se crearía sin escribir nada; `aplicar` además lo envía a Planillas con el token de Planillas
  * que la persona dejó guardado en la app (sin uno vigente: `409 planillas_session_required`). Repetir una carga no duplica: lo ya cargado se omite.
- * Dos cargas `aplicar` a la vez de la misma persona no corren juntas (la segunda recibe «conflicto»).
+ * `aplicar` exige `Idempotency-Key`. Dos cargas `aplicar` a la vez de la misma persona no corren juntas (la segunda espera y, si sigue ocupado, recibe «conflicto»).
  */
 export async function handleImport(req: Request, tipo: string, deps: ActionDeps): Promise<Response> {
     try {
@@ -333,12 +375,17 @@ export async function handleImport(req: Request, tipo: string, deps: ActionDeps)
             const res = await cargarInventarioPuesto(env, { filas: body.filas, planillasToken, modo });
             console.log(JSON.stringify({ level: "info", msg: "guardify_import", tipo, modo, filas: body.filas.length, ok: res.ok, status: res.status, actor: actor.id }));
             if (!res.ok) return failure(res);
-            return json({ modo, creados: { planes: res.body.created_plans, entregas: res.body.created_entregas }, omitidos: res.body.skipped, mensaje: res.body.message });
+            // Evidencia con origen «Guardify» por cada puesto al que llegó algo (issue #193); solo al aplicar.
+            const evidencia = modo === "aplicar" && res.body.puestoIds.length > 0 ? await registrarEvidenciaDeAccion(env, { tabla: "e_estructura_puesto", registroIds: res.body.puestoIds, usuarioId: actor.id, cedula: actor.cedula, huella: a.huella }) : null;
+            return json({ modo, creados: { planes: res.body.created_plans, entregas: res.body.created_entregas }, omitidos: res.body.skipped, filas: res.body.filas, resumen: res.body.resumen, mensaje: res.body.message, ...(evidencia === null ? {} : { evidencia: evidencia ? "registrada" : "pendiente" }) });
         };
         if (modo !== "aplicar") return await correr();
+        // «aplicar» escribe en Planillas: la clave de idempotencia es OBLIGATORIA (issue #197). `validar` no escribe y no la necesita.
         const clave = readIdempotencyKey(req, body?.idempotencyKey);
-        const aplicar = () => conCandado(`import:${tipo}`, correr) as Promise<Response>;
-        if (!deps.idempotency || clave === null) return await aplicar();
+        if (clave === null || !claveValida(clave)) return err("invalid_request", "Falta la clave de idempotencia (obligatoria en «aplicar») o no es válida (16 a 128 caracteres visibles, sin espacios).");
+        // Candado por persona y tipo de carga: una carga larga de una persona no bloquea las de las demás.
+        const aplicar = () => conCandado(`import:${tipo}:${actor.id}`, correr, deps, env);
+        if (!deps.idempotency) return await aplicar();
         return await conIdempotencia(clave, { store: deps.idempotency(env), ambito: `imports:${tipo}:aplicar`, recurso: "-", actorId: actor.id, onStoreError: "fail", errorBody: idemErrorBody }, aplicar);
     } catch (e) {
         if (e instanceof PlanillasError) return planillasFailure(e);
