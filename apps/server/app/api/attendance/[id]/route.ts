@@ -315,8 +315,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 break;
             case "salida":
                 if (marcaDia.hora_salida_digitada != null) {
-                    await reportError(req, "api/attendance/[id]", "PUT", 500, "Ya has marcado la salida");
-                    return NextResponse.json({ status: false, message: "Ya has marcado la salida", marca_id: marcaDia.id, already_synced: true }, { status: 500 });
+                    await reportError(req, "api/attendance/[id]", "PUT", 400, "Ya has marcado la salida");
+                    return NextResponse.json({ status: false, message: "Ya has marcado la salida", marca_id: marcaDia.id, already_synced: true }, { status: 400 });
                 }
 
                 const response = await marcar_salida(req, marcaDia.id, horaAccion, reason, payload, planillasToken, cords);

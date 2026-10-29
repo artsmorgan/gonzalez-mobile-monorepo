@@ -168,7 +168,6 @@ export async function registerPushDeviceOnline(params: {
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${params.accessToken}`,
-      'ngrok-skip-browser-warning': '69420',
     },
     body: JSON.stringify(params.payload),
   });
@@ -187,7 +186,6 @@ export async function unregisterPushDeviceOnline(params: {
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${params.accessToken}`,
-      'ngrok-skip-browser-warning': '69420',
     },
     body: JSON.stringify({ token: params.token }),
   });

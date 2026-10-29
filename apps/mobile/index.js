@@ -8,7 +8,10 @@ import './hooks/installEvidenceFetch';
 import './hooks/installQueueOwnership';
 // Las acciones que se guardan sin conexión (*_actions) se sellan con la ubicación y la hora de ese momento, no las de la sincronización.
 import './hooks/installEvidenceQueue';
+// Versión web: React Native Web no implementa Alert.alert (mensajes y confirmaciones, como «Cerrar sesión», no aparecían). En el teléfono no hace nada.
+import { installWebAlert } from './utils/installWebAlert';
 import { registerRootComponent } from 'expo';
 import App from './App';
 
+installWebAlert();
 registerRootComponent(App);

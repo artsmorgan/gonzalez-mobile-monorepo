@@ -31,7 +31,6 @@ export default function RootLayout() {
             method: 'GET',
             headers: {
               'Content-Type': 'application/json',
-              'ngrok-skip-browser-warning': '69420'
             },
           });
           let responseData = await response.json();

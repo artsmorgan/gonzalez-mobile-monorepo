@@ -663,7 +663,6 @@ export default function PuestoUbicacionScreen() {
                             method: 'PUT',
                             headers: {
                                 'Content-Type': 'application/json',
-                                'ngrok-skip-browser-warning': '69420',
                                 'Planillas-Token': encodeURIComponent(planillasToken ?? ''),
                             },
                             body: JSON.stringify({ latitud, longitud, horaAccion }),

@@ -918,7 +918,6 @@ function AppContent() {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
           },
         },
         shouldUpdateServerTime: true,
@@ -6344,7 +6343,6 @@ function AppContent() {
                   method: 'PUT',
                   headers: {
                     'Content-Type': 'application/json',
-                    'ngrok-skip-browser-warning': '69420',
                     'Planillas-Token': encodeURIComponent(planillasToken ?? ''),
                   },
                   body: JSON.stringify({
@@ -9352,7 +9350,6 @@ function AppContent() {
             method: 'GET',
             headers: {
               'Content-Type': 'application/json',
-              'ngrok-skip-browser-warning': '69420',
             },
           });
           const responseData = await response.json();

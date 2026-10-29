@@ -32,7 +32,6 @@ const NGROK_BYPASS_HEADER = { "ngrok-skip-browser-warning": "69420" };
 const buildAuthHeaders = (req: NextRequest): Record<string, string> => {
     const headers: Record<string, string> = {
         "Content-Type": "application/json",
-        ...NGROK_BYPASS_HEADER,
     };
     const accessToken = resolveUserAccessToken(req);
     if (accessToken) headers.Authorization = `Bearer ${accessToken}`;

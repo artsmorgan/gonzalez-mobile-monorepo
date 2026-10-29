@@ -51,7 +51,6 @@ export default function ForgotPasswordScreen() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420'
         },
         body: JSON.stringify({
           cedula: cedula.trim(),

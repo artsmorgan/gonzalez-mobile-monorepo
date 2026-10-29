@@ -1056,7 +1056,6 @@ export default function MarcarIngresoSalidaScreen() {
 
       const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
       const planillasToken = planillasTokenCheck.token;
-      console.log('planillasToken', planillasToken);
       const attendanceUserUrl = `${apiUrl}/api/attendance/user/${employee.id}`;
 
       const response = await authedFetch({

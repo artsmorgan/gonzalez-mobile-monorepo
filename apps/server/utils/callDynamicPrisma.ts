@@ -102,7 +102,6 @@ export async function callDynamicPrisma({
     try {
         const axiosHeaders: Record<string, string> = {
             "Content-Type": "application/json",
-            "ngrok-skip-browser-warning": "69420",
         };
         /** JWT de usuario en Authorization/body.token; MOBILE_ACCESS_TOKEN solo en mobileAccessToken. */
         if (accessToken) {

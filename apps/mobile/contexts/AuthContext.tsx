@@ -169,7 +169,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420'
         },
         body: JSON.stringify({
           cedula: cedula,
@@ -389,7 +388,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'ngrok-skip-browser-warning': '69420'
             },
             body: JSON.stringify({
               refreshToken: refreshToken
@@ -484,7 +482,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420'
         },
         body: JSON.stringify({
           refreshToken: tokenToUse,

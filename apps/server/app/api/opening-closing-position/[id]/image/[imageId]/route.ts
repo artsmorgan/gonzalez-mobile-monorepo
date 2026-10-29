@@ -67,7 +67,6 @@ export async function DELETE(
       headers: {
         "Content-Type": "application/json",
         "Authorization": req.headers.get("authorization") || "",
-        "ngrok-skip-browser-warning": "69420",
       },
       body: JSON.stringify({
         path: `opening-closing-position/${boletaId}/${String(img?.name || "")}`,

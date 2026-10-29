@@ -111,7 +111,6 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420'
         },
         body: JSON.stringify({
           password: password

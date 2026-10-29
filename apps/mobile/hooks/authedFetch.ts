@@ -94,7 +94,6 @@ export default async function authedFetch({
             const headers: any = {
                 ...((init?.headers as any) ?? {}),
                 Authorization: `Bearer ${token}`,
-                'ngrok-skip-browser-warning': '69420',
             };
             try {
                 headers['X-Device-Uid'] = await getDeviceUid();
