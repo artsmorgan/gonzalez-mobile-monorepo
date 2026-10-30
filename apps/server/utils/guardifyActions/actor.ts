@@ -1,0 +1,97 @@
+import crypto from "node:crypto";
+
+/**
+ * Identidad del actor que Guardify dice representar (protocolo de acciones, `docs/protocolo-acciones.md` de Guardify):
+ *   x-guardify-actor     = base64url(JSON { actor: { email, name, externalId?, cedula? }, ts, tenant })
+ *   x-guardify-actor-sig = hex(HMAC-SHA256(llave, `${x-guardify-actor}\n${MÉTODO}\n${ruta con consulta}\n${sha256 hex del cuerpo}`))
+ * La firma queda LIGADA a la petición (método, ruta, consulta y cuerpo): un par de cabeceras capturado no sirve para otra acción ni para otro cuerpo. La llave
+ * es la misma que autentica a Guardify (`GUARDIFY_REPORTS_API_KEY`). Se valida la firma, la vigencia (5 minutos) y se devuelve quién es.
+ */
+export const ACTOR_HEADER = "x-guardify-actor";
+export const ACTOR_SIG_HEADER = "x-guardify-actor-sig";
+export const ACTOR_MAX_SKEW_MS = 5 * 60_000;
+
+export type GuardifyActor = { email: string; name: string; externalId?: string; cedula?: string };
+export type ActorClaims = { actor: GuardifyActor; ts: number; tenant: string };
+
+const mac = (key: string, payload: string, binding: string) => crypto.createHmac("sha256", key).update(`${payload}\n${binding}`).digest("hex");
+
+/** Lo que la firma liga de la petición: método, ruta con consulta y huella del cuerpo (vacío en un GET). */
+export const bindingOf = (method: string, url: string, body: string): string => {
+    const u = new URL(url);
+    return `${method.toUpperCase()}\n${u.pathname}${u.search}\n${crypto.createHash("sha256").update(body, "utf8").digest("hex")}`;
+};
+
+export function verifyActorHeaders(headers: Pick<Headers, "get">, key: string, now: number, binding: string): ActorClaims | null {
+    const payload = (headers.get(ACTOR_HEADER) ?? "").trim();
+    const sig = (headers.get(ACTOR_SIG_HEADER) ?? "").trim();
+    if (!key || !payload || !/^[0-9a-f]{64}$/i.test(sig)) return null;
+    const expected = Buffer.from(mac(key, payload, binding), "hex");
+    const got = Buffer.from(sig, "hex");
+    if (expected.length !== got.length || !crypto.timingSafeEqual(expected, got)) return null;
+    let claims: ActorClaims;
+    try {
+        claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    } catch {
+        return null;
+    }
+    if (typeof claims?.ts !== "number" || Math.abs(now - claims.ts) > ACTOR_MAX_SKEW_MS) return null;
+    if (!claims.actor || typeof claims.actor.email !== "string" || !claims.actor.email || typeof claims.tenant !== "string") return null;
+    return claims;
+}
+
+export type ActorEmployee = { id: number; supervisorId: number | null; cedula: string | null };
+
+/**
+ * Quién es el actor en la app. Se prueba, en este orden: `externalId` (id del empleado), `cedula` y correo; cada uno debe dar UNA sola persona
+ * (si hay dos, no se adivina). Reglas: si Guardify manda id Y cédula y no coinciden, no se actúa (un id viejo no debe convertir a alguien en otra persona);
+ * un empleado dado de baja (`estado` «BA», lo mismo que rechaza el login) no actúa. Sin coincidencia clara → `null` y la acción se niega (`out_of_scope`).
+ */
+export async function resolveActorEmployee(db: any, actor: GuardifyActor): Promise<ActorEmployee | null> {
+    const pick = (e: any): ActorEmployee | null => (String(e.estado ?? "").trim().toUpperCase() === "BA" ? null : { id: Number(e.id), supervisorId: e.supervisor_id != null ? Number(e.supervisor_id) : null, cedula: String(e.cedula ?? "").trim() || null });
+    const select = { id: true, supervisor_id: true, cedula: true, estado: true };
+    const ced = String(actor.cedula ?? "").trim();
+    const ext = Number(actor.externalId);
+    if (actor.externalId && Number.isInteger(ext) && ext > 0) {
+        const e = await db.c_empleado.findUnique({ where: { id: ext }, select });
+        if (e) {
+            if (ced && String(e.cedula ?? "").trim() !== ced) return null;
+            return pick(e);
+        }
+    }
+    if (ced) {
+        const rows = await db.c_empleado.findMany({ where: { cedula: ced }, select, take: 2 });
+        if (rows.length === 1) return pick(rows[0]);
+        if (rows.length > 1) return null;
+    }
+    const email = String(actor.email ?? "").trim();
+    if (email) {
+        const rows = await db.c_empleado.findMany({ where: { Email: email }, select, take: 2 });
+        if (rows.length === 1) return pick(rows[0]);
+    }
+    return null;
+}
+
+/**
+ * Firma digital de una aprobación pedida desde Guardify (issue #194). La genera el SERVIDOR a partir del actor ya resuelto y de la huella de la petición
+ * firmada, con la misma forma que la que arma la app (`base64(sesión:empleado:latitud:longitud:marcaDeTiempo)`, ver `decodificarFirmaCaptura`): la sesión
+ * es «guardify-» + el comienzo de la huella, no hay ubicación y la marca de tiempo es la del actor firmado. Determinista: la misma petición da la misma firma.
+ * El cliente nunca la manda.
+ */
+export const firmaDigitalDeActor = (actorId: number, huella: string, ts: number): string =>
+    Buffer.from(`guardify-${String(huella).slice(0, 16)}:${Math.trunc(actorId)}:::${Math.trunc(ts)}`, "utf8").toString("base64");
+
+/** Tope de la firma manual (imagen `data:` en base64), en caracteres: lo bastante para un trazo de firma y muy por debajo del tope del cuerpo. */
+export const FIRMA_MANUAL_MAX_CHARS = 1_000_000;
+
+const IMAGEN_DATA = /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/;
+
+export type FirmaManualValidada = { ok: true; image: string } | { ok: false; code: "signature_required" | "invalid_request"; message: string };
+
+/** La firma manual que manda Guardify: una imagen `data:image/png|jpeg;base64,…` dentro del tope. */
+export function validarFirmaManual(image: unknown): FirmaManualValidada {
+    if (typeof image !== "string" || image.trim() === "") return { ok: false, code: "signature_required", message: "Falta la firma manual del ejecutivo (una imagen)." };
+    if (image.length > FIRMA_MANUAL_MAX_CHARS) return { ok: false, code: "invalid_request", message: `La firma manual es demasiado grande (máximo ${FIRMA_MANUAL_MAX_CHARS} caracteres).` };
+    if (!IMAGEN_DATA.test(image)) return { ok: false, code: "invalid_request", message: "La firma manual debe ser una imagen data:image/png o data:image/jpeg en base64." };
+    return { ok: true, image };
+}

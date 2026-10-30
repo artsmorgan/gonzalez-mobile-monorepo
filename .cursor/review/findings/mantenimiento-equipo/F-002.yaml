@@ -1,0 +1,16 @@
+id: F-002
+module_id: mantenimiento-equipo
+severity: medium
+status: fixed
+file: apps/mobile/App.tsx
+lines: "2684-2760"
+category: offline
+title: Sync articulo_mantenimiento no elimina acciones fallidas
+description: |
+  Solo dequeue si response.ok && data.status; errores persisten sin feedback.
+reproduction: |
+  1. Encolar update inválido.
+  2. Sync repetido.
+impact: Cola atascada.
+suggested_fix: |
+  Surface error al usuario; límite de reintentos o dead-letter.

@@ -13,6 +13,9 @@
 # testing
 /coverage
 
+# apks
+/mobile-apks
+
 # next.js
 /.next/
 /out/
@@ -39,3 +42,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# public
+/public/uploads
+
+# worker schedule (runtime signal file)
+.report-worker-schedule.json

@@ -1,0 +1,16 @@
+id: F-001
+module_id: llaves
+severity: critical
+status: fixed
+file: apps/mobile/App.tsx
+lines: "1900-1911"
+category: offline
+title: checkLlavesActionsCache snapshot stale
+description: |
+  Filter desde actions inicial sin reasignación.
+reproduction: |
+  1. Múltiples llaves_actions.
+  2. Sync.
+impact: Llaves duplicadas.
+suggested_fix: |
+  Reasignar actions tras éxito.

@@ -1,0 +1,21 @@
+id: F-002
+module_id: documentos-entregados
+severity: high
+status: fixed
+file: apps/mobile/App.tsx
+lines: "2892-2992"
+category: offline
+title: Sync elimina todos los update del mismo id — pierde el último edit offline
+description: |
+  DocumentosEntregadosScreen.upsertAction hace push sin deduplicar (líneas 1238-1242). Dos guardados
+  offline de un registro de servidor generan dos { type:'update', id } en cola. checkDocumentosEntregadosActionsCache
+  usa sameQueuedDocAction(type+id) al desencolar: al procesar el primer update exitoso, remaining filtra
+  TODOS los update con ese id, no solo el procesado.
+reproduction: |
+  1. Editar documento de servidor offline → update₁ en cola.
+  2. Editar otra vez offline → update₂ (push sin reemplazar update₁).
+  3. Sync procesa update₁ OK; sameQueuedDocAction elimina update₁ y update₂.
+  4. El segundo conjunto de cambios nunca se sincroniza.
+impact: Servidor conserva versión obsoleta del documento; usuario cree que guardó los últimos cambios.
+suggested_fix: |
+  Reemplazar update existente al encolar (como notes offline update), o desencolar solo la acción exacta procesada.

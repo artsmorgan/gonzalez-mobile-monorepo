@@ -1,0 +1,15 @@
+id: F-003
+module_id: trainings
+severity: low
+status: fixed
+file: apps/mobile/screens/TrainingsScreen.tsx
+lines: "631-638"
+category: connectivity
+title: checkConnection expo-network only
+description: |
+  Sin probe BFF.
+reproduction: |
+  1. Red sin internet.
+impact: Fallo online sin cola.
+suggested_fix: |
+  resolveAppConnectivity.

@@ -1,27 +1,24 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import { reportError } from "../../../../utils/reportError";
 const dotenv = require('dotenv');
 dotenv.config();
 
 export async function POST(req: NextRequest) {
     try {
         // 🟢 Verificar token de acceso
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const body = await req.json();
 
         const { empleadoId, timestamp, gps } = body;
 
         if (!empleadoId || !timestamp || !gps) {
+            await reportError(req, "api/digital-signature/generate-signature", "POST", 400, "Datos incompletos");
             return NextResponse.json(
                 { error: "Datos incompletos" },
                 { status: 400 }
@@ -41,6 +38,7 @@ export async function POST(req: NextRequest) {
         }, { status: 200 });
     } catch (error) {
         console.error(error);
+        await reportError(req, "api/digital-signature/generate-signature", "POST", 500, "Error interno en la firma");
         return NextResponse.json(
             { status: false, message: "Error interno en la firma" },
             { status: 500 }

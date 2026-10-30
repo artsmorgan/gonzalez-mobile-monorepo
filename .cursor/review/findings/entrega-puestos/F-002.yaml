@@ -1,0 +1,17 @@
+id: F-002
+module_id: entrega-puestos
+severity: medium
+status: fixed
+file: apps/mobile/screens/EntregaPuestosScreen.tsx
+lines: "1086-1097"
+category: logic
+title: getInvolucrados sobrescribe en lugar de concatenar
+description: |
+  El loop asigna involucradosText = ... en cada iteración en vez de acumular; la coma se antepone al
+  elemento incorrecto (i>0 en lugar de i>0 al final).
+reproduction: |
+  1. Abrir bitácora de incidente con involucrados JSON de 2+ personas.
+  2. Render usa getInvolucrados(incidente.involucrados).
+  3. Solo se muestra el último involucrado del array.
+impact: Información incompleta en historial de incidentes dentro de Entrega de Puestos.
+suggested_fix: Acumular con += o map().join(', ') entre involucrados.

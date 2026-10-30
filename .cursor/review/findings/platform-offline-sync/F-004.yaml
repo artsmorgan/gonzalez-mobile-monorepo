@@ -1,0 +1,14 @@
+id: F-004
+module_id: platform-offline-sync
+severity: medium
+status: fixed
+file: apps/mobile/App.tsx
+lines: "809-816"
+category: async
+title: Sync abortada silenciosamente cuando preflight token retorna null offline-edge
+description: |
+  syncPendingActionsIfOnline llama getValidAccessTokenOrLogout; si retorna null, cancela sync con solo console.log.
+  Combinado con F-001 platform-auth (criterio red distinto), sync puede no ejecutarse sin feedback al usuario.
+reproduction: Ver F-001 platform-auth + colas pendientes + reconexión intermitente.
+impact: Datos offline retenidos más tiempo del esperado; percepción de "sync roto".
+suggested_fix: Alinear conectividad; diferenciar null por offline vs null por logout; surface UI cuando sync skipped.

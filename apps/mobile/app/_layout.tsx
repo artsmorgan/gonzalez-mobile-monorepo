@@ -31,20 +31,19 @@ export default function RootLayout() {
             method: 'GET',
             headers: {
               'Content-Type': 'application/json',
-              'ngrok-skip-browser-warning': '69420'
             },
           });
           let responseData = await response.json();
           if (responseData.status) {
-            // Redirect to password recovery screen with user data
+            // Redirect to password recovery screen with employee data
             router.replace({
               pathname: '/recover-password',
               params: {
-                userId: id,
-                userName: responseData.user.name,
-                userEmail: responseData.user.email,
-                userUsername: responseData.user.username,
-                userTelefono: responseData.user.telefono
+                employeeId: id,
+                employeeName: responseData.empleado.nombre,
+                employeeEmail: responseData.empleado.Email,
+                employeeCedula: responseData.empleado.cedula,
+                employeeTelefono: responseData.empleado.telefono
               }
             });
           }
@@ -73,6 +72,8 @@ export default function RootLayout() {
           <Stack.Screen name="rules" options={{ headerShown: false }} />
           <Stack.Screen name="permissions" options={{ headerShown: false }} />
           <Stack.Screen name="role-permissions" options={{ headerShown: false }} />
+          <Stack.Screen name="lunch-time" options={{ headerShown: false }} />
+          <Stack.Screen name="digital-signature" options={{ headerShown: false }} />
           <Stack.Screen name="+not-found" />
         </Stack>
         <StatusBar style="auto" />

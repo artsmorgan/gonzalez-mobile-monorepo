@@ -1,0 +1,15 @@
+id: F-002
+module_id: module-visibility
+severity: medium
+status: fixed
+file: apps/mobile/components/SlideMenu.tsx
+lines: "491-503"
+category: logic
+title: Módulos no listados quedan ocultos por defecto
+description: |
+  releaseAction retorna false si módulo no está en modules_release.
+reproduction: |
+  1. Login antes de fetch modules-release.
+impact: Menú vacío transitoriamente.
+suggested_fix: |
+  Default visible hasta fetch o cache stale-while-revalidate.

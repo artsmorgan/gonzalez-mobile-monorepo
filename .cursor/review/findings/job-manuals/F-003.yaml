@@ -1,0 +1,15 @@
+id: F-003
+module_id: job-manuals
+severity: low
+status: fixed
+file: apps/mobile/screens/JobManualsScreen.tsx
+lines: "3559-3568"
+category: offline
+title: Delete offline con id=0 edge case
+description: |
+  Delete branch puede encolar id inválido para draft local.
+reproduction: |
+  1. Draft id=0 en branch delete incorrecto.
+impact: Delete server falla; acción persiste.
+suggested_fix: |
+  Normalizar id_local vs server id en delete offline.

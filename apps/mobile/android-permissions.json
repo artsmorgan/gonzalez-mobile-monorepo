@@ -1,0 +1,55 @@
+{
+  "descripcion": "Lista PERMITIDA de permisos del manifiesto de Android (issue #180). Un permiso nuevo en el manifiesto sin entrada aquí hace fallar la prueba `androidSecurityPolicy.test.ts`. Los retirados están en plugins/androidSecurityPolicy.js.",
+  "permitidos": [
+    {
+      "permission": "android.permission.INTERNET",
+      "funcion": "Toda la app: API del servidor",
+      "cuando": "Instalación (permiso normal, sin pedirlo)"
+    },
+    {
+      "permission": "android.permission.ACCESS_FINE_LOCATION",
+      "funcion": "Marcas de ingreso/salida, evidencia de cada acción y validación de ubicación del puesto",
+      "cuando": "Al usar la función (expo-location, solicitud en tiempo de ejecución)"
+    },
+    {
+      "permission": "android.permission.ACCESS_COARSE_LOCATION",
+      "funcion": "Acompaña a ACCESS_FINE_LOCATION (Android 12+ permite elegir ubicación aproximada)",
+      "cuando": "Al usar la función"
+    },
+    {
+      "permission": "android.permission.CAMERA",
+      "funcion": "Escáner QR y fotos de los módulos (actas, actividades, incidentes…)",
+      "cuando": "Al abrir la cámara (useCameraPermissions)"
+    },
+    {
+      "permission": "android.permission.RECORD_AUDIO",
+      "funcion": "Notas de voz",
+      "cuando": "Al grabar (requestRecordingPermissionsAsync)"
+    },
+    {
+      "permission": "android.permission.MODIFY_AUDIO_SETTINGS",
+      "funcion": "Lo exige expo-audio para ajustar el modo de audio al grabar y reproducir notas de voz",
+      "cuando": "Instalación (permiso normal)"
+    },
+    {
+      "permission": "android.permission.POST_NOTIFICATIONS",
+      "funcion": "Notificaciones push (Android 13+)",
+      "cuando": "Al registrar las notificaciones (requestPermissionsAsync)"
+    },
+    {
+      "permission": "android.permission.RECEIVE_BOOT_COMPLETED",
+      "funcion": "expo-notifications reprograma las notificaciones tras reiniciar el equipo",
+      "cuando": "Instalación (permiso normal)"
+    },
+    {
+      "permission": "android.permission.VIBRATE",
+      "funcion": "Vibración de las notificaciones y la respuesta háptica",
+      "cuando": "Instalación (permiso normal)"
+    },
+    {
+      "permission": "android.permission.REQUEST_INSTALL_PACKAGES",
+      "funcion": "Actualización de la app descargando el APK (retirar si se deja de distribuir por descarga)",
+      "cuando": "El sistema pide «instalar apps desconocidas» al instalar la actualización"
+    }
+  ]
+}

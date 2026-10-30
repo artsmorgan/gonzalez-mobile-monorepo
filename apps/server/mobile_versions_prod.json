@@ -1,0 +1,136 @@
+[
+  {
+    "version": "1.0.0",
+    "id": "34cd939c-893f-4a98-9279-d76c82cbca3c",
+    "name": "MonitoreApp",
+    "created_at": "2026-03-18T00:00:00Z",
+    "title": "MonitoreApp versión inicial",
+    "description": "Versión inicial de la aplicación MonitoreApp",
+    "url": "https://github.com/artsmorgan/gonzalez-mobile-monorepo/releases/download/v1.0.0/MonitoreApp-v1.0.0.apk",
+    "notas": [
+      "Módulo de navegación principal y menú lateral para acceso a todas las funciones.",
+      "Módulo de operación diaria: asistencia, control de presencia, minutas físicas y mutuos acuerdos.",
+      "Módulo de seguridad y calidad: gestión de incidentes, matrices de riesgo, no conformidades y acciones de mejora.",
+      "Módulo de recursos: gestión de vehículos, llaves, equipos de mantenimiento y documentos entregados.",
+      "Módulo de personas: visitas, rutas, capacitaciones, evaluaciones de personal y encuestas de satisfacción."
+    ]
+  },
+  {
+    "version": "1.0.1",
+    "id": "43e3b21b-7091-415b-9e4a-78fadb696fbd",
+    "name": "MonitoreApp",
+    "created_at": "2026-10-16T00:00:00Z",
+    "title": "Reportes en modalidad tabular, actualización de listas, quices de documentos y corrección de horas en marcas",
+    "description": "Incorpora la modalidad tabular en los reportes, la actualización de las listas de los módulos mediante gesto de deslizamiento, la edición de preguntas y la visualización de calificaciones en el módulo de documentos, y la corrección del cálculo de horas en las marcas de asistencia.",
+    "notas": [
+      {
+        "title": "Reportes",
+        "description": "Incorporación de la modalidad tabular (consolidada) en los reportes: una fila por registro, con los datos del registro repetidos en cada fila derivada y los valores múltiples concatenados con «;»."
+      },
+      {
+        "title": "Listas de módulos",
+        "description": "Actualización de las listas mediante el gesto de deslizamiento (pull-to-refresh) al inicio de la lista: reejecuta la consulta vigente con los filtros aplicados, estén o no visibles, y respeta el estado de conectividad (consulta remota o caché local)."
+      },
+      {
+        "title": "Documentos",
+        "description": "Edición de las preguntas durante la creación del quiz, además de su alta y eliminación, y visualización de la calificación (0-100) de cada empleado en los quices revisados, calculada a partir de sus respuestas."
+      },
+      {
+        "title": "Marcas de asistencia",
+        "description": "Corrección del cálculo de la hora de inicio y de fin del turno: dependía de la zona horaria del dispositivo y sumaba un día al inicio en los turnos anteriores a las 06:00, lo que bloqueaba el ingreso. Ahora se calcula como hora de reloj de Costa Rica, comparable con la hora de referencia de la aplicación. Además, cuando dos marcas del mismo empleado se traslapan en horario, se prioriza la de reemplazo y, en su defecto, la de inicio más temprano (a igual inicio, la de menor id)."
+      }
+    ]
+  },
+  {
+    "version": "1.0.2",
+    "id": "f72ef0b2-274f-45ba-bad7-7ce71d141b13",
+    "name": "MonitoreApp",
+    "created_at": "2026-10-22T00:00:00Z",
+    "title": "Versionado de documentos, evidencia de cada acción, almuerzo manual corregido y nuevos campos",
+    "description": "Los documentos tienen versiones y se entregan al marcar ingreso, cada acción guarda su dispositivo, ubicación y hora (también sin conexión), el almuerzo manual guarda las horas escritas y se agregan campos al acta de entrega, a los vehículos y a inducción y recorrido.",
+    "notas": [
+      {
+        "title": "Documentos",
+        "description": "Los documentos tienen versiones: al publicar una versión nueva se conservan las anteriores con sus firmas y el empleado firma la nueva. Al marcar el ingreso se entregan automáticamente los documentos pendientes de su puesto, incluido quien entra después. La nota del quiz queda guardada como dato consolidado y no cambia si el quiz se edita."
+      },
+      {
+        "title": "Evidencia de cada acción",
+        "description": "Cada alta o edición guarda el dispositivo, la ubicación y la hora de la acción. Si se hizo sin conexión se conserva la ubicación y la hora del momento en que se hizo, no las de la sincronización. Si el permiso de ubicación se niega, el registro se guarda igual y queda marcado."
+      },
+      {
+        "title": "Tiempo de alimentación",
+        "description": "El registro manual guarda la hora de inicio y de fin que se escribieron (antes se desplazaban 6 horas). Además se corrigió un duplicado que podía crearse al sincronizar un almuerzo hecho sin conexión."
+      },
+      {
+        "title": "Marcas y turnos",
+        "description": "Un turno sin cerrar deja de contar pasadas unas horas desde su salida (configurable en Nomencladores, 4 horas por defecto) y no se ofrecen acciones de ese turno vencido. Con marcas traslapadas por un cambio de guardia, la entrada ya no cierra como «salida anticipada» una marca que se traslapa."
+      },
+      {
+        "title": "Acta de entrega de productos",
+        "description": "Cada acta lleva un consecutivo por empresa (0001, 0002…), que también se asigna al sincronizar un acta hecha sin conexión."
+      },
+      {
+        "title": "Vehículos corporativos",
+        "description": "El registro y la revisión admiten el VIN o chasis y el número o dato del título de propiedad, la RTV y el marchamo (todos opcionales)."
+      },
+      {
+        "title": "Inducción y recorrido",
+        "description": "Nuevo campo opcional «Tipo de capacitación» (Presencial o Virtual), visible en la lista y al editar."
+      },
+      {
+        "title": "Seguridad de la sesión",
+        "description": "La sesión y los datos del empleado se guardan en el almacenamiento seguro del teléfono. Al actualizar, la sesión abierta se conserva."
+      }
+    ]
+  },
+  {
+    "version": "1.0.3",
+    "id": "297945a8-5f04-4f79-97b9-a3dfeb06678c",
+    "name": "MonitoreApp",
+    "created_at": "2026-10-30T00:00:00Z",
+    "title": "Colas por usuario, edición de documentos, plazos de red y sesión protegida, importación de Excel acotada y mejoras en permisos y alimentación",
+    "description": "Cada usuario conserva sus acciones pendientes sin que otro empleado las vea, los documentos se pueden editar desde la app, las peticiones lentas fallan con un mensaje en vez de quedar cargando, la importación de Excel tiene límites, y se corrigen las fechas del permiso, el contador de alimentación y el botón de regreso.",
+    "notas": [
+      {
+        "title": "Acciones pendientes por usuario",
+        "description": "Las acciones guardadas sin conexión ahora pertenecen al usuario que las creó: otro empleado que use el mismo teléfono no las ve, no las envía ni las borra, y se sincronizan con la sesión de su dueño cuando vuelve a conectarse. Las de quien no se conecta en más de 2 semanas se eliminan junto con sus archivos adjuntos. El token de Planillas ya no se guarda dentro de las acciones pendientes."
+      },
+      {
+        "title": "Edición de documentos",
+        "description": "Los roles distintos de operativo ven el botón «Editar» en el módulo de documentos: permite cambiar los datos, reemplazar el archivo y editar las preguntas del quiz, y avisa antes de elegir «Nueva versión». Los archivos se pueden previsualizar y la versión del documento es visible. Requiere conexión."
+      },
+      {
+        "title": "Respuestas lentas y errores del servidor",
+        "description": "Las peticiones ya no dejan la pantalla cargando indefinidamente: fallan con un mensaje a los 20, 30 o 120 segundos según su tipo, y las consultas y los envíos seguros se reintentan una vez. Un envío repetido por una respuesta perdida no crea una marca duplicada."
+      },
+      {
+        "title": "Sesión y permisos",
+        "description": "Si una operación no está permitida para el usuario, la app muestra «no tienes permiso» sin cerrar la sesión. Una falla de red tampoco cierra la sesión, y si un administrador la cierra, la app lo avisa y vuelve al inicio."
+      },
+      {
+        "title": "Importación de Excel",
+        "description": "Los archivos de más de 5 MB se rechazan al instante, y una celda de más de 2.000 caracteres se reporta como error de su fila con el número. Si se sale de la pantalla o se elige otro archivo mientras se lee, no aparecen mensajes del primero."
+      },
+      {
+        "title": "Jerarquía sin conexión",
+        "description": "La jerarquía descargada se valida antes de reemplazar la anterior: si la descarga falla, llega incompleta o la app se cierra mientras se actualiza, se conserva la versión anterior y sigue disponible sin conexión."
+      },
+      {
+        "title": "Solicitud de permiso",
+        "description": "La fecha y la hora de fin ya no pueden quedar antes de las de inicio: al elegir una fecha al revés, la otra se ajusta automáticamente."
+      },
+      {
+        "title": "Tiempo de alimentación",
+        "description": "Con conexión, el contador toma los minutos del horario del puesto y se actualiza al deslizar hacia abajo si aún no ha iniciado. Se quitaron los botones de editar y reiniciar, iniciar pide confirmación la primera vez, y el tiempo siempre se muestra en una sola línea."
+      },
+      {
+        "title": "Marcar ingreso y salida",
+        "description": "La flecha de regreso lleva a la pantalla de inicio al entrar directo a esta pantalla tras iniciar sesión. Una salida que ya estaba marcada muestra el aviso de marca repetida en lugar de un error genérico."
+      },
+      {
+        "title": "Instalación y actualización",
+        "description": "El APK se genera por arquitectura del teléfono (mucho más liviano) y «Actualizar» descarga el que corresponde. La app consulta si hay una versión nueva cada 30 minutos, no cada minuto. Se piden solo los permisos necesarios, al usarlos, y ya no se incluyen en las copias de seguridad de Android los datos de la sesión."
+      }
+    ]
+  }
+]

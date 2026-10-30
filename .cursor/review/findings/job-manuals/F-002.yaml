@@ -1,0 +1,15 @@
+id: F-002
+module_id: job-manuals
+severity: medium
+status: fixed
+file: apps/mobile/App.tsx
+lines: "1137-1139"
+category: async
+title: horaAccion 0 aborta sync job_manuals
+description: |
+  if (!horaAccion) return dentro del loop.
+reproduction: |
+  1. horaAccion === 0 edge case.
+impact: Resto de cola no procesada.
+suggested_fix: |
+  Usar Number.isFinite en lugar de truthy check.

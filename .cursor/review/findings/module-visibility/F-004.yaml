@@ -1,0 +1,15 @@
+id: F-004
+module_id: module-visibility
+severity: low
+status: fixed
+file: apps/mobile/screens/ModuleVisibilityScreen.tsx
+lines: "78-84"
+category: offline
+title: Lista vacía offline sin leer caché
+description: |
+  fetchRows offline setRows([]) sin leer modules_release cache.
+reproduction: |
+  1. Abrir pantalla sin red.
+impact: No hay módulos mostrados aunque exista caché.
+suggested_fix: |
+  Leer AsyncStorage modules_release offline.
