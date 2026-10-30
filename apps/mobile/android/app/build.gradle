@@ -118,10 +118,10 @@ android {
     // Para desarrollo se puede apagar con -Papk.splitPerAbi=false.
     splits {
         abi {
-            enable (findProperty('apk.splitPerAbi') ?: 'true').toBoolean()
+            enable = (findProperty('apk.splitPerAbi') ?: 'true').toBoolean()
             reset()
             include "arm64-v8a", "armeabi-v7a", "x86_64"
-            universalApk false
+            universalApk = false
         }
     }
     signingConfigs {

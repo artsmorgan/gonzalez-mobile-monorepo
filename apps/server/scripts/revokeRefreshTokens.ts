@@ -7,6 +7,10 @@
  *
  * Efecto: cada guarda deberá iniciar sesión de nuevo cuando venza su token de acceso (hasta 1 día). Coordinar el momento con el cliente y avisar a
  * soporte ANTES de ejecutarlo con `--confirm`. Usa la conexión de `DATABASE_URL`: ejecutarlo contra el ambiente correcto.
+ *
+ * ATENCIÓN: `DATABASE_URL` de este servidor puede NO ser la base donde viven las sesiones de la app. `refresh_token` y las rutas de inicio de sesión,
+ * refresco y cierre están en la API dinámica (`gonzalez-mobile-dynamic-api`), que usa su propia base. Para revocar las sesiones reales use
+ * `scripts/revokeRefreshTokens.ts` de ESE proyecto: muestra la base y exige `--db=<nombre>` para no revocar en otra.
  */
 import { prisma } from "../utils/prismaClient";
 import { parseRevokeArgs } from "../utils/revokeRefreshTokensArgs";

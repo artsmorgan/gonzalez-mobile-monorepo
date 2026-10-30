@@ -17,10 +17,10 @@ function buildSplitsBlock() {
     // Para desarrollo se puede apagar con -Papk.splitPerAbi=false.
     splits {
         abi {
-            enable (findProperty('apk.splitPerAbi') ?: 'true').toBoolean()
+            enable = (findProperty('apk.splitPerAbi') ?: 'true').toBoolean()
             reset()
             include ${include}
-            universalApk false
+            universalApk = false
         }
     }
 `;

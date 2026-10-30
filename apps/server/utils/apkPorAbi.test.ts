@@ -33,7 +33,7 @@ describe("APK por arquitectura: plugin de Gradle (issue #179, H10)", () => {
     it("agrega splits por ABI con las arquitecturas de la lista y sin APK universal", () => {
         const out: string = splits.applyAbiSplitsToBuildGradle(gradleBase());
         assert.match(out, /splits\s*\{\s*abi\s*\{/);
-        assert.match(out, /universalApk false/);
+        assert.match(out, /universalApk = false/);
         assert.match(out, /reset\(\)/);
         const incl = /include ([^\n]+)/.exec(out)![1]!;
         const abis = [...incl.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
@@ -66,10 +66,21 @@ describe("APK por arquitectura: plugin de Gradle (issue #179, H10)", () => {
         assert.match(plugin, /withAppBuildGradle/);
         assert.match(plugin, /withGradleProperties/);
     });
+    it("usa asignación (enable = …, universalApk = …) y no la sintaxis de método: el AGP de Expo 54 ya no la acepta (EAS: «Could not find method enable()»)", () => {
+        const g = leer(mobile, "android/app/build.gradle");
+        const out: string = splits.applyAbiSplitsToBuildGradle(gradleBase());
+        for (const texto of [g, out]) {
+            const bloque = /splits\s*\{\s*abi\s*\{([\s\S]*?)\}\s*\}/.exec(texto)![1]!;
+            assert.match(bloque, /^\s*enable = /m);
+            assert.match(bloque, /^\s*universalApk = (true|false)\s*$/m);
+            assert.doesNotMatch(bloque, /^\s*enable\s*\(/m, "enable(...) como método falla en el AGP actual");
+            assert.doesNotMatch(bloque, /^\s*universalApk\s+(true|false)/m, "universalApk false como método falla en el AGP actual");
+        }
+    });
     it("el build.gradle y gradle.properties commiteados salen de la misma política", () => {
         const g = leer(mobile, "android/app/build.gradle");
         assert.equal(splits.applyAbiSplitsToBuildGradle(g), g, "el build.gradle commiteado ya trae el bloque");
-        assert.match(g, /universalApk false/);
+        assert.match(g, /universalApk = false/);
         assert.match(leer(mobile, "android/gradle.properties"), new RegExp(`^reactNativeArchitectures=${splits.reactNativeArchitecturesValue()}\\s*$`, "m"));
     });
 });
