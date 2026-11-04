@@ -250,7 +250,7 @@ describe("Marcar ingreso/salida: cableado de la pantalla", () => {
     });
 
     it("el orden de los bloques es el pedido", () => {
-        const orden = ["styles.hintBox", "styles.dateTimeCard", "styles.identityCard", '<Collapsible title="Información laboral"', "styles.marcaWarningsSection", "styles.statusCard", "styles.actionContainer", "Ver turnos futuros"];
+        const orden = ["styles.messageBoxInfo", "styles.dateTimeCard", "styles.identityCard", '<Collapsible title="Información laboral"', "styles.marcaWarningsSection", "styles.statusCard", "styles.actionContainer", "Ver turnos futuros"];
         let desde = pantalla.indexOf("return (\n    <ThemedView style={styles.fullContainer}>");
         assert.ok(desde > 0);
         for (const marca of orden) {
@@ -293,7 +293,7 @@ describe("Marcar ingreso/salida: el servidor trae el siguiente turno y los códi
 
     it("la consulta de la marca actual responde next_shift en todas sus respuestas con datos de marca", () => {
         assert.match(ruta, /pickNextShift\(/);
-        assert.equal((ruta.match(/next_shift: await buscarSiguienteTurno\(\)/g) ?? []).length, 3, "éxito, marca bloqueada y sin turno activo");
+        assert.equal((ruta.match(/next_shift: await buscarSiguienteTurno\(\)/g) ?? []).length, 4, "éxito, marca bloqueada, sin turno activo y turno sin datos");
     });
 
     it("un fallo al buscar el siguiente turno no rompe la marca actual", () => {
@@ -320,5 +320,19 @@ describe("Marcar ingreso/salida: el servidor trae el siguiente turno y los códi
         assert.match(ruta, /codigo: empresa\.codigo \?\? null/);
         assert.match(ruta, /codigo: puesto\?\.codigo \?\? null/);
         assert.match(ruta, /codigo: plaza\?\.codigo_plaza \?\? null/);
+    });
+});
+
+describe("Marcar ingreso/salida: avisos y errores con el mismo estilo", () => {
+    const pantalla = leer(mobile, "screens/MarcarIngresoSalidaScreen.tsx");
+
+    it("el aviso de minutos previos usa la misma caja y texto que los errores y avisos, solo cambia el color", () => {
+        assert.match(pantalla, /style=\{\[styles\.messageBox, styles\.messageBoxInfo\]\}/);
+        assert.equal(/styles\.hintBox|styles\.hintText/.test(pantalla), false);
+    });
+
+    it("el error con «Reintentar» ocupa todo el ancho, igual que la caja del mensaje", () => {
+        assert.match(pantalla, /errorContainer: \{\s*width: '100%'/);
+        assert.match(pantalla, /retryButton: \{\s*width: '100%'/);
     });
 });

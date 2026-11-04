@@ -132,5 +132,35 @@
         "description": "El APK se genera por arquitectura del teléfono (mucho más liviano) y «Actualizar» descarga el que corresponde. La app consulta si hay una versión nueva cada 30 minutos, no cada minuto. Se piden solo los permisos necesarios, al usarlos, y ya no se incluyen en las copias de seguridad de Android los datos de la sesión."
       }
     ]
+  },
+  {
+    "version": "1.0.4",
+    "id": "8701c495-132c-4121-8ea3-a05562062979",
+    "name": "MonitoreApp",
+    "created_at": "2026-11-04T00:00:00Z",
+    "title": "Nuevo diseño de Marcar ingreso y salida, siguiente turno sin conexión y avisos unificados",
+    "description": "Se rediseña la pantalla de marcas con la información laboral por códigos, se guarda el siguiente turno para verlo sin conexión, todos los avisos y errores comparten estilo y se avisa cuando un turno no tiene datos para marcar.",
+    "notas": [
+      {
+        "title": "Marcar ingreso y salida: nuevo diseño",
+        "description": "La pantalla se reorganizó: fecha y hora actuales en un recuadro, empleado y puesto con su código, y la información laboral en una sección plegable (cerrada por defecto) que muestra el código o número de cada nivel de la jerarquía y el horario del turno. Los mensajes quedan arriba del estado, y el estado de ingreso o salida se ve sin títulos intermedios."
+      },
+      {
+        "title": "Avisos y errores con un solo estilo",
+        "description": "Todos los avisos y errores de la pantalla de marcas (minutos previos, tardía, día libre, salida anticipada, ubicación y errores de carga) usan ahora la misma caja y tipografía, y solo cambia el color según su tipo. El botón «Reintentar» ocupa todo el ancho."
+      },
+      {
+        "title": "Siguiente turno sin conexión",
+        "description": "La app guarda el siguiente turno laboral (sin contar los días libres) para consultarlo sin conexión desde «Ver turnos futuros», que ahora abre directamente en ese turno. La lista de los próximos 30 días solo se consulta cuando el usuario la pide y lo confirma. Cada usuario ve únicamente su propio turno guardado, aunque comparta el teléfono."
+      },
+      {
+        "title": "Información laboral con códigos",
+        "description": "Se muestran el código de la división, el número de contrato y el número de sucursal en lugar de sus identificadores, y se ocultan los identificadores del cliente, el rol y el horario. El cambio es solo visual; los datos internos no cambian. El tipo de turno se lee como Diurno, Mixto, Nocturno o Libre (Indeterminable si es otro)."
+      },
+      {
+        "title": "Turno sin datos",
+        "description": "Si el turno obtenido no tiene hora de inicio ni tipo de turno, la app muestra «Imposible marcar entrada, contacta a tu administrador o supervisor para que revise el caso correspondiente» y no permite marcar."
+      }
+    ]
   }
 ]

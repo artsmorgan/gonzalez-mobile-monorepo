@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { isWorkShift, pickNextShift } from "./nextShift";
+import fs from "node:fs";
+import path from "node:path";
+import { isWorkShift, MENSAJE_TURNO_SIN_DATOS, pickNextShift, turnoSinDatos } from "./nextShift";
 
 const marca = (id: number, fecha: string, hora: string, tipo: string | null) => ({
     id,
@@ -49,5 +51,31 @@ describe("siguiente turno laboral", () => {
     it("minutos previos inválidos se toman como cero", () => {
         const m = [marca(1, "2026-11-03", "06:00:00", "D")];
         for (const v of [Number.NaN, -10, undefined as unknown as number]) assert.equal(pickNextShift(m, ahora("2026-11-03T05:59:00"), v)?.id, 1);
+    });
+});
+
+describe("turno sin datos (hora_inicio y tipo_turno nulos)", () => {
+    it("solo se considera sin datos cuando faltan ambos", () => {
+        assert.equal(turnoSinDatos(null, null), true);
+        assert.equal(turnoSinDatos(undefined, ""), true);
+        assert.equal(turnoSinDatos(null, "  "), true);
+        assert.equal(turnoSinDatos(null, "D"), false);
+        assert.equal(turnoSinDatos(null, "L"), false);
+        assert.equal(turnoSinDatos(new Date("1970-01-01T06:00:00.000Z"), null), false);
+        assert.equal(turnoSinDatos(new Date("1970-01-01T00:00:00.000Z"), null), false, "medianoche real no es nula");
+    });
+
+    it("el mensaje es el indicado", () => {
+        assert.equal(MENSAJE_TURNO_SIN_DATOS, "Imposible marcar entrada, contacta a tu administrador o supervisor para que revise el caso correspondiente");
+    });
+
+    it("la ruta evalúa la condición antes de normalizar la hora nula y responde con el mensaje", () => {
+        const src = fs.readFileSync(path.resolve(__dirname, "..", "app", "api", "attendance", "user", "[id]", "route.ts"), "utf8").replace(/\r\n/g, "\n");
+        const a = src.indexOf("turnoSinDatos(marca.hora_inicio");
+        const b = src.indexOf('marca.hora_inicio = new Date("1970-01-01 00:00:00")');
+        assert.ok(a > 0 && b > a, "bandera antes de normalizar");
+        assert.match(src, /__turnoSinDatos === true[\s\S]*?turno_sin_datos: true[\s\S]*?message: MENSAJE_TURNO_SIN_DATOS/);
+        const app = fs.readFileSync(path.resolve(__dirname, "..", "..", "mobile", "screens", "MarcarIngresoSalidaScreen.tsx"), "utf8");
+        assert.match(app, /no_active_marca \|\| \(data as AttendanceErrorResponse\)\?\.turno_sin_datos/);
     });
 });

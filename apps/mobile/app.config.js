@@ -21,103 +21,63 @@ function getGitCommitLast4() {
  * Debe coincidir con la entrada de `apps/server/mobile_versions_test.json` (lite) o `mobile_versions_prod.json` (prod).
  */
 const APP_VERSION_INFO_LITE = {
-  "version": "1.0.4",
-  "id": "2934cfc9-344a-4c84-94e3-32b184c56bdd",
+  "version": "1.0.5",
+  "id": "1a737a9f-f083-4119-99ff-6a19d920763b",
   "name": "MonitoreApp",
-  "created_at": "2026-10-30T00:00:00Z",
-  "title": "Colas por usuario, edición de documentos, plazos de red y sesión protegida, importación de Excel acotada y mejoras en permisos y alimentación",
-  "description": "Cada usuario conserva sus acciones pendientes sin que otro empleado las vea, los documentos se pueden editar desde la app, las peticiones lentas fallan con un mensaje en vez de quedar cargando, la importación de Excel tiene límites, y se corrigen las fechas del permiso, el contador de alimentación y el botón de regreso.",
+  "created_at": "2026-11-04T00:00:00Z",
+  "title": "Nuevo diseño de Marcar ingreso y salida, siguiente turno sin conexión y avisos unificados",
+  "description": "Se rediseña la pantalla de marcas con la información laboral por códigos, se guarda el siguiente turno para verlo sin conexión, todos los avisos y errores comparten estilo y se avisa cuando un turno no tiene datos para marcar.",
   "notas": [
     {
-      "title": "Acciones pendientes por usuario",
-      "description": "Las acciones guardadas sin conexión ahora pertenecen al usuario que las creó: otro empleado que use el mismo teléfono no las ve, no las envía ni las borra, y se sincronizan con la sesión de su dueño cuando vuelve a conectarse. Las de quien no se conecta en más de 2 semanas se eliminan junto con sus archivos adjuntos. El token de Planillas ya no se guarda dentro de las acciones pendientes."
+      "title": "Marcar ingreso y salida: nuevo diseño",
+      "description": "La pantalla se reorganizó: fecha y hora actuales en un recuadro, empleado y puesto con su código, y la información laboral en una sección plegable (cerrada por defecto) que muestra el código o número de cada nivel de la jerarquía y el horario del turno. Los mensajes quedan arriba del estado, y el estado de ingreso o salida se ve sin títulos intermedios."
     },
     {
-      "title": "Edición de documentos",
-      "description": "Los roles distintos de operativo ven el botón «Editar» en el módulo de documentos: permite cambiar los datos, reemplazar el archivo y editar las preguntas del quiz, y avisa antes de elegir «Nueva versión». Los archivos se pueden previsualizar y la versión del documento es visible. Requiere conexión."
+      "title": "Avisos y errores con un solo estilo",
+      "description": "Todos los avisos y errores de la pantalla de marcas (minutos previos, tardía, día libre, salida anticipada, ubicación y errores de carga) usan ahora la misma caja y tipografía, y solo cambia el color según su tipo. El botón «Reintentar» ocupa todo el ancho."
     },
     {
-      "title": "Respuestas lentas y errores del servidor",
-      "description": "Las peticiones ya no dejan la pantalla cargando indefinidamente: fallan con un mensaje a los 20, 30 o 120 segundos según su tipo, y las consultas y los envíos seguros se reintentan una vez. Un envío repetido por una respuesta perdida no crea una marca duplicada."
+      "title": "Siguiente turno sin conexión",
+      "description": "La app guarda el siguiente turno laboral (sin contar los días libres) para consultarlo sin conexión desde «Ver turnos futuros», que ahora abre directamente en ese turno. La lista de los próximos 30 días solo se consulta cuando el usuario la pide y lo confirma. Cada usuario ve únicamente su propio turno guardado, aunque comparta el teléfono."
     },
     {
-      "title": "Sesión y permisos",
-      "description": "Si una operación no está permitida para el usuario, la app muestra «no tienes permiso» sin cerrar la sesión. Una falla de red tampoco cierra la sesión, y si un administrador la cierra, la app lo avisa y vuelve al inicio."
+      "title": "Información laboral con códigos",
+      "description": "Se muestran el código de la división, el número de contrato y el número de sucursal en lugar de sus identificadores, y se ocultan los identificadores del cliente, el rol y el horario. El cambio es solo visual; los datos internos no cambian. El tipo de turno se lee como Diurno, Mixto, Nocturno o Libre (Indeterminable si es otro)."
     },
     {
-      "title": "Importación de Excel",
-      "description": "Los archivos de más de 5 MB se rechazan al instante, y una celda de más de 2.000 caracteres se reporta como error de su fila con el número. Si se sale de la pantalla o se elige otro archivo mientras se lee, no aparecen mensajes del primero."
-    },
-    {
-      "title": "Jerarquía sin conexión",
-      "description": "La jerarquía descargada se valida antes de reemplazar la anterior: si la descarga falla, llega incompleta o la app se cierra mientras se actualiza, se conserva la versión anterior y sigue disponible sin conexión."
-    },
-    {
-      "title": "Solicitud de permiso",
-      "description": "La fecha y la hora de fin ya no pueden quedar antes de las de inicio: al elegir una fecha al revés, la otra se ajusta automáticamente."
-    },
-    {
-      "title": "Tiempo de alimentación",
-      "description": "Con conexión, el contador toma los minutos del horario del puesto y se actualiza al deslizar hacia abajo si aún no ha iniciado. Se quitaron los botones de editar y reiniciar, iniciar pide confirmación la primera vez, y el tiempo siempre se muestra en una sola línea."
-    },
-    {
-      "title": "Marcar ingreso y salida",
-      "description": "La flecha de regreso lleva a la pantalla de inicio al entrar directo a esta pantalla tras iniciar sesión. Una salida que ya estaba marcada muestra el aviso de marca repetida en lugar de un error genérico."
-    },
-    {
-      "title": "Instalación y actualización",
-      "description": "El APK se genera por arquitectura del teléfono (mucho más liviano) y «Actualizar» descarga el que corresponde. La app consulta si hay una versión nueva cada 30 minutos, no cada minuto. Se piden solo los permisos necesarios, al usarlos, y ya no se incluyen en las copias de seguridad de Android los datos de la sesión."
+      "title": "Turno sin datos",
+      "description": "Si el turno obtenido no tiene hora de inicio ni tipo de turno, la app muestra «Imposible marcar entrada, contacta a tu administrador o supervisor para que revise el caso correspondiente» y no permite marcar."
     }
   ]
 };
 
 const APP_VERSION_INFO_PROD = {
-  "version": "1.0.3",
-  "id": "297945a8-5f04-4f79-97b9-a3dfeb06678c",
+  "version": "1.0.4",
+  "id": "8701c495-132c-4121-8ea3-a05562062979",
   "name": "MonitoreApp",
-  "created_at": "2026-10-30T00:00:00Z",
-  "title": "Colas por usuario, edición de documentos, plazos de red y sesión protegida, importación de Excel acotada y mejoras en permisos y alimentación",
-  "description": "Cada usuario conserva sus acciones pendientes sin que otro empleado las vea, los documentos se pueden editar desde la app, las peticiones lentas fallan con un mensaje en vez de quedar cargando, la importación de Excel tiene límites, y se corrigen las fechas del permiso, el contador de alimentación y el botón de regreso.",
+  "created_at": "2026-11-04T00:00:00Z",
+  "title": "Nuevo diseño de Marcar ingreso y salida, siguiente turno sin conexión y avisos unificados",
+  "description": "Se rediseña la pantalla de marcas con la información laboral por códigos, se guarda el siguiente turno para verlo sin conexión, todos los avisos y errores comparten estilo y se avisa cuando un turno no tiene datos para marcar.",
   "notas": [
     {
-      "title": "Acciones pendientes por usuario",
-      "description": "Las acciones guardadas sin conexión ahora pertenecen al usuario que las creó: otro empleado que use el mismo teléfono no las ve, no las envía ni las borra, y se sincronizan con la sesión de su dueño cuando vuelve a conectarse. Las de quien no se conecta en más de 2 semanas se eliminan junto con sus archivos adjuntos. El token de Planillas ya no se guarda dentro de las acciones pendientes."
+      "title": "Marcar ingreso y salida: nuevo diseño",
+      "description": "La pantalla se reorganizó: fecha y hora actuales en un recuadro, empleado y puesto con su código, y la información laboral en una sección plegable (cerrada por defecto) que muestra el código o número de cada nivel de la jerarquía y el horario del turno. Los mensajes quedan arriba del estado, y el estado de ingreso o salida se ve sin títulos intermedios."
     },
     {
-      "title": "Edición de documentos",
-      "description": "Los roles distintos de operativo ven el botón «Editar» en el módulo de documentos: permite cambiar los datos, reemplazar el archivo y editar las preguntas del quiz, y avisa antes de elegir «Nueva versión». Los archivos se pueden previsualizar y la versión del documento es visible. Requiere conexión."
+      "title": "Avisos y errores con un solo estilo",
+      "description": "Todos los avisos y errores de la pantalla de marcas (minutos previos, tardía, día libre, salida anticipada, ubicación y errores de carga) usan ahora la misma caja y tipografía, y solo cambia el color según su tipo. El botón «Reintentar» ocupa todo el ancho."
     },
     {
-      "title": "Respuestas lentas y errores del servidor",
-      "description": "Las peticiones ya no dejan la pantalla cargando indefinidamente: fallan con un mensaje a los 20, 30 o 120 segundos según su tipo, y las consultas y los envíos seguros se reintentan una vez. Un envío repetido por una respuesta perdida no crea una marca duplicada."
+      "title": "Siguiente turno sin conexión",
+      "description": "La app guarda el siguiente turno laboral (sin contar los días libres) para consultarlo sin conexión desde «Ver turnos futuros», que ahora abre directamente en ese turno. La lista de los próximos 30 días solo se consulta cuando el usuario la pide y lo confirma. Cada usuario ve únicamente su propio turno guardado, aunque comparta el teléfono."
     },
     {
-      "title": "Sesión y permisos",
-      "description": "Si una operación no está permitida para el usuario, la app muestra «no tienes permiso» sin cerrar la sesión. Una falla de red tampoco cierra la sesión, y si un administrador la cierra, la app lo avisa y vuelve al inicio."
+      "title": "Información laboral con códigos",
+      "description": "Se muestran el código de la división, el número de contrato y el número de sucursal en lugar de sus identificadores, y se ocultan los identificadores del cliente, el rol y el horario. El cambio es solo visual; los datos internos no cambian. El tipo de turno se lee como Diurno, Mixto, Nocturno o Libre (Indeterminable si es otro)."
     },
     {
-      "title": "Importación de Excel",
-      "description": "Los archivos de más de 5 MB se rechazan al instante, y una celda de más de 2.000 caracteres se reporta como error de su fila con el número. Si se sale de la pantalla o se elige otro archivo mientras se lee, no aparecen mensajes del primero."
-    },
-    {
-      "title": "Jerarquía sin conexión",
-      "description": "La jerarquía descargada se valida antes de reemplazar la anterior: si la descarga falla, llega incompleta o la app se cierra mientras se actualiza, se conserva la versión anterior y sigue disponible sin conexión."
-    },
-    {
-      "title": "Solicitud de permiso",
-      "description": "La fecha y la hora de fin ya no pueden quedar antes de las de inicio: al elegir una fecha al revés, la otra se ajusta automáticamente."
-    },
-    {
-      "title": "Tiempo de alimentación",
-      "description": "Con conexión, el contador toma los minutos del horario del puesto y se actualiza al deslizar hacia abajo si aún no ha iniciado. Se quitaron los botones de editar y reiniciar, iniciar pide confirmación la primera vez, y el tiempo siempre se muestra en una sola línea."
-    },
-    {
-      "title": "Marcar ingreso y salida",
-      "description": "La flecha de regreso lleva a la pantalla de inicio al entrar directo a esta pantalla tras iniciar sesión. Una salida que ya estaba marcada muestra el aviso de marca repetida en lugar de un error genérico."
-    },
-    {
-      "title": "Instalación y actualización",
-      "description": "El APK se genera por arquitectura del teléfono (mucho más liviano) y «Actualizar» descarga el que corresponde. La app consulta si hay una versión nueva cada 30 minutos, no cada minuto. Se piden solo los permisos necesarios, al usarlos, y ya no se incluyen en las copias de seguridad de Android los datos de la sesión."
+      "title": "Turno sin datos",
+      "description": "Si el turno obtenido no tiene hora de inicio ni tipo de turno, la app muestra «Imposible marcar entrada, contacta a tu administrador o supervisor para que revise el caso correspondiente» y no permite marcar."
     }
   ]
 };
@@ -237,7 +197,7 @@ module.exports = ({ config }) => {
           process.env.NEXT_PUBLIC_API_SERVER ||
           // test https://api-gonzalez-mobile-monorepo-production.up.railway.app
           // prod https://gonzalez-mobile-server-production.up.railway.app
-          "https://action-intervals-kent-idol.trycloudflare.com",
+          "https://api-gonzalez-mobile-monorepo-production.up.railway.app",
         /** Debe coincidir con `MOBILE_ACCESS_TOKEN` del servidor (query en `/api/main-structure`). */
         MOBILE_ACCESS_TOKEN:
           process.env.EXPO_PUBLIC_MOBILE_ACCESS_TOKEN ||

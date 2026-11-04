@@ -203,6 +203,8 @@ interface AttendanceErrorResponse {
   is_salida_anticipada?: boolean;
   /** El último turno terminó hace más de N horas: no hay turno actual (issue #159). */
   no_active_marca?: boolean;
+  /** El turno no trae hora de inicio ni tipo de turno: no se puede marcar (el mensaje viene en `message`). */
+  turno_sin_datos?: boolean;
   horas_eliminar_marca_tras_salida?: number;
   marca?: AttendanceSuccessResponse['marca'];
 }
@@ -1202,7 +1204,7 @@ export default function MarcarIngresoSalidaScreen() {
             console.error('Error hydrating auto-ingreso:', hydrateError);
           }
         }
-      } else if ((data as AttendanceErrorResponse)?.no_active_marca) {
+      } else if ((data as AttendanceErrorResponse)?.no_active_marca || (data as AttendanceErrorResponse)?.turno_sin_datos) {
         // El servidor indica que el último turno ya terminó hace más de N horas: no hay turno actual hasta que empiece el siguiente.
         const noActive = data as AttendanceErrorResponse;
         await persistMonitoringMinutesFromResponse(noActive);
@@ -2689,9 +2691,9 @@ const getActivities = async (marcaId: number) => {
 
           {/* 1. Aviso de los minutos previos para marcar la entrada */}
           {isEntradaMarcaHintVisible ? (
-            <ThemedView style={styles.hintBox}>
-              <Ionicons name="information-circle-outline" size={20} color="#4B5563" />
-              <ThemedText style={styles.hintText}>
+            <ThemedView style={[styles.messageBox, styles.messageBoxInfo]}>
+              <Ionicons name="information-circle-outline" size={18} color="#4B5563" />
+              <ThemedText style={[styles.messageText, styles.messageTextInfo]}>
                 Para poder marcar entrada, asegúrate de estar mínimo {monitoringPreviousMinutes} minutos antes del inicio o durante tu turno
               </ThemedText>
               <TouchableOpacity
@@ -3328,28 +3330,11 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   errorContainer: {
-    alignItems: 'center',
-    gap: 14,
+    width: '100%',
+    gap: 12,
   },
 
   /* Aviso de minutos previos */
-  hintBox: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    backgroundColor: '#F8F9FA',
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-  },
-  hintText: {
-    flex: 1,
-    fontSize: 13,
-    lineHeight: 19,
-    color: '#333333',
-  },
   hintClose: {
     padding: 2,
   },
@@ -3457,6 +3442,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#FDECEA',
     borderColor: '#F5C2BE',
   },
+  messageBoxInfo: {
+    backgroundColor: '#F8F9FA',
+    borderColor: '#E0E0E0',
+  },
   messageBoxWarning: {
     backgroundColor: '#FFF4E5',
     borderColor: '#F5D9A8',
@@ -3478,6 +3467,9 @@ const styles = StyleSheet.create({
   },
   messageTextError: {
     color: '#B42318',
+  },
+  messageTextInfo: {
+    color: '#333333',
   },
   messageTextWarning: {
     color: '#8A5300',
@@ -3513,11 +3505,13 @@ const styles = StyleSheet.create({
     color: '#007AFF',
   },
   retryButton: {
+    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 8,
     backgroundColor: '#007AFF',
-    paddingVertical: 10,
+    paddingVertical: 12,
     paddingHorizontal: 20,
     borderRadius: 8,
   },
