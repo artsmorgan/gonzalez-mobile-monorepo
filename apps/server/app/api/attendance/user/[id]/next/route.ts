@@ -15,20 +15,23 @@ type MarcaFutureReturn = {
   hora_inicio: Date | null;
   hora_fin: Date | null;
   tipo_turno: string | null;
-  empresa: { id: number; nombre: string };
+  empresa: { id: number; codigo?: string | null; nombre: string };
   cliente: { id: number; nombre: string };
-  contrato: { id: number; nombre: string };
+  division: { id: number; codigo: string | null; nombre: string };
+  contrato: { id: number; codigo: string | null; nombre: string };
   corpo: {
     id: number;
+    codigo: string | null;
     nombre: string;
     ubicacion: { lat: number | null; lng: number | null };
   };
   puesto: {
     id: number;
+    codigo?: string | null;
     nombre: string;
     ubicacion: { lat: number | null; lng: number | null };
   };
-  plaza: { id: number; nombre: string };
+  plaza: { id: number; codigo?: string | null; nombre: string };
 };
 
 // GET: marcas del usuario para hoy y los próximos 30 días (vía Planillas → c_marca_dia)
@@ -154,6 +157,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
       prisma.e_estructura_plazas.findMany({ where: { id: { in: plazas_ids } } }),
     ]);
 
+    const divisiones_ids = contratos.map((contrato) => (contrato.division_id != null ? contrato.division_id : 0));
+    const divisiones = await prisma.n_division.findMany({ where: { id: { in: divisiones_ids } } });
+
     for (const marca of marcas) {
       // Misma regla que attendance/user/[id]: si el fijo es el empleado pero hay reemplazo, no listar
       if (marca.empleadoFijo_id == empleadoId && marca.empleadoReemplaza_id != null) {
@@ -166,6 +172,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
       const corpo = corpos.find((c) => c.id == marca.corpo_id);
       const puesto = puestos.find((p) => p.id == marca.puesto_id);
       const plaza = plazas.find((p) => p.id == marca.plaza_id);
+      const division = divisiones.find((d) => d.id == contrato?.division_id);
 
       marcasReturn.push({
         id: marca.id,
@@ -175,18 +182,26 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         tipo_turno: marca.tipo_turno,
         empresa: {
           id: marca.empresa_id ?? 0,
+          codigo: empresa?.codigo ?? null,
           nombre: empresa?.nombre ?? "Indefinido",
         },
         cliente: {
           id: marca.cliente_id ?? 0,
           nombre: cliente?.nombre ?? "Indefinido",
         },
+        division: {
+          id: division?.id ?? 0,
+          codigo: division?.codigo ?? null,
+          nombre: division?.nombre ?? "Indeterminable",
+        },
         contrato: {
           id: marca.contrato_id ?? 0,
+          codigo: contrato?.nro_contrato ?? null,
           nombre: contrato?.nombre ?? "Indefinido",
         },
         corpo: {
           id: marca.corpo_id ?? 0,
+          codigo: corpo?.nro_sucursal ?? null,
           nombre: corpo?.nombre ?? "Indefinido",
           ubicacion: {
             lat: corpo?.coordenadas_gpslat ? parseFloat(corpo.coordenadas_gpslat) : null,
@@ -195,6 +210,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         },
         puesto: {
           id: marca.puesto_id ?? 0,
+          codigo: puesto?.codigo ?? null,
           nombre: puesto?.nombre ?? "Indefinido",
           ubicacion: {
             lat: puesto?.coordenadas_gpslat ? parseFloat(puesto.coordenadas_gpslat) : null,
@@ -203,6 +219,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         },
         plaza: {
           id: marca.plaza_id ?? 0,
+          codigo: plaza?.codigo_plaza ?? null,
           nombre: plaza?.nombre ?? "Indefinido",
         },
       });

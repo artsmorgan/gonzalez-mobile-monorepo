@@ -1,15 +1,16 @@
 import { PropsWithChildren, useState } from 'react';
-import { StyleSheet, TouchableOpacity } from 'react-native';
+import { StyleProp, StyleSheet, TouchableOpacity, ViewStyle } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 
-export function Collapsible({ children, title }: PropsWithChildren & { title: string }) {
+/** `containerStyle`: para ajustar el margen externo cuando el padre ya separa a sus hijos (p. ej. con `gap`). */
+export function Collapsible({ children, title, containerStyle }: PropsWithChildren & { title: string; containerStyle?: StyleProp<ViewStyle> }) {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
-    <ThemedView style={styles.container}>
+    <ThemedView style={[styles.container, containerStyle]}>
       <TouchableOpacity
         style={styles.heading}
         onPress={() => setIsOpen((value) => !value)}

@@ -90,6 +90,19 @@ import {
 } from '@/hooks/mainStructureFragmentsStorage';
 import { requestBackgroundMainStructureDownload } from '@/hooks/backgroundMainStructureDownload';
 import { resetLunchTimeCompleted } from '@/hooks/lunchTimeMarcaHierarchy';
+import {
+  formatDateTimeLine,
+  formatFechaDMY,
+  formatHoraRange,
+  isShiftUpcoming,
+  levelLabel,
+  levelLabelCodeOnly,
+  levelName,
+  shiftInfoRows,
+  tipoTurnoLabel,
+  type NextShift,
+} from '@/hooks/nextShiftCore';
+import { getNextShiftFromStorage, NEXT_SHIFT_KEY, setNextShiftStorage } from '@/hooks/nextShiftStorage';
 
 type MarcarIngresoSalidaScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'MarcarIngresoSalida'>;
 
@@ -101,6 +114,8 @@ interface AttendanceSuccessResponse {
   change_available: boolean;
   next_time: string;
   monitoring_post_minutes?: number;
+  /** Siguiente turno laboral (sin «L»); la app lo guarda en AsyncStorage (`next_shift`) para verlo sin conexión. */
+  next_shift?: unknown;
   marca: {
     id: number;
     hora_entrada_digitada: string | null;
@@ -119,27 +134,33 @@ interface AttendanceSuccessResponse {
     roleDivision: {
       role: {
         id: number;
+        codigo?: string | null;
         nombre: string;
       };
       division: {
         id: number;
+        codigo?: string | null;
         nombre: string;
       };
     }
     empresa: {
       id: number;
+      codigo?: string | null;
       nombre: string;
     };
     cliente: {
       id: number;
+      codigo?: string | null;
       nombre: string;
     };
     contrato: {
       id: number;
+      codigo?: string | null;
       nombre: string;
     };
     corpo: {
       id: number;
+      codigo?: string | null;
       nombre: string;
       ubicacion: {
         lat: number | null;
@@ -148,6 +169,7 @@ interface AttendanceSuccessResponse {
     };
     puesto: {
       id: number;
+      codigo?: string | null;
       nombre: string;
       tiene_relevo: boolean;
       ubicacion: {
@@ -157,10 +179,12 @@ interface AttendanceSuccessResponse {
     };
     plaza: {
       id: number;
+      codigo?: string | null;
       nombre: string;
     };
     horario: {
       id: number;
+      codigo?: string | null;
       nombre: string;
     };
   };
@@ -378,6 +402,23 @@ export default function MarcarIngresoSalidaScreen() {
   const [validateGpsSalida, setValidateGpsSalida] = useState<boolean>(false);
   /** Re-render del reloj cuando no hay `attendanceData` (hora local CR como respaldo). */
   const [clockTick, setClockTick] = useState(0);
+  const [nextShift, setNextShift] = useState<NextShift | null>(null);
+  const [futureListRequested, setFutureListRequested] = useState(false);
+
+  // Siguiente turno laboral guardado en el dispositivo: se lee sin conexión.
+  useEffect(() => {
+    let cancelled = false;
+    if (!employee?.id) {
+      setNextShift(null);
+      return;
+    }
+    void getNextShiftFromStorage(employee.id).then((stored) => {
+      if (!cancelled) setNextShift(stored);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [employee?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1077,6 +1118,12 @@ export default function MarcarIngresoSalidaScreen() {
       }
 
       data = await response.json();
+
+      // Siguiente turno laboral: se guarda (o se limpia si ya no hay) para consultarlo sin conexión. Un servidor sin este dato no lo borra.
+      if (data && Object.prototype.hasOwnProperty.call(data, 'next_shift')) {
+        await setNextShiftStorage(data.next_shift, employee.id);
+        setNextShift(await getNextShiftFromStorage(employee.id));
+      }
 
       console.log('Response got from the server', data);
 
@@ -1810,6 +1857,7 @@ export default function MarcarIngresoSalidaScreen() {
         'monitoring_post_minutes',
         'tiempo_gracia_marcar_salida',
         'validate_gps_salida',
+        NEXT_SHIFT_KEY,
         ATTENDANCE_ACTIONS_KEY,
       ];
       const keys = await AsyncStorage.getAllKeys();
@@ -1896,14 +1944,14 @@ const getActivities = async (marcaId: number) => {
 
   const getActionIcon = (action: string) => {
     switch (action.toLowerCase()) {
-      case 'warning': return <Ionicons name="warning" size={17.5} color='#FFCC00' />;
+      case 'warning': return <Ionicons name="alert-circle-outline" size={18} color='#8A5300' />;
       case 'retry': return <Ionicons name="refresh" size={20} color='#FFFFFF' />;
-      case 'start': return <Ionicons name="enter-outline" size={35} color='#FFFFFF' />;
-      case 'end': return <Ionicons name="exit-outline" size={35} color='#FFFFFF' />;
-      case 'confirm': return <Ionicons name="checkmark" size={35} color='#FFFFFF' />;
-      case 'cancel': return <Ionicons name="close" size={35} color='#FFFFFF' />;
-      case 'marcar-ingreso-salida': return <Ionicons name="time" size={25} color='#000000' />;
-      default: return <Ionicons name="close" size={35} color='#FFFFFF' />;
+      case 'start': return <Ionicons name="enter-outline" size={22} color='#FFFFFF' />;
+      case 'end': return <Ionicons name="exit-outline" size={22} color='#FFFFFF' />;
+      case 'confirm': return <Ionicons name="checkmark" size={22} color='#FFFFFF' />;
+      case 'cancel': return <Ionicons name="close" size={22} color='#FFFFFF' />;
+      case 'marcar-ingreso-salida': return <Ionicons name="time-outline" size={22} color='#000000' />;
+      default: return <Ionicons name="close" size={22} color='#FFFFFF' />;
     }
   };
 
@@ -2136,25 +2184,21 @@ const getActivities = async (marcaId: number) => {
     return hoursReturn;
   };
 
-  /** HH:mm para la tarjeta "Hora actual" (siempre visible): servidor vía marca, `horaAccion`, o reloj local CR). */
-  const getDisplayClockText = (): string => {
+  /** «DD-MM-AAAA HH:mm» del momento actual, en una sola línea: servidor vía marca, `horaAccion`, o reloj local CR. */
+  const getDisplayDateTimeText = (): string => {
     void clockTick;
     if (attendanceData?.current_time) {
       try {
-        return getNextTime(attendanceData.current_time);
+        return `${formatFechaDMY(attendanceData.current_time)} ${getNextTime(attendanceData.current_time)}`;
       } catch {
         return '—';
       }
     }
     if (horaAccion != null && Number.isFinite(Number(horaAccion))) {
-      try {
-        return getNextTime(new Date(Number(horaAccion)).toISOString());
-      } catch {
-        /* continuar al fallback */
-      }
+      return formatDateTimeLine(Number(horaAccion));
     }
     try {
-      return format(toZonedTime(new Date(), 'America/Costa_Rica'), 'HH:mm');
+      return format(toZonedTime(new Date(), 'America/Costa_Rica'), 'dd-MM-yyyy HH:mm');
     } catch {
       return '—';
     }
@@ -2282,13 +2326,54 @@ const getActivities = async (marcaId: number) => {
     }
   }
 
+  /** Abre «Turnos futuros»: muestra el turno laboral más próximo (guardado, sin conexión). La lista de 30 días solo se busca a petición. */
   const handleOpenFutureMarksModal = async () => {
     if (!employee?.id) {
       Alert.alert('Error', 'No se encontró el ID del empleado.');
       return;
     }
+    setFutureListRequested(false);
+    setFutureMarks([]);
     setIsMarksModalVisible(true);
-    await fetchFutureMarks();
+    try {
+      const [stored, nowMs] = await Promise.all([getNextShiftFromStorage(employee.id), getHoraAccion()]);
+      setNextShift(stored);
+      const ref = Number(nowMs);
+      if (Number.isFinite(ref) && ref > 0) setHoraAccion(ref);
+    } catch {
+      /* se muestra lo que ya hay en pantalla */
+    }
+  };
+
+  const handleCloseFutureMarksModal = () => {
+    setIsMarksModalVisible(false);
+    setFutureListRequested(false);
+    setFutureMarks([]);
+  };
+
+  /** La búsqueda de los próximos 30 días consulta un día a la vez en el servidor: se pide confirmación antes de hacerla. */
+  const handleRequestFutureList = () => {
+    Alert.alert(
+      'Buscar turnos',
+      'Se buscarán los turnos de los próximos 30 días. Requiere conexión a internet y puede tardar unos segundos. ¿Deseas continuar?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Buscar',
+          onPress: () => {
+            void (async () => {
+              if (!(await evaluateInternetConnection())) {
+                Alert.alert('Sin conexión', 'Necesitas conexión a internet para buscar los turnos de los próximos 30 días.');
+                return;
+              }
+              setFutureListRequested(true);
+              await fetchFutureMarks();
+            })();
+          },
+        },
+      ],
+      { cancelable: true }
+    );
   };
 
   const fetchFutureMarks = async () => {
@@ -2449,23 +2534,7 @@ const getActivities = async (marcaId: number) => {
                   const horaInicioStr = formatHora(mark.hora_inicio);
                   const horaFinStr = formatHora(mark.hora_fin);
 
-                  let tipoTurno = 'Desconocido';
-                  if (mark.tipo_turno) {
-                    switch (String(mark.tipo_turno).trim().toUpperCase()) {
-                      case 'D':
-                        tipoTurno = 'Diurno';
-                        break;
-                      case 'N':
-                        tipoTurno = 'Nocturno';
-                        break;
-                      case 'M':
-                        tipoTurno = 'Mixto';
-                        break;
-                      case 'L':
-                        tipoTurno = 'Día libre';
-                        break;
-                    }
-                  }
+                  const tipoTurno = tipoTurnoLabel(mark.tipo_turno);
 
                   return (
                     <ThemedView key={mark.id || index} style={styles.markItem}>
@@ -2477,71 +2546,14 @@ const getActivities = async (marcaId: number) => {
                         </ThemedText>
                       </ThemedView>
                       <ThemedView style={styles.markItemDetails}>
-                      {mark.empresa && mark.empresa.nombre && (
-                        <ThemedView style={styles.markItemRow}>
-                          <ThemedText style={styles.markItemTitle}>
-                            Empresa
-                          </ThemedText>
+                      {shiftInfoRows(mark).map((row) => (
+                        <ThemedView key={row.label} style={styles.markItemRow}>
+                          <ThemedText style={styles.markItemTitle}>{row.label}</ThemedText>
                           <ThemedText style={styles.markItemValue}>
-                            {mark.empresa.nombre}
+                            {row.label === 'Puesto' && mark.puesto?.tiene_relevo ? `${row.value} (Tiene relevo)` : row.value}
                           </ThemedText>
                         </ThemedView>
-                      )}
-                      {mark.cliente && mark.cliente.nombre && (
-                        <ThemedView style={styles.markItemRow}>
-                          <ThemedText style={styles.markItemTitle}>
-                            Cliente
-                          </ThemedText>
-                          <ThemedText style={styles.markItemValue}>
-                            {mark.cliente.nombre}
-                          </ThemedText>
-                        </ThemedView>
-                      )}
-                      {mark.contrato && mark.contrato.nombre && (
-                        <ThemedView style={styles.markItemRow}>
-                          <ThemedText style={styles.markItemTitle}>
-                            Contrato
-                          </ThemedText>
-                          <ThemedText style={styles.markItemValue}>
-                            {mark.contrato.nombre}
-                          </ThemedText>
-                        </ThemedView>
-                      )}
-                      {mark.corpo && mark.corpo.nombre && (
-                        <ThemedView style={styles.markItemRow}>
-                          <ThemedText style={styles.markItemTitle}>
-                            Corpo
-                          </ThemedText>
-                          <ThemedText style={styles.markItemValue}>
-                            {mark.corpo.nombre}
-                          </ThemedText>
-                        </ThemedView>
-                      )}
-                      {mark.puesto && mark.puesto.nombre && (
-                        <ThemedView style={styles.markItemRow}>
-                          <ThemedText style={styles.markItemTitle}>
-                            Puesto
-                          </ThemedText>
-                          <ThemedText style={styles.markItemValue}>
-                            {mark.puesto.nombre}
-                          </ThemedText>
-                          {mark.puesto.tiene_relevo && (
-                            <ThemedText style={styles.markItemValue}>
-                              (Tiene relevo)
-                            </ThemedText>
-                          )}
-                        </ThemedView>
-                      )}
-                      {mark.plaza && mark.plaza.nombre && (
-                        <ThemedView style={styles.markItemRow}>
-                          <ThemedText style={styles.markItemTitle}>
-                            Plaza
-                          </ThemedText>
-                          <ThemedText style={styles.markItemValue}>
-                            {mark.plaza.nombre}
-                          </ThemedText>
-                        </ThemedView>
-                      )}
+                      ))}
                       <ThemedView style={styles.markItemRow}>
                         <ThemedText style={styles.markItemTitle}>
                           Turno
@@ -2652,13 +2664,20 @@ const getActivities = async (marcaId: number) => {
     );
   }
 
+  /** Siguiente turno laboral guardado, mientras su entrada (menos los minutos previos) no haya llegado. */
+  const upcomingNextShift =
+    nextShift && (horaAccion == null || isShiftUpcoming(nextShift, Number(horaAccion), monitoringPreviousMinutes)) ? nextShift : null;
+
+  const marcaView = attendanceData?.marca;
+  const isIngresado = attendanceData?.estado === 'Ingresado';
+
   return (
     <ThemedView style={styles.fullContainer}>
       <AppHeader onMenuPress={handleMenuPress} title="Marcar Ingreso/Salida" />
 
       <ScrollView style={styles.scrollView}>
         <ThemedView style={styles.container}>
-          {/* Module Title */}
+          {/* Título del módulo */}
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>
               {getActionIcon('marcar-ingreso-salida')} Marcar Ingreso/Salida
@@ -2668,58 +2687,46 @@ const getActivities = async (marcaId: number) => {
             </ThemedText>
           </ThemedView>
 
+          {/* 1. Aviso de los minutos previos para marcar la entrada */}
           {isEntradaMarcaHintVisible ? (
-            <ThemedView style={[styles.entradaMarcaHintBox, styles.entradaMarcaHintTopRow]}>
-              <Ionicons name="information-circle-outline" size={22} color="#007AFF" style={{ marginRight: 10 }} />
-              <ThemedView style={styles.entradaMarcaHintTextRow}>
-                <ThemedText style={[styles.entradaMarcaHintText, { flex: 1 }]}>
-                  Para poder marcar entrada, asegúrate de estar mínimo {monitoringPreviousMinutes} minutos antes del inicio o durante tu turno
-                </ThemedText>
-                <TouchableOpacity
-                  onPress={() => setIsEntradaMarcaHintVisible(false)}
-                  style={styles.entradaMarcaHintClose}
-                  accessibilityLabel="Cerrar aviso"
-                >
-                  <ThemedText style={styles.entradaMarcaHintCloseText}>Cerrar</ThemedText>
-                </TouchableOpacity>
-              </ThemedView>
+            <ThemedView style={styles.hintBox}>
+              <Ionicons name="information-circle-outline" size={20} color="#4B5563" />
+              <ThemedText style={styles.hintText}>
+                Para poder marcar entrada, asegúrate de estar mínimo {monitoringPreviousMinutes} minutos antes del inicio o durante tu turno
+              </ThemedText>
+              <TouchableOpacity
+                onPress={() => setIsEntradaMarcaHintVisible(false)}
+                style={styles.hintClose}
+                accessibilityLabel="Cerrar aviso"
+              >
+                <Ionicons name="close" size={18} color="#4B5563" />
+              </TouchableOpacity>
             </ThemedView>
           ) : null}
 
-          <ThemedView style={styles.testButtonContainer}>
-            <TouchableOpacity
-              style={styles.futureMarksButton}
-              onPress={handleOpenFutureMarksModal}
-            >
-              <Ionicons name="calendar-outline" size={20} color="#FFFFFF" />
-              <ThemedText style={styles.futureMarksButtonText}>
-                Ver turnos futuros
-              </ThemedText>
-            </TouchableOpacity>
+          {/* 2. Fecha y hora actual, visibles en un recuadro con borde y en una sola línea */}
+          <ThemedView style={styles.dateTimeCard}>
+            <Ionicons name="time-outline" size={18} color="#4B5563" />
+            <ThemedText style={styles.dateTimeText}>{getDisplayDateTimeText()}</ThemedText>
           </ThemedView>
 
-          <ThemedView style={[styles.infoCard, { marginBottom: 16 }]}>
-            <ThemedText style={styles.currentTimeTitle}>Hora actual</ThemedText>
-            <ThemedText style={styles.currentTime}>{getDisplayClockText()}</ThemedText>
-          </ThemedView>
-          {/* Test Button - Always Visible */}
-          
-          {false && (
-          <ThemedView style={styles.testButtonContainer}>
-            <TouchableOpacity
-              style={[
-                styles.testButton
-              ]}
-              onPress={handleCreateTestMarca}
-            >
-              <ThemedText style={styles.testButtonText}>
-                Crear marca (Solo pruebas)
+          {/* 3 y 4. Empleado y puesto */}
+          <ThemedView style={styles.identityCard}>
+            <ThemedView style={styles.identityRow}>
+              <ThemedText style={styles.identityLabel}>Empleado</ThemedText>
+              <ThemedText style={styles.identityValue}>
+                {levelLabel({ codigo: employee?.codigo, nombre: employee?.name })}
               </ThemedText>
-            </TouchableOpacity>
+            </ThemedView>
+            {marcaView ? (
+              <ThemedView style={[styles.identityRow, styles.identityRowLast]}>
+                <ThemedText style={styles.identityLabel}>Puesto</ThemedText>
+                <ThemedText style={styles.identityValue}>{levelLabel(marcaView.puesto)}</ThemedText>
+              </ThemedView>
+            ) : null}
           </ThemedView>
-          )}
 
-          {/* Content Section */}
+          {/* Contenido */}
           {isProcessingMark ? (
             <ThemedView style={styles.loadingContainer}>
               <ActivityIndicator size="large" color="#007AFF" />
@@ -2743,163 +2750,133 @@ const getActivities = async (marcaId: number) => {
                 Enviando motivo de ausencia, por favor no cierre la ventana...
               </ThemedText>
             </ThemedView>
-          ) : attendanceData ? (
+          ) : attendanceData && marcaView ? (
             <ThemedView style={styles.contentContainer}>
-              {/* Work Information Card */}
-              <ThemedView style={styles.infoCard}>
-                <ThemedText style={styles.infoCardTitle}>Información Laboral</ThemedText>
-
-                <ThemedView style={styles.infoRow}>
-                  <ThemedText style={styles.infoLabel}>Fecha de la marca:</ThemedText>
-                  <ThemedText style={styles.infoValue}>{formatDateDMY(attendanceData.marca.fecha)}</ThemedText>
-                </ThemedView>
-
-                <ThemedView style={styles.infoRow}>
-                  <ThemedText style={styles.infoLabel}>Empresa:</ThemedText>
-                  <ThemedText style={styles.infoValue}>{attendanceData.marca.empresa.nombre}</ThemedText>
-                </ThemedView>
-
-                <ThemedView style={styles.infoRow}>
-                  <ThemedText style={styles.infoLabel}>Cliente:</ThemedText>
-                  <ThemedText style={styles.infoValue}>{attendanceData.marca.cliente.nombre}</ThemedText>
-                </ThemedView>
-
-                <ThemedView style={styles.infoRow}>
-                  <ThemedText style={styles.infoLabel}>División:</ThemedText>
-                  <ThemedText style={styles.infoValue}>{attendanceData.marca.roleDivision.division.nombre}</ThemedText>
-                </ThemedView>
-
-                <ThemedView style={styles.infoRow}>
-                  <ThemedText style={styles.infoLabel}>Rol:</ThemedText>
-                  <ThemedText style={styles.infoValue}>{attendanceData.marca.roleDivision.role.nombre}</ThemedText>
-                </ThemedView>
-
-                <ThemedView style={styles.infoRow}>
-                  <ThemedText style={styles.infoLabel}>Contrato:</ThemedText>
-                  <ThemedText style={styles.infoValue}>{attendanceData.marca.contrato.nombre}</ThemedText>
-                </ThemedView>
-
-                <ThemedView style={styles.infoRow}>
-                  <ThemedText style={styles.infoLabel}>Corpo:</ThemedText>
-                  <ThemedText style={styles.infoValue}>{attendanceData.marca.corpo.nombre}</ThemedText>
-                </ThemedView>
-
-                <ThemedView style={styles.infoRow}>
-                  <ThemedText style={styles.infoLabel}>Puesto:</ThemedText>
-                  <ThemedText style={styles.infoValue}>{attendanceData.marca.puesto.nombre}</ThemedText>
-                </ThemedView>
-
-                <ThemedView style={styles.infoRow}>
-                  <ThemedText style={styles.infoLabel}>Plaza:</ThemedText>
-                  <ThemedText style={styles.infoValue}>{attendanceData.marca.plaza.nombre}</ThemedText>
-                </ThemedView>
-
-                <ThemedView style={styles.infoRow}>
-                  <ThemedText style={styles.infoLabel}>Horario:</ThemedText>
-                  <ThemedText style={styles.infoValue}>{attendanceData.marca.horario.nombre}</ThemedText>
-                </ThemedView>
-
-                <ThemedView style={styles.infoRow}>
-                  <ThemedText style={styles.infoLabel}>Tipo de turno:</ThemedText>
-                  <ThemedText style={styles.infoValue}>
-                    {resolveMarcaIsDiaLibre(attendanceData.marca as Record<string, unknown>)
-                      ? 'Día libre (L)'
-                      : String(attendanceData.marca.tipo_turno || '—')}
-                  </ThemedText>
-                </ThemedView>
-              </ThemedView>
-
-              {/* Status Display */}
-              <ThemedView style={styles.statusCard}>
-                <ThemedView style={styles.nextTimeContainer}>
-                  <ThemedText style={styles.statusLabel}>
-                    Estado actual:
-                  </ThemedText>
-                  <ThemedView style={[
-                    styles.statusBadge,
-                    attendanceData.estado === 'Ingresado' ? styles.statusBadgeWorking : styles.statusBadgeOffline
-                  ]}>
-                    <ThemedText style={styles.statusText}>
-                      {attendanceData.estado === 'Ingresado' ? 'Ingresado' : 'No ingresado'}
-                    </ThemedText>
+              {/* 5. Información laboral (colapsable, cerrada por defecto) */}
+              <Collapsible title="Información laboral" containerStyle={styles.collapsibleInContent}>
+                <ThemedView style={styles.infoCard}>
+                  <ThemedView style={styles.infoRow}>
+                    <ThemedText style={styles.infoLabel}>Fecha de la marca</ThemedText>
+                    <ThemedText style={styles.infoValue}>{formatDateDMY(marcaView.fecha)}</ThemedText>
                   </ThemedView>
-                  {attendanceData.estado === 'Ingresado' && attendanceData.marca.hora_entrada_digitada != null && (
-                    <ThemedView style={styles.enterAtContainer}>
-                      <ThemedText style={styles.enterAtLabel}>
-                        Fecha y hora de ingreso:
-                      </ThemedText>
-                      <ThemedText style={styles.enterAtText}>
-                        {convertDateToLocal(attendanceData.marca.hora_entrada_digitada)}
+
+                  <ThemedView style={styles.infoRow}>
+                    <ThemedText style={styles.infoLabel}>Horario de la marca</ThemedText>
+                    <ThemedView style={styles.infoTimeValue}>
+                      <Ionicons name="time-outline" size={16} color="#007AFF" />
+                      <ThemedText style={styles.infoValue}>
+                        {formatHoraRange(marcaView.hora_inicio, marcaView.hora_fin) || 'Sin hora'}
                       </ThemedText>
                     </ThemedView>
-                  )}
-                  {attendanceData.estado === 'Ingresado' &&
-                    attendanceData.marca.hora_salida_digitada != null && (
-                    <ThemedView style={styles.enterAtContainer}>
-                      <ThemedText style={styles.enterAtLabel}>Fecha y hora de salida:</ThemedText>
-                      <ThemedText style={styles.enterAtText}>
-                        {convertDateToLocal(attendanceData.marca.hora_salida_digitada)}
-                      </ThemedText>
-                    </ThemedView>
-                  )}
-                </ThemedView>
+                  </ThemedView>
 
-                {/* Next Time */}
-                <ThemedView style={[styles.nextTimeContainer, { marginTop: 10 }]}>
-                  <ThemedText style={styles.nextTimeLabel}>{attendanceData.estado === 'Ingresado' ? 'Hora de salida:' : 'Hora de entrada:'}</ThemedText>
-                  <ThemedText style={styles.nextTimeValue}>
-                    {getNextTime(attendanceData.next_time)}
-                  </ThemedText>
-                </ThemedView>
+                  <ThemedView style={styles.infoRow}>
+                    <ThemedText style={styles.infoLabel}>Empresa</ThemedText>
+                    <ThemedText style={styles.infoValue}>{levelLabel(marcaView.empresa)}</ThemedText>
+                  </ThemedView>
 
-                {/* Late Warning */}
-                {(resolveMarcaIsLate(attendanceData.marca as Record<string, unknown>) ||
-                  attendanceData.is_late) &&
-                  attendanceData.marca.hora_inicio != null &&
-                  attendanceData.marca.hora_entrada_digitada == null && (
-                  <ThemedView style={styles.lateWarning}>
-                    <ThemedText style={styles.lateWarningText}>
-                      {getActionIcon('warning')} Tardía de {getLateTime(attendanceData, horaAccion)}
+                  <ThemedView style={styles.infoRow}>
+                    <ThemedText style={styles.infoLabel}>Cliente</ThemedText>
+                    <ThemedText style={styles.infoValue}>{levelName(marcaView.cliente)}</ThemedText>
+                  </ThemedView>
+
+                  <ThemedView style={styles.infoRow}>
+                    <ThemedText style={styles.infoLabel}>División</ThemedText>
+                    <ThemedText style={styles.infoValue}>{levelLabelCodeOnly(marcaView.roleDivision.division)}</ThemedText>
+                  </ThemedView>
+
+                  <ThemedView style={styles.infoRow}>
+                    <ThemedText style={styles.infoLabel}>Rol</ThemedText>
+                    <ThemedText style={styles.infoValue}>{levelName(marcaView.roleDivision.role)}</ThemedText>
+                  </ThemedView>
+
+                  <ThemedView style={styles.infoRow}>
+                    <ThemedText style={styles.infoLabel}>Contrato</ThemedText>
+                    <ThemedText style={styles.infoValue}>{levelLabelCodeOnly(marcaView.contrato)}</ThemedText>
+                  </ThemedView>
+
+                  <ThemedView style={styles.infoRow}>
+                    <ThemedText style={styles.infoLabel}>Corpo</ThemedText>
+                    <ThemedText style={styles.infoValue}>{levelLabelCodeOnly(marcaView.corpo)}</ThemedText>
+                  </ThemedView>
+
+                  <ThemedView style={styles.infoRow}>
+                    <ThemedText style={styles.infoLabel}>Puesto</ThemedText>
+                    <ThemedText style={styles.infoValue}>{levelLabel(marcaView.puesto)}</ThemedText>
+                  </ThemedView>
+
+                  <ThemedView style={styles.infoRow}>
+                    <ThemedText style={styles.infoLabel}>Plaza</ThemedText>
+                    <ThemedText style={styles.infoValue}>{levelLabel(marcaView.plaza)}</ThemedText>
+                  </ThemedView>
+
+                  <ThemedView style={styles.infoRow}>
+                    <ThemedText style={styles.infoLabel}>Horario</ThemedText>
+                    <ThemedText style={styles.infoValue}>{levelName(marcaView.horario)}</ThemedText>
+                  </ThemedView>
+
+                  <ThemedView style={[styles.infoRow, styles.infoRowLast]}>
+                    <ThemedText style={styles.infoLabel}>Tipo de turno</ThemedText>
+                    <ThemedText style={styles.infoValue}>
+                      {tipoTurnoLabel(marcaView.tipo_turno)}
                     </ThemedText>
                   </ThemedView>
-                )}
+                </ThemedView>
+              </Collapsible>
 
-                {resolveMarcaIsDiaLibre(attendanceData.marca as Record<string, unknown>) && (
-                  <ThemedView style={styles.salidaAnticipadaWarning}>
-                    <ThemedText style={styles.salidaAnticipadaWarningText}>
-                      {getActionIcon('warning')} Esta marca pertenece a un día libre.
+              {/* 6. Mensajes: avisos, errores y botones de funciones extra */}
+              {(resolveMarcaIsLate(marcaView as Record<string, unknown>) || attendanceData.is_late) &&
+                marcaView.hora_inicio != null &&
+                marcaView.hora_entrada_digitada == null && (
+                <ThemedView style={[styles.messageBox, styles.messageBoxError]}>
+                  <Ionicons name="alert-circle-outline" size={18} color="#B42318" />
+                  <ThemedText style={[styles.messageText, styles.messageTextError]}>
+                    Tardía de {getLateTime(attendanceData, horaAccion)}
+                  </ThemedText>
+                </ThemedView>
+              )}
+
+              {resolveMarcaIsDiaLibre(marcaView as Record<string, unknown>) && (
+                <ThemedView style={[styles.messageBox, styles.messageBoxWarning]}>
+                  <Ionicons name="alert-circle-outline" size={18} color="#8A5300" />
+                  <ThemedView style={styles.messageBody}>
+                    <ThemedText style={[styles.messageText, styles.messageTextWarning]}>
+                      Esta marca pertenece a un día libre.
                     </ThemedText>
                     {attendanceData.estado === 'No ingresado' && (
-                      <ThemedText style={styles.salidaAnticipadaHintText}>
+                      <ThemedText style={[styles.messageHint, styles.messageTextWarning]}>
                         {absentMarcaId != null
                           ? ESPERA_SIGUIENTE_TURNO_MESSAGE
                           : DIA_LIBRE_INGRESO_MESSAGE}
                       </ThemedText>
                     )}
                   </ThemedView>
-                )}
+                </ThemedView>
+              )}
 
-                {(resolveMarcaIsSalidaAnticipada(attendanceData.marca as Record<string, unknown>) ||
-                  attendanceData.is_salida_anticipada) &&
-                  attendanceData.marca.hora_salida_anticipada != null && (
-                  <ThemedView style={styles.salidaAnticipadaWarning}>
-                    <ThemedText style={styles.salidaAnticipadaWarningText}>
-                      {getActionIcon('warning')} Salida anticipada a las{' '}
+              {(resolveMarcaIsSalidaAnticipada(marcaView as Record<string, unknown>) ||
+                attendanceData.is_salida_anticipada) &&
+                marcaView.hora_salida_anticipada != null && (
+                <ThemedView style={[styles.messageBox, styles.messageBoxWarning]}>
+                  <Ionicons name="alert-circle-outline" size={18} color="#8A5300" />
+                  <ThemedView style={styles.messageBody}>
+                    <ThemedText style={[styles.messageText, styles.messageTextWarning]}>
+                      Salida anticipada a las{' '}
                       {getNextTime(
-                        typeof attendanceData.marca.hora_salida_anticipada === 'string' &&
-                          attendanceData.marca.hora_salida_anticipada.includes('T')
-                          ? attendanceData.marca.hora_salida_anticipada
-                          : `1970-01-01T${String(attendanceData.marca.hora_salida_anticipada).slice(0, 8)}`
+                        typeof marcaView.hora_salida_anticipada === 'string' &&
+                          marcaView.hora_salida_anticipada.includes('T')
+                          ? marcaView.hora_salida_anticipada
+                          : `1970-01-01T${String(marcaView.hora_salida_anticipada).slice(0, 8)}`
                       )}
                     </ThemedText>
                     {attendanceData.estado === 'No ingresado' && (
-                      <ThemedText style={styles.salidaAnticipadaHintText}>
-                        Haz marcado la salida  de forma anticipada. Si deseas revertirlo, contacta con la administración de tu puesto.
+                      <ThemedText style={[styles.messageHint, styles.messageTextWarning]}>
+                        Has marcado la salida de forma anticipada. Si deseas revertirlo, contacta con la administración de tu puesto.
                       </ThemedText>
                     )}
                   </ThemedView>
-                )}
-              </ThemedView>
+                </ThemedView>
+              )}
 
               {(errorMessage || showAbsentReasonForm || revertMarcaId != null) && (
                 <ThemedView style={styles.marcaWarningsSection}>
@@ -2931,7 +2908,7 @@ const getActivities = async (marcaId: number) => {
                           disabled={isSubmittingAbsentReason}
                         >
                           <ThemedText style={styles.absentReasonSubmitButtonText}>
-                            {isSubmittingAbsentReason ? 'Enviando...' : getActionIcon('confirm')}
+                            {isSubmittingAbsentReason ? 'Enviando...' : 'Enviar motivo'}
                           </ThemedText>
                         </TouchableOpacity>
                       </ThemedView>
@@ -2940,10 +2917,12 @@ const getActivities = async (marcaId: number) => {
 
                   {errorMessage ? (
                     <ThemedView style={styles.entradaLocationErrorBlock}>
-                      <ThemedText style={styles.errorText}>
-                        {getActionIcon('warning')}{' '}
-                        {outOfRangeMapCoords ? simplifyOutOfRangeMessage(errorMessage) : errorMessage}
-                      </ThemedText>
+                      <ThemedView style={[styles.messageBox, styles.messageBoxError]}>
+                        <Ionicons name="alert-circle-outline" size={18} color="#B42318" />
+                        <ThemedText style={[styles.messageText, styles.messageTextError]}>
+                          {outOfRangeMapCoords ? simplifyOutOfRangeMessage(errorMessage) : errorMessage}
+                        </ThemedText>
+                      </ThemedView>
                       {(outOfRangeMapCoords ||
                         (showLocationRetry &&
                           (attendanceData.estado === 'No ingresado' ||
@@ -2951,12 +2930,12 @@ const getActivities = async (marcaId: number) => {
                         <View style={styles.entradaLocationButtonsRow}>
                           {outOfRangeMapCoords && (
                             <TouchableOpacity
-                              style={styles.entradaLocationRetryButton}
+                              style={styles.secondaryButton}
                               onPress={() => setIsOutOfRangeMapModalVisible(true)}
                               activeOpacity={0.85}
                             >
                               <Ionicons name="map-outline" size={18} color="#007AFF" />
-                              <ThemedText style={styles.entradaLocationRetryButtonText}>
+                              <ThemedText style={styles.secondaryButtonText}>
                                 Ver mapa
                               </ThemedText>
                             </TouchableOpacity>
@@ -2966,7 +2945,7 @@ const getActivities = async (marcaId: number) => {
                               attendanceData.estado === 'Ingresado') && (
                               <TouchableOpacity
                                 style={[
-                                  styles.entradaLocationRetryButton,
+                                  styles.secondaryButton,
                                   isRefreshingLocation && styles.actionButtonDisabled,
                                 ]}
                                 onPress={() => void handleRetryLocationCheck()}
@@ -2978,7 +2957,7 @@ const getActivities = async (marcaId: number) => {
                                 ) : (
                                   <>
                                     <Ionicons name="refresh" size={18} color="#007AFF" />
-                                    <ThemedText style={styles.entradaLocationRetryButtonText}>
+                                    <ThemedText style={styles.secondaryButtonText}>
                                       Reintentar
                                     </ThemedText>
                                   </>
@@ -2990,7 +2969,7 @@ const getActivities = async (marcaId: number) => {
                     </ThemedView>
                   ) : null}
 
-                  {(revertMarcaId != null || attendanceData.marca.hora_salida_digitada != null) && (
+                  {(revertMarcaId != null || marcaView.hora_salida_digitada != null) && (
                     <TouchableOpacity style={styles.revertButton} onPress={handleRevertLeaving}>
                       <ThemedText style={styles.revertButtonText}>Revertir salida</ThemedText>
                     </TouchableOpacity>
@@ -2998,12 +2977,56 @@ const getActivities = async (marcaId: number) => {
                 </ThemedView>
               )}
 
-              {/* Action Button */}
+              {/* 7. Hora de ingreso y de salida, y estado actual (sin títulos) */}
+              <ThemedView style={styles.statusCard}>
+                <ThemedView
+                  style={[
+                    styles.statusBadge,
+                    isIngresado ? styles.statusBadgeWorking : styles.statusBadgeOffline,
+                  ]}
+                >
+                  <ThemedText
+                    style={[
+                      styles.statusText,
+                      isIngresado ? styles.statusTextWorking : styles.statusTextOffline,
+                    ]}
+                  >
+                    {isIngresado ? 'Ingresado' : 'No ingresado'}
+                  </ThemedText>
+                </ThemedView>
+
+                {isIngresado && marcaView.hora_entrada_digitada != null && (
+                  <ThemedView style={styles.timeLine}>
+                    <Ionicons name="checkmark-circle-outline" size={18} color="#1E6B34" />
+                    <ThemedText style={styles.timeLineText}>
+                      Ingresó el {convertDateToLocal(marcaView.hora_entrada_digitada)}
+                    </ThemedText>
+                  </ThemedView>
+                )}
+                {isIngresado && marcaView.hora_salida_digitada != null && (
+                  <ThemedView style={styles.timeLine}>
+                    <Ionicons name="checkmark-circle-outline" size={18} color="#1E6B34" />
+                    <ThemedText style={styles.timeLineText}>
+                      Salió el {convertDateToLocal(marcaView.hora_salida_digitada)}
+                    </ThemedText>
+                  </ThemedView>
+                )}
+
+                {/* Hora (con fecha) programada de la siguiente acción: la entrada o, ya ingresado, la salida */}
+                <ThemedView style={styles.timeLine}>
+                  <Ionicons name={isIngresado ? 'exit-outline' : 'enter-outline'} size={18} color="#4B5563" />
+                  <ThemedText style={styles.timeLineText}>
+                    {formatFechaDMY(attendanceData.next_time)} {getNextTime(attendanceData.next_time)}
+                  </ThemedText>
+                </ThemedView>
+              </ThemedView>
+
+              {/* 8. Botón de marcar entrada o salida */}
               <ThemedView style={styles.actionContainer}>
                 <TouchableOpacity
                   style={[
                     styles.actionButton,
-                    attendanceData.estado === 'Ingresado' ? styles.endShiftButton : styles.startShiftButton,
+                    isIngresado ? styles.endShiftButton : styles.startShiftButton,
                     (getDisability() || isUpdating) && styles.actionButtonDisabled
                   ]}
                   onPress={handleToggleAttendance}
@@ -3012,19 +3035,11 @@ const getActivities = async (marcaId: number) => {
                   {isUpdating ? (
                     <ActivityIndicator size="small" color="#FFFFFF" />
                   ) : (
-                    <ThemedView style={[{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 8,
-                      backgroundColor: attendanceData.estado === 'No ingresado' ? '#34C759' : '#FF3B30',
-                    }]}>
+                    <ThemedView style={styles.actionButtonContent}>
                       <ThemedText style={styles.actionButtonText}>
-                        {attendanceData.estado === 'No ingresado' ? 'Marcar ingreso' : 'Marcar salida'}
+                        {isIngresado ? 'Marcar salida' : 'Marcar ingreso'}
                       </ThemedText>
-                      <ThemedText style={styles.actionButtonText}>
-                        {attendanceData.estado === 'No ingresado' ? getActionIcon('start') : getActionIcon('end')}
-                      </ThemedText>
+                      {isIngresado ? getActionIcon('end') : getActionIcon('start')}
                     </ThemedView>
                   )}
                 </TouchableOpacity>
@@ -3032,15 +3047,31 @@ const getActivities = async (marcaId: number) => {
             </ThemedView>
           ) : errorMessage ? (
             <ThemedView style={styles.errorContainer}>
-              <ThemedText style={styles.errorText}>{getActionIcon('warning')} {errorMessage}</ThemedText>
+              <ThemedView style={[styles.messageBox, styles.messageBoxError]}>
+                <Ionicons name="alert-circle-outline" size={18} color="#B42318" />
+                <ThemedText style={[styles.messageText, styles.messageTextError]}>{errorMessage}</ThemedText>
+              </ThemedView>
               <TouchableOpacity
                 style={styles.retryButton}
                 onPress={fetchAttendanceStatus}
               >
-                <ThemedText style={styles.retryButtonText}>{getActionIcon('retry')}</ThemedText>
+                <Ionicons name="refresh" size={18} color="#FFFFFF" />
+                <ThemedText style={styles.retryButtonText}>Reintentar</ThemedText>
               </TouchableOpacity>
             </ThemedView>
           ) : null}
+
+          {/* 9. Turnos futuros */}
+          <TouchableOpacity
+            style={styles.futureMarksButton}
+            onPress={handleOpenFutureMarksModal}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+            <ThemedText style={styles.futureMarksButtonText}>
+              Ver turnos futuros
+            </ThemedText>
+          </TouchableOpacity>
         </ThemedView>
       </ScrollView>
 
@@ -3059,7 +3090,7 @@ const getActivities = async (marcaId: number) => {
         onDismiss={handlePlanillasRevalidationDismiss}
       />
 
-      {/* Modal for early exit reason */}
+      {/* Modal de la razón de salida anticipada */}
       <Modal
         visible={isModalVisible}
         transparent={true}
@@ -3091,41 +3122,35 @@ const getActivities = async (marcaId: number) => {
                 style={[styles.modalButton, styles.modalCancelButton]}
                 onPress={handleModalCancel}
               >
-                <ThemedText style={styles.modalCancelButtonText}>
-                  {getActionIcon('cancel')}
-                </ThemedText>
+                <ThemedText style={styles.modalCancelButtonText}>Cancelar</ThemedText>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={[styles.modalButton, styles.modalConfirmButton]}
                 onPress={handleModalConfirm}
               >
-                <ThemedText style={styles.modalConfirmButtonText}>
-                  {getActionIcon('confirm')}
-                </ThemedText>
+                <ThemedText style={styles.modalConfirmButtonText}>Confirmar</ThemedText>
               </TouchableOpacity>
             </ThemedView>
           </ThemedView>
         </ThemedView>
       </Modal>
 
-      {/* Modal de marcas futuras */}
+      {/* Modal de turnos futuros: primero el turno laboral más próximo; la lista de 30 días solo se busca a petición */}
       <Modal
         visible={isMarksModalVisible}
         transparent={true}
         animationType="fade"
-        onRequestClose={() => setIsMarksModalVisible(false)}
+        onRequestClose={handleCloseFutureMarksModal}
       >
         <View style={styles.marksModalOverlay}>
           <ThemedView style={styles.marksModalContainer}>
             <View style={styles.marksModalHeader}>
               <ThemedText style={styles.marksModalTitle}>
-                Marcas Futuras (30 días)
+                Turnos futuros
               </ThemedText>
-              <TouchableOpacity
-                onPress={() => setIsMarksModalVisible(false)}
-              >
-                <Ionicons name="close" size={24} color="#666666" />
+              <TouchableOpacity onPress={handleCloseFutureMarksModal} accessibilityLabel="Cerrar">
+                <Ionicons name="close" size={22} color="#666666" />
               </TouchableOpacity>
             </View>
 
@@ -3135,20 +3160,75 @@ const getActivities = async (marcaId: number) => {
               nestedScrollEnabled={true}
               showsVerticalScrollIndicator={true}
             >
+              <ThemedText style={styles.marksSectionTitle}>Próximo turno</ThemedText>
+              {upcomingNextShift ? (
+                <ThemedView style={styles.markItem}>
+                  <ThemedView style={styles.markItemHeader}>
+                    <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                    <ThemedText style={styles.markItemTime}>
+                      {formatFechaDMY(upcomingNextShift.fecha)}
+                    </ThemedText>
+                  </ThemedView>
+                  <ThemedView style={styles.markItemHeader}>
+                    <Ionicons name="time-outline" size={18} color="#007AFF" />
+                    <ThemedText style={styles.markItemTime}>
+                      {formatHoraRange(upcomingNextShift.hora_inicio, upcomingNextShift.hora_fin) || 'Sin hora'}
+                    </ThemedText>
+                  </ThemedView>
+                  <ThemedView style={styles.markItemDetails}>
+                    {shiftInfoRows(upcomingNextShift).map((row) => (
+                      <ThemedView key={row.label} style={styles.markItemRow}>
+                        <ThemedText style={styles.markItemTitle}>{row.label}</ThemedText>
+                        <ThemedText style={styles.markItemValue}>{row.value}</ThemedText>
+                      </ThemedView>
+                    ))}
+                    <ThemedView style={styles.markItemRow}>
+                      <ThemedText style={styles.markItemTitle}>Turno</ThemedText>
+                      <ThemedText style={styles.markItemValue}>{tipoTurnoLabel(upcomingNextShift.tipo_turno)}</ThemedText>
+                    </ThemedView>
+                  </ThemedView>
+                </ThemedView>
+              ) : (
+                <ThemedView style={styles.marksEmptyContainer}>
+                  <ThemedText style={styles.marksEmptyText}>
+                    No hay un turno laboral próximo guardado. Se actualiza al consultar tu marca con conexión a internet.
+                  </ThemedText>
+                </ThemedView>
+              )}
+
+              <TouchableOpacity
+                style={[styles.secondaryButton, styles.marksSearchButton, isLoadingFutureMarks && styles.actionButtonDisabled]}
+                onPress={handleRequestFutureList}
+                disabled={isLoadingFutureMarks}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="search-outline" size={18} color="#007AFF" />
+                <ThemedText style={styles.secondaryButtonText}>
+                  Buscar turnos de los próximos 30 días
+                </ThemedText>
+              </TouchableOpacity>
+
               {isLoadingFutureMarks ? (
                 <ThemedView style={styles.marksLoadingContainer}>
                   <ActivityIndicator size="large" color="#007AFF" />
                   <ThemedText style={styles.marksLoadingText}>
-                    Cargando marcas...
+                    Cargando turnos...
                   </ThemedText>
                 </ThemedView>
-              ) : futureMarks.length === 0 ? (
-                <ThemedView style={styles.marksEmptyContainer}>
-                  <ThemedText style={styles.marksEmptyText}>
-                    No hay marcas programadas para los próximos 30 días
-                  </ThemedText>
-                </ThemedView>
-              ) : renderFutureMarks()}
+              ) : futureListRequested ? (
+                futureMarks.length === 0 ? (
+                  <ThemedView style={styles.marksEmptyContainer}>
+                    <ThemedText style={styles.marksEmptyText}>
+                      No hay turnos programados para los próximos 30 días
+                    </ThemedText>
+                  </ThemedView>
+                ) : (
+                  <>
+                    <ThemedText style={styles.marksSectionTitle}>Próximos 30 días</ThemedText>
+                    {renderFutureMarks()}
+                  </>
+                )
+              ) : null}
             </ScrollView>
           </ThemedView>
         </View>
@@ -3205,535 +3285,478 @@ const styles = StyleSheet.create({
   fullContainer: {
     flex: 1,
   },
-  currentTime: {
-    fontSize: 16,
-    fontWeight: '600',
-    textAlign: 'center',
-    color: '#000000',
-  },
-  currentTimeTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    textAlign: 'center',
-    color: '#007AFF',
-  },
-  entradaMarcaHintBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#E8F4FF',
-    borderWidth: 1,
-    borderColor: '#B8DAF8',
-    borderRadius: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    marginBottom: 16,
-  },
-  entradaMarcaHintTopRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    width: '100%',
-    backgroundColor: '#E8F4FF',
-  },
-  entradaMarcaHintTextRow: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    minWidth: 0,
-    backgroundColor: '#E8F4FF',
-  },
-  entradaMarcaHintText: {
-    fontSize: 14,
-    color: '#1a1a1a',
-    lineHeight: 20,
-    backgroundColor: '#E8F4FF',
-  },
-  entradaMarcaHintClose: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-    backgroundColor: '#E8F4FF',
-    borderWidth: 1,
-    borderColor: '#007AFF',
-    flexShrink: 0,
-    alignSelf: 'flex-start',
-  },
-  entradaMarcaHintCloseText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#007AFF',
-  },
   scrollView: {
     flex: 1,
   },
   container: {
     flex: 1,
     padding: 20,
-  },
-  backButton: {
-    marginBottom: 20,
-    alignSelf: 'flex-start',
-  },
-  backButtonText: {
-    fontSize: 16,
-    color: '#007AFF',
-    fontWeight: '600',
+    gap: 14,
   },
   titleContainer: {
     alignItems: 'center',
-    marginBottom: 30,
-    paddingBottom: 20,
+    marginBottom: 4,
+    paddingBottom: 14,
     borderBottomWidth: 1,
     borderBottomColor: '#E0E0E0',
   },
   title: {
-    fontSize: 28,
+    fontSize: 22,
     fontWeight: 'bold',
     textAlign: 'center',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   subtitle: {
-    fontSize: 16,
+    fontSize: 14,
     opacity: 0.7,
     textAlign: 'center',
   },
   loadingContainer: {
-    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     gap: 16,
-    minHeight: 300,
+    minHeight: 200,
   },
   loadingDataText: {
-    fontSize: 16,
+    fontSize: 14,
     opacity: 0.7,
     textAlign: 'center',
-  },
-  errorContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-    gap: 20,
-    minHeight: 300,
-  },
-  marcaWarningsSection: {
-    width: '100%',
-    marginTop: 16,
-    marginBottom: 8,
-    gap: 16,
-    alignItems: 'center',
-  },
-  entradaLocationErrorBlock: {
-    width: '100%',
-    alignItems: 'center',
-    gap: 12,
-  },
-  entradaLocationButtonsRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  entradaLocationRetryButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    backgroundColor: '#E8F4FF',
-    borderWidth: 1,
-    borderColor: '#B8DAF8',
-  },
-  entradaLocationRetryButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#007AFF',
-  },
-  errorText: {
-    fontSize: 16,
-    color: '#FF3B30',
-    textAlign: 'center',
-    lineHeight: 24,
-  },
-  retryButton: {
-    backgroundColor: '#007AFF',
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 8,
-  },
-  retryButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  revertButton: {
-    marginTop: 12,
-    backgroundColor: '#FF3B30',
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  revertButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  contentContainer: {
-    flex: 1,
-    gap: 30,
-  },
-  infoCard: {
-    backgroundColor: '#F8F9FA',
-    borderRadius: 12,
-    padding: 20,
-    gap: 12,
-    shadowColor: '#000000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  infoCardTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 8,
-    textAlign: 'center',
-    color: '#007AFF',
-  },
-  infoRow: {
-    display: 'flex',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
-    backgroundColor: '#F8F9FA',
-  },
-  infoLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#666666',
-    flex: 1,
-  },
-  infoValue: {
-    fontSize: 10,
-    fontWeight: '500',
-    color: '#333333',
-    flex: 2,
-  },
-  statusCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 24,
-    gap: 5,
-    shadowColor: '#000000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  statusContainer: {
-    alignItems: 'center',
-    backgroundColor: '#F8F9FA',
-    padding: 10,
-    borderRadius: 8,
-  },
-  statusLabel: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#666666',
-  },
-  statusBadge: {
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 10,
-    width: '100%',
-    alignItems: 'center',
-  },
-  enterAtBadge: {
-    width: '100%',
-    alignItems: 'center',
-    backgroundColor: '#FF9500',
-  },
-  statusBadgeWorking: {
-    backgroundColor: '#34C759',
-  },
-  statusBadgeOffline: {
-    backgroundColor: '#8E8E93',
-  },
-  statusText: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  salidaMarcadaMensaje: {
-    fontSize: 17,
-    color: '#FF3B30',
-    textAlign: 'center',
-    width: '100%',
-    marginBottom: 8,
-  },
-  enterAtLabel: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  enterAtText: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: '#fff',
-    backgroundColor: '#FF9500',
-  },
-  nextTimeContainer: {
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#D1E6FF',
-    padding: 10,
-    borderRadius: 8,
-  },
-  enterAtContainer: {
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#FF9500',
-    padding: 10,
-    borderRadius: 8,
-    width: '100%',
-  },
-  nextTimeLabel: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#666666',
-  },
-  nextTimeValue: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#000000',
-  },
-  lateWarning: {
-    backgroundColor: '#FF3B30',
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    marginTop: 8,
-  },
-  lateWarningText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: 'bold',
-    textAlign: 'center',
-  },
-  salidaAnticipadaWarning: {
-    backgroundColor: '#FF9500',
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    marginTop: 8,
-    gap: 6,
-  },
-  salidaAnticipadaWarningText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: 'bold',
-    textAlign: 'center',
-  },
-  salidaAnticipadaHintText: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    textAlign: 'center',
-  },
-  actionContainer: {
-
-  },
-  actionButton: {
-    paddingVertical: 16,
-    paddingHorizontal: 40,
-    borderRadius: 12,
-    minWidth: 250,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 6,
-  },
-  startShiftButton: {
-    backgroundColor: '#34C759',
-  },
-  endShiftButton: {
-    backgroundColor: '#FF3B30',
-  },
-  actionButtonDisabled: {
-    opacity: 0.6,
-  },
-  actionButtonText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  actionButtonTextContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: '#007AFF',
   },
   loadingText: {
     textAlign: 'center',
     marginTop: 16,
     opacity: 0.7,
   },
+  errorContainer: {
+    alignItems: 'center',
+    gap: 14,
+  },
+
+  /* Aviso de minutos previos */
+  hintBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: '#F8F9FA',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  hintText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#333333',
+  },
+  hintClose: {
+    padding: 2,
+  },
+
+  /* Fecha y hora, empleado y puesto */
+  dateTimeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  dateTimeText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#000000',
+  },
+  identityCard: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+  },
+  identityRow: {
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+  },
+  identityRowLast: {
+    borderBottomWidth: 0,
+  },
+  identityLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#777777',
+  },
+  identityValue: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#000000',
+    marginTop: 2,
+  },
+
+  contentContainer: {
+    gap: 14,
+  },
+  /** El colapsable trae un margen inferior propio; aquí el espacio entre bloques ya lo da el `gap` del contenedor. */
+  collapsibleInContent: {
+    marginBottom: 0,
+  },
+
+  /* Información laboral (dentro del colapsable) */
+  infoCard: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+  },
+  infoRow: {
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+  },
+  infoRowLast: {
+    borderBottomWidth: 0,
+  },
+  infoLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#777777',
+  },
+  infoValue: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#333333',
+    marginTop: 1,
+  },
+  infoTimeValue: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#FFFFFF',
+  },
+
+  /* Mensajes */
+  messageBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  messageBoxError: {
+    backgroundColor: '#FDECEA',
+    borderColor: '#F5C2BE',
+  },
+  messageBoxWarning: {
+    backgroundColor: '#FFF4E5',
+    borderColor: '#F5D9A8',
+  },
+  messageBody: {
+    flex: 1,
+    gap: 4,
+    backgroundColor: 'transparent',
+  },
+  messageText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    lineHeight: 20,
+  },
+  messageHint: {
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  messageTextError: {
+    color: '#B42318',
+  },
+  messageTextWarning: {
+    color: '#8A5300',
+  },
+  marcaWarningsSection: {
+    width: '100%',
+    gap: 12,
+  },
+  entradaLocationErrorBlock: {
+    width: '100%',
+    gap: 10,
+  },
+  entradaLocationButtonsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  secondaryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  secondaryButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#007AFF',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  revertButton: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#B42318',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  revertButtonText: {
+    color: '#B42318',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+
+  /* Estado y horas */
+  statusCard: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 12,
+    gap: 10,
+  },
+  statusBadge: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  statusBadgeWorking: {
+    backgroundColor: '#EAF5EC',
+    borderColor: '#BFE0C6',
+  },
+  statusBadgeOffline: {
+    backgroundColor: '#F1F2F4',
+    borderColor: '#D5D8DD',
+  },
+  statusText: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  statusTextWorking: {
+    color: '#1E6B34',
+  },
+  statusTextOffline: {
+    color: '#4B5563',
+  },
+  timeLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  timeLineText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#333333',
+  },
+
+  /* Botón de marcar */
+  actionContainer: {
+    width: '100%',
+  },
+  actionButton: {
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  actionButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: 'transparent',
+  },
+  startShiftButton: {
+    backgroundColor: '#007AFF',
+  },
+  endShiftButton: {
+    backgroundColor: '#C0392B',
+  },
+  actionButtonDisabled: {
+    opacity: 0.5,
+  },
+  actionButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+
+  /* Turnos futuros */
+  futureMarksButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+  },
+  futureMarksButtonText: {
+    color: '#007AFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+
+  /* Modales */
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
   },
   modalContainer: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 24,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    padding: 20,
     width: '100%',
     maxWidth: 400,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
   },
   modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    textAlign: 'center',
-    marginBottom: 8,
+    fontSize: 17,
+    fontWeight: '700',
+    marginBottom: 6,
     color: '#333333',
   },
   modalSubtitle: {
-    fontSize: 16,
-    textAlign: 'center',
-    marginBottom: 20,
+    fontSize: 14,
+    marginBottom: 16,
     color: '#666666',
-    lineHeight: 22,
+    lineHeight: 20,
   },
   modalInput: {
     borderWidth: 1,
     borderColor: '#E0E0E0',
     borderRadius: 8,
     padding: 12,
-    fontSize: 16,
+    fontSize: 14,
     backgroundColor: '#F8F9FA',
-    marginBottom: 24,
+    marginBottom: 20,
     minHeight: 80,
     textAlignVertical: 'top',
   },
   modalButtons: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 12,
-    backgroundColor: '#FAFAFA'
+    justifyContent: 'flex-end',
+    gap: 10,
+    backgroundColor: 'transparent',
   },
   modalButton: {
-    flex: 1,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
     borderRadius: 8,
     alignItems: 'center',
   },
   modalCancelButton: {
-    backgroundColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
   },
   modalConfirmButton: {
-    backgroundColor: '#FF3B30',
+    backgroundColor: '#007AFF',
   },
   modalCancelButtonText: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
     color: '#333333',
   },
   modalConfirmButtonText: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
     color: '#FFFFFF',
   },
   absentReasonContainer: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 20,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 16,
   },
   absentReasonTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    textAlign: 'center',
-    marginBottom: 8,
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 4,
     color: '#333333',
   },
   absentReasonSubtitle: {
-    fontSize: 14,
-    textAlign: 'center',
-    marginBottom: 16,
+    fontSize: 13,
+    marginBottom: 12,
     color: '#666666',
-    lineHeight: 20,
+    lineHeight: 19,
   },
   absentReasonInput: {
     borderWidth: 1,
     borderColor: '#E0E0E0',
     borderRadius: 8,
     padding: 12,
-    fontSize: 16,
+    fontSize: 14,
     backgroundColor: '#F8F9FA',
-    marginBottom: 16,
+    marginBottom: 12,
     minHeight: 80,
     textAlignVertical: 'top',
   },
   absentReasonButtons: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 12,
-    backgroundColor: '#FAFAFA',
+    justifyContent: 'flex-end',
+    gap: 10,
+    backgroundColor: 'transparent',
   },
   absentReasonButton: {
-    flex: 1,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
     borderRadius: 8,
     alignItems: 'center',
   },
-  absentReasonCancelButton: {
-    backgroundColor: '#E0E0E0',
-  },
   absentReasonSubmitButton: {
-    backgroundColor: '#FF3B30',
-  },
-  absentReasonCancelButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333333',
+    backgroundColor: '#007AFF',
   },
   absentReasonSubmitButtonText: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
     color: '#FFFFFF',
   },
@@ -3741,54 +3764,20 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   testButton: {
-    backgroundColor: '#FF9500',
+    backgroundColor: '#8A5300',
     paddingVertical: 12,
     paddingHorizontal: 24,
     borderRadius: 8,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  testButtonDisabled: {
-    opacity: 0.6,
   },
   testButtonText: {
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '600',
   },
-  futureMarksButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: '#007AFF',
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 8,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  futureMarksButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
   marksModalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.4)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 16,
@@ -3799,7 +3788,9 @@ const styles = StyleSheet.create({
     height: '90%',
     maxHeight: '90%',
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
     overflow: 'hidden',
     flexDirection: 'column',
   },
@@ -3807,7 +3798,9 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 320,
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
     overflow: 'hidden',
     alignItems: 'center',
     paddingBottom: 16,
@@ -3841,8 +3834,8 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E0E0E0',
   },
   marksModalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 17,
+    fontWeight: '700',
     flex: 1,
     marginRight: 8,
   },
@@ -3851,9 +3844,17 @@ const styles = StyleSheet.create({
   },
   marksModalContentContainer: {
     padding: 16,
+    gap: 12,
+  },
+  marksSectionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#333333',
+  },
+  marksSearchButton: {
+    alignSelf: 'stretch',
   },
   marksLoadingContainer: {
-    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 40,
@@ -3864,10 +3865,9 @@ const styles = StyleSheet.create({
     color: '#666666',
   },
   marksEmptyContainer: {
-    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 40,
+    padding: 20,
   },
   marksEmptyText: {
     fontSize: 14,
@@ -3892,6 +3892,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     marginBottom: 8,
+    backgroundColor: '#FFFFFF',
   },
   markItemTime: {
     fontSize: 16,
@@ -3901,6 +3902,7 @@ const styles = StyleSheet.create({
   markItemDetails: {
     marginTop: 8,
     gap: 6,
+    backgroundColor: '#FFFFFF',
   },
   markItemRow: {
     flexDirection: 'column',
@@ -3910,6 +3912,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#E0E0E0',
     paddingBottom: 4,
+    backgroundColor: '#FFFFFF',
   },
   markItemTitle: {
     fontSize: 12,
@@ -3923,26 +3926,4 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: 'left',
   },
-  markItemPlaza: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333333',
-    marginTop: 4,
-  },
-  markItemPuesto: {
-    fontSize: 12,
-    color: '#666666',
-    marginTop: 2,
-  },
-  markItemHorario: {
-    fontSize: 12,
-    color: '#666666',
-    marginTop: 2,
-  },
-  markItemTurno: {
-    fontSize: 12,
-    color: '#666666',
-    marginTop: 2,
-  },
 });
-

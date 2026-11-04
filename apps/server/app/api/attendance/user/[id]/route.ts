@@ -12,6 +12,7 @@ import { getTiempoGraciaMarcarSalida } from "../../../../../utils/getTiempoGraci
 import { getValidateGpsSalida } from "../../../../../utils/getValidateGpsSalida";
 import { getHorasEliminarMarcaTrasSalida } from "../../../../../utils/getHorasEliminarMarcaTrasSalida";
 import { marcaCaducada } from "../../../../../utils/marcaCaducada";
+import { pickNextShift } from "../../../../../utils/nextShift";
 import { reportError } from "../../../../../utils/reportError";
 import { buildMarcaCandidata, resolverConflictoDeMarcas } from "../../../../../utils/resolveMarcaConflicto";
 import dotenv from "dotenv";
@@ -186,6 +187,54 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             }
         };
 
+        /**
+         * Siguiente turno LABORAL (sin «L») cuya entrada, restados los minutos previos, es posterior a este momento: la app lo guarda para
+         * mostrarlo sin conexión. Es un dato complementario: ante cualquier falla se responde `null` y la marca actual no se ve afectada.
+         */
+        const buscarSiguienteTurno = async () => {
+            try {
+                const candidatas: any[] = [];
+                for (let dayOffset = 0; dayOffset < 14; dayOffset++) {
+                    const dateCursor = new Date(currentDate.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+                    const planillasMarcas = await fetchPlanillasMarcasForDate(dateCursor);
+                    if (planillasMarcas.length === 0) continue;
+                    candidatas.push(...(await loadMarcasDiaForEmployee(planillasMarcas, "asc")));
+                    // Los días se recorren en orden: con un turno ya encontrado los días siguientes solo pueden traer otros posteriores.
+                    if (pickNextShift(candidatas, now.getTime(), monitoringPreviousMinutes)) break;
+                }
+                const marca: any = pickNextShift(candidatas, now.getTime(), monitoringPreviousMinutes);
+                if (!marca) return null;
+                const [empresa, cliente, contrato, corpo, puesto, plaza, horario] = await Promise.all([
+                    marca.empresa_id ? prisma.e_estructura_empresa.findUnique({ where: { id: marca.empresa_id } }) : null,
+                    marca.cliente_id ? prisma.e_estructura_cliente.findUnique({ where: { id: marca.cliente_id } }) : null,
+                    marca.contrato_id ? prisma.e_estructura_contrato.findUnique({ where: { id: marca.contrato_id } }) : null,
+                    marca.corpo_id ? prisma.e_estructura_sucursal.findUnique({ where: { id: marca.corpo_id } }) : null,
+                    marca.puesto_id ? prisma.e_estructura_puesto.findUnique({ where: { id: marca.puesto_id } }) : null,
+                    marca.plaza_id ? prisma.e_estructura_plazas.findUnique({ where: { id: marca.plaza_id } }) : null,
+                    marca.horario_id ? prisma.c_horario.findUnique({ where: { id: marca.horario_id } }) : null,
+                ]);
+                const division = contrato?.division_id ? await prisma.n_division.findUnique({ where: { id: contrato.division_id } }) : null;
+                return {
+                    id: marca.id,
+                    fecha: marca.fecha,
+                    hora_inicio: marca.hora_inicio,
+                    hora_fin: marca.hora_fin,
+                    tipo_turno: marca.tipo_turno,
+                    empresa: { id: marca.empresa_id ?? 0, codigo: empresa?.codigo ?? null, nombre: empresa?.nombre ?? "Indefinido" },
+                    cliente: { id: marca.cliente_id ?? 0, codigo: null, nombre: cliente?.nombre ?? "Indefinido" },
+                    division: { id: division?.id ?? 0, codigo: division?.codigo ?? null, nombre: division?.nombre ?? "Indeterminable" },
+                    contrato: { id: marca.contrato_id ?? 0, codigo: contrato?.nro_contrato ?? null, nombre: contrato?.nombre ?? "Indefinido" },
+                    corpo: { id: marca.corpo_id ?? 0, codigo: corpo?.nro_sucursal ?? null, nombre: corpo?.nombre ?? "Indefinido" },
+                    puesto: { id: marca.puesto_id ?? 0, codigo: puesto?.codigo ?? null, nombre: puesto?.nombre ?? "Indefinido" },
+                    plaza: { id: marca.plaza_id ?? 0, codigo: plaza?.codigo_plaza ?? null, nombre: plaza?.nombre ?? "Indefinido" },
+                    horario: { id: marca.horario_id ?? 0, codigo: null, nombre: horario?.titulo ?? "Indefinido" },
+                };
+            } catch (e: unknown) {
+                console.warn("No se pudo buscar el siguiente turno laboral:", e instanceof Error ? e.message : e);
+                return null;
+            }
+        };
+
         let marcaDia = null;
 
         // 1) Marca futura más cercana desde el momento de la consulta (hasta 14 días).
@@ -259,6 +308,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     tiempo_gracia_marcar_salida: tiempoGraciaMarcarSalida,
                     validate_gps_salida: validateGpsSalida,
                     horas_eliminar_marca_tras_salida: horasEliminarMarca,
+                    next_shift: await buscarSiguienteTurno(),
                     message: `No tienes un turno activo: tu último turno terminó hace más de ${horasEliminarMarca} hora(s).`,
                 },
                 { status: 200 }
@@ -374,18 +424,22 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             nomencladores: nomenclatores,
             empresa: {
                 id: empresa.id,
+                codigo: empresa.codigo ?? null,
                 nombre: empresa.nombre
             },
             cliente: {
                 id: cliente.id,
+                codigo: null,
                 nombre: cliente.nombre
             },
             contrato: {
                 id: contrato.id,
+                codigo: contrato.nro_contrato ?? null,
                 nombre: contrato.nombre
             },
             corpo: {
                 id: corpo.id,
+                codigo: corpo.nro_sucursal ?? null,
                 nombre: corpo.nombre,
                 ubicacion: {
                     lat: corpo.coordenadas_gpslat,
@@ -394,6 +448,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             },
             puesto: {
                 id: puesto?.id ?? 0,
+                codigo: puesto?.codigo ?? null,
                 nombre: puesto?.nombre ?? "Indefinido",
                 tiene_relevo: puesto?.tiene_relevo ?? false,
                 ubicacion: {
@@ -403,10 +458,12 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             },
             plaza: {
                 id: plaza?.id ?? 0,
+                codigo: plaza?.codigo_plaza ?? null,
                 nombre: plaza?.nombre ?? "Indefinido"
             },
             horario: {
                 id: horario?.id ?? 0,
+                codigo: null,
                 nombre: horario?.titulo ?? "Indefinido"
             },
             ausencia_comentario: razonAusencia?.razon ? String(razonAusencia.razon) : null,
@@ -431,6 +488,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     validate_gps_salida: validateGpsSalida,
                     horas_eliminar_marca_tras_salida: horasEliminarMarca,
                     is_salida_anticipada: isSalidaAnticipada,
+                    next_shift: await buscarSiguienteTurno(),
                     message,
                     ...extra,
                 },
@@ -580,6 +638,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             is_late,
             is_salida_anticipada: isSalidaAnticipada,
             next_time,
+            next_shift: await buscarSiguienteTurno(),
             marca: marca_return
         }
 

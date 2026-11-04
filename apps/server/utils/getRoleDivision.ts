@@ -3,7 +3,7 @@ import { prisma } from "./prismaClient";
 
 type RoleDivision = {
     role: { id: number; nombre: string };
-    division: { id: number; nombre: string };
+    division: { id: number; nombre: string; codigo: string | null };
 };
 
 function resolveRoleNameFromCodigo(codigo: string | null | undefined): string {
@@ -26,7 +26,7 @@ export default async function getRoleDivision(
 ): Promise<RoleDivision> {
     const roleDivision: RoleDivision = {
         role: { id: 1, nombre: "OPERATIVO" },
-        division: { id: 0, nombre: "Indeterminable" },
+        division: { id: 0, nombre: "Indeterminable", codigo: null },
     };
 
     try {
@@ -41,6 +41,7 @@ export default async function getRoleDivision(
         if (division) {
             roleDivision.division.id = division.id;
             roleDivision.division.nombre = division.nombre;
+            roleDivision.division.codigo = division.codigo ?? null;
         }
 
         if (!plaza?.categoriaSalarial_id) {
