@@ -30,6 +30,7 @@ import {
   batteryPercent,
   commandEffect,
   decideUpdate,
+  DEFAULT_HEARTBEAT_MS,
   heartbeatLocation,
   normalizeCompanyCode,
   renewDue,
@@ -81,7 +82,6 @@ const STATUS_PENDING_MS = 15_000;
 const STATUS_BLOCKED_MS = 60_000;
 const COMMANDS_MS = 10_000;
 const WIPE_CHECK_MS = 15_000;
-const HEARTBEAT_MS = 5 * 60_000;
 const UPDATE_MS = 30 * 60_000;
 
 let config: GuardifyConfig | null = null;
@@ -486,7 +486,7 @@ export function startGuardifyBackground(): () => void {
       // Equipo activo (con o sin sesión, o con el permiso vencido por falta de contacto): latidos y órdenes.
       if (kind !== 'blocked') {
         if (kind === 'locked') last.heartbeat = 0; // un contacto exitoso reancla la hora y puede levantar el bloqueo
-        if (due('heartbeat', HEARTBEAT_MS, now)) {
+        if (due('heartbeat', config?.heartbeatMs ?? DEFAULT_HEARTBEAT_MS, now)) {
           const battery = batteryPercent(await Battery.getBatteryLevelAsync().catch(() => -1));
           await dev.heartbeat({ battery, ...(await heartbeatExtras()) }).catch(() => undefined);
         }

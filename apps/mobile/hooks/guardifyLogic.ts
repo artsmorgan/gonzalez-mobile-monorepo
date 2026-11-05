@@ -47,7 +47,20 @@ export function isTruthyFlag(value: unknown): boolean {
   return /^(true|1|on|yes|si|sí)$/i.test(String(value ?? '').trim());
 }
 
-export type GuardifyConfig = { enabled: boolean; /** El interruptor general está encendido (aunque falte la URL). */ switchedOn: boolean; baseUrl: string; appKey: string; companyCode: string; variant: string };
+/** Cada cuánto manda el equipo su latido (batería y ubicación, si la persona la autorizó) cuando la build no dice otra cosa. */
+export const DEFAULT_HEARTBEAT_MS = 5 * 60_000;
+/** El latido nunca baja de 30 s (Guardify admite 60 por minuto y por IP) ni pasa de 1 h. */
+const MIN_HEARTBEAT_MS = 30_000;
+const MAX_HEARTBEAT_MS = 60 * 60_000;
+
+/** `GUARDIFY_HEARTBEAT_SECONDS` de la build (segundos); vacío o inválido = el valor por defecto. */
+export function parseHeartbeatMs(value: unknown): number {
+  const seconds = Number(String(value ?? '').trim());
+  if (!Number.isFinite(seconds) || seconds <= 0) return DEFAULT_HEARTBEAT_MS;
+  return Math.min(MAX_HEARTBEAT_MS, Math.max(MIN_HEARTBEAT_MS, Math.round(seconds * 1000)));
+}
+
+export type GuardifyConfig = { enabled: boolean; /** El interruptor general está encendido (aunque falte la URL). */ switchedOn: boolean; baseUrl: string; appKey: string; companyCode: string; variant: string; heartbeatMs: number };
 
 /**
  * Configuración desde `extra` de la app. **Interruptor general `GUARDIFY_ENABLED`: apagado por defecto.** Con él apagado Guardify no hace nada en la app
@@ -65,6 +78,7 @@ export function resolveGuardifyConfig(extra: Record<string, unknown> | null | un
     appKey: String(extra?.GUARDIFY_APP_KEY ?? '').trim() || 'monitoreapp',
     companyCode: normalizeCompanyCode(extra?.GUARDIFY_COMPANY_CODE),
     variant,
+    heartbeatMs: parseHeartbeatMs(extra?.GUARDIFY_HEARTBEAT_SECONDS),
   };
 }
 

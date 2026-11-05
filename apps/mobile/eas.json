@@ -76,6 +76,18 @@
       "env": {
         "APP_VARIANT": "prod"
       }
+    },
+    "guardify-pruebas": {
+      "extends": "preview-lite",
+      "env": {
+        "APP_VARIANT": "lite",
+        "EXPO_PUBLIC_API_SERVER": "https://api-gonzalez-mobile-monorepo-production.up.railway.app",
+        "EXPO_PUBLIC_GUARDIFY_ENABLED": "true",
+        "EXPO_PUBLIC_GUARDIFY_URL": "https://guardifyconsole-production.up.railway.app",
+        "EXPO_PUBLIC_GUARDIFY_APP_KEY": "monitoreapp",
+        "EXPO_PUBLIC_GUARDIFY_COMPANY_CODE": "corporacion-gonzalez",
+        "EXPO_PUBLIC_GUARDIFY_HEARTBEAT_SECONDS": "60"
+      }
     }
   }
 }
