@@ -21,6 +21,18 @@ manifiesto sin entrada ahí hace fallar la prueba: hay que justificarlo antes.
 | `VIBRATE` | Notificaciones y respuesta háptica | Instalación (permiso normal) |
 | `REQUEST_INSTALL_PACKAGES` | Actualización descargando el APK | El sistema pide «instalar apps desconocidas» al actualizar. **Retirar si se deja de distribuir por descarga.** |
 
+### Solo en la variante `lite` (pruebas con Guardify)
+
+Declarados en `apps/mobile/android/app/src/lite/AndroidManifest.xml` (el `prebuild --clean` no lo regenera: es un archivo del proyecto) y justificados en
+`soloVarianteLite` de `android-permissions.json`. La prueba comprueba que coinciden y que `full`/`prod` no los declaran.
+
+| Permiso | Función | Cuándo se pide |
+|---|---|---|
+| `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_LOCATION` | Servicio en primer plano (notificación fija) que comparte la ubicación del equipo con el mapa de Guardify con la pantalla bloqueada | Instalación (permisos normales). El servicio solo arranca con Guardify encendido, la empresa activando el rastreo y el consentimiento de la persona, con la app visible. **No se usa `ACCESS_BACKGROUND_LOCATION`.** |
+
+Nota: la librería `expo-task-manager` agrega su propio receptor/servicio al manifiesto fusionado de todas las variantes (sin permisos nuevos fuera de `lite`);
+sin Guardify encendido no se ejecuta nada.
+
 ### Permisos retirados
 
 Se agregan con `tools:node="remove"`, que además limpia los que aportan las librerías al fusionar manifiestos.

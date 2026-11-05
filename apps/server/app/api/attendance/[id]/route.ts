@@ -16,6 +16,7 @@ import { getTiempoGraciaMarcarSalida } from "../../../../utils/getTiempoGraciaMa
 import { buildMarcaCandidata, puedeCerrarseAutomaticamente } from "../../../../utils/resolveMarcaConflicto";
 import { dynDesdeRequest } from "../../../../utils/documentos/dyn";
 import { entregarDocumentosPendientes } from "../../../../utils/documentos/service";
+import { guardifyFeatureOn } from "../../../../utils/guardifyFlags";
 import { reportError } from "../../../../utils/reportError";
 
 import { auditUpdateFields } from "../../../../utils/auditFields";
@@ -300,7 +301,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
                 // Entrega de documentos (issue #154): al marcar el ingreso se crean los vínculos pendientes entre el empleado y los documentos de su puesto
                 // (y los de las asignaciones vigentes de Guardify que lo alcanzan), con la fecha de entrega. Nunca bloquea el ingreso.
-                try {
+                // Interruptor: GUARDIFY_DOCS_DELIVERY=off la apaga (por defecto sigue encendida, como hoy).
+                if (guardifyFeatureOn("GUARDIFY_DOCS_DELIVERY")) try {
                     const ahoraEntrega = Number.isNaN(horaAccionDate.getTime()) ? toZonedTime(new Date(), "America/Costa_Rica") : horaAccionDate;
                     // La marca no guarda la división: sale del contrato.
                     const contratoMarca = marcaDia.contrato_id ? await prisma.e_estructura_contrato.findUnique({ where: { id: marcaDia.contrato_id }, select: { division_id: true } }) : null;
