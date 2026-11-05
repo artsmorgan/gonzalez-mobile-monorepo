@@ -198,6 +198,64 @@ export function heartbeatLocation(p: {
   return out;
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Rastreo en vivo (mapa de Guardify): ubicación cada pocos segundos mientras la app está abierta
+
+export const LIVE_MIN_SECONDS = 2;
+export const LIVE_MAX_SECONDS = 60;
+/** Máximo de puntos guardados sin enviar (sin red); los más viejos se descartan. */
+export const LIVE_BUFFER_MAX = 60;
+/** Máximo de puntos por envío (el servidor acepta 30). */
+export const LIVE_BATCH_MAX = 30;
+
+export type LivePoint = { lat: number; lng: number; accuracy?: number; speed?: number; heading?: number; at: number };
+
+/** Cada cuántos segundos manda la ubicación según lo que respondió Guardify (`0` = apagado; fuera de 2–60 se acota). */
+export function normalizeLiveSeconds(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.max(LIVE_MIN_SECONDS, Math.min(LIVE_MAX_SECONDS, Math.round(n)));
+}
+
+/** Lectura del GPS -> punto para Guardify (`null` si las coordenadas no son válidas). Velocidad y rumbo negativos (sin dato) se omiten. */
+export function toLivePoint(
+  c: { latitude: number; longitude: number; accuracy?: number | null; speed?: number | null; heading?: number | null },
+  atMs: number,
+): LivePoint | null {
+  if (!Number.isFinite(c.latitude) || !Number.isFinite(c.longitude) || Math.abs(c.latitude) > 90 || Math.abs(c.longitude) > 180) return null;
+  if (!Number.isFinite(atMs) || atMs <= 0) return null;
+  const ok = (v: number | null | undefined, max: number) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= max ? v : undefined);
+  const accuracy = ok(c.accuracy, 100_000);
+  const speed = ok(c.speed, 300);
+  const heading = ok(c.heading, 360);
+  return {
+    lat: c.latitude,
+    lng: c.longitude,
+    ...(accuracy !== undefined ? { accuracy } : {}),
+    ...(speed !== undefined ? { speed } : {}),
+    ...(heading !== undefined ? { heading } : {}),
+    at: Math.round(atMs),
+  };
+}
+
+/** Agrega puntos nuevos al final y conserva solo los últimos `max`. */
+export function appendLivePoints(buffer: LivePoint[], add: LivePoint[], max = LIVE_BUFFER_MAX): LivePoint[] {
+  const all = buffer.concat(add);
+  return all.length > max ? all.slice(all.length - max) : all;
+}
+
+/** ¿Debe estar corriendo el rastreo? Solo con la empresa activándolo, la persona consintiendo, el permiso del sistema, la app abierta y utilizable. */
+export function wantLiveTracking(p: { seconds: number; consent: LocationConsent | null | undefined; permissionGranted: boolean; appActive: boolean; gateOpen: boolean }): boolean {
+  return p.seconds > 0 && p.consent === 'granted' && p.permissionGranted && p.appActive && p.gateOpen;
+}
+
+/** Qué hacer si falla un envío: `retry` = conservar los puntos y reintentar (sin red, error del servidor o límite de frecuencia); `stop` = dejar de rastrear (lo desactivaron, falta consentimiento o el equipo ya no está activo). */
+export function liveFailureAction(status: number | undefined | null, code?: string | null): 'stop' | 'retry' {
+  const st = Number(status ?? 0);
+  if (code === 'network' || st === 0 || st === 429 || st >= 500) return 'retry';
+  return 'stop';
+}
+
 /** Nombre del archivo con el que se guarda el APK descargado. */
 export function apkFileName(variant: string, version: string): string {
   const v = String(variant || 'app').replace(/[^a-z0-9_-]+/gi, '');

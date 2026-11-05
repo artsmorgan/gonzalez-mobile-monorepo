@@ -9,7 +9,12 @@ import {
     decideUpdate,
     gateScreenFor,
     isGateOpen,
+    appendLivePoints,
     isTruthyFlag,
+    liveFailureAction,
+    normalizeLiveSeconds,
+    toLivePoint,
+    wantLiveTracking,
     normalizeCompanyCode,
     parseHeartbeatMs,
     renewDue,
@@ -151,5 +156,45 @@ describe("renovación y latidos", () => {
     it("nombre del APK sin caracteres raros", () => {
         assert.equal(apkFileName("prod", "1.0.5"), "MonitoreApp-prod-1.0.5.apk");
         assert.equal(apkFileName("li te", "1.0/5"), "MonitoreApp-lite-1.05.apk");
+    });
+});
+
+describe("rastreo en vivo", () => {
+    it("los segundos que manda Guardify se acotan: 0 = apagado, mínimo 2 y máximo 60", () => {
+        assert.equal(normalizeLiveSeconds(undefined), 0);
+        assert.equal(normalizeLiveSeconds(0), 0);
+        assert.equal(normalizeLiveSeconds("x"), 0);
+        assert.equal(normalizeLiveSeconds(1), 2);
+        assert.equal(normalizeLiveSeconds(5), 5);
+        assert.equal(normalizeLiveSeconds(900), 60);
+    });
+    it("convierte la lectura del GPS en un punto y omite lo que no es válido", () => {
+        assert.deepEqual(toLivePoint({ latitude: 9.9, longitude: -84.1, accuracy: 6.5, speed: 2.5, heading: 90 }, 1_700_000_000_000.4), { lat: 9.9, lng: -84.1, accuracy: 6.5, speed: 2.5, heading: 90, at: 1_700_000_000_000 });
+        // velocidad y rumbo -1 = sin dato en Android
+        assert.deepEqual(toLivePoint({ latitude: 1, longitude: 2, speed: -1, heading: -1, accuracy: null }, 5), { lat: 1, lng: 2, at: 5 });
+        assert.equal(toLivePoint({ latitude: 91, longitude: 0 }, 5), null);
+        assert.equal(toLivePoint({ latitude: 0, longitude: NaN }, 5), null);
+        assert.equal(toLivePoint({ latitude: 0, longitude: 0 }, 0), null);
+    });
+    it("la cola de puntos sin enviar tiene tope y conserva los más nuevos", () => {
+        const pt = (i: number) => ({ lat: 1, lng: 1, at: i });
+        const out = appendLivePoints([pt(1), pt(2), pt(3)], [pt(4), pt(5)], 4);
+        assert.deepEqual(out.map((p) => p.at), [2, 3, 4, 5]);
+        assert.equal(appendLivePoints([], [pt(1)]).length, 1);
+    });
+    it("solo rastrea con todo en regla: activado por la empresa, consentimiento, permiso, app abierta y equipo utilizable", () => {
+        const ok = { seconds: 5, consent: "granted" as const, permissionGranted: true, appActive: true, gateOpen: true };
+        assert.equal(wantLiveTracking(ok), true);
+        for (const bad of [{ seconds: 0 }, { consent: "declined" as const }, { consent: null }, { permissionGranted: false }, { appActive: false }, { gateOpen: false }]) {
+            assert.equal(wantLiveTracking({ ...ok, ...bad }), false, JSON.stringify(bad));
+        }
+    });
+    it("un envío fallido se reintenta si es de red, de límite o del servidor; se detiene si lo desactivaron o falta consentimiento", () => {
+        assert.equal(liveFailureAction(0, "network"), 'retry');
+        assert.equal(liveFailureAction(429), 'retry');
+        assert.equal(liveFailureAction(503), 'retry');
+        assert.equal(liveFailureAction(409, "live_location_disabled"), 'stop');
+        assert.equal(liveFailureAction(403, "location_consent_required"), 'stop');
+        assert.equal(liveFailureAction(403, "device_blocked"), 'stop');
     });
 });

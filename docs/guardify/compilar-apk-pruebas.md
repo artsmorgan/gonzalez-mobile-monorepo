@@ -41,13 +41,13 @@ Esto es **solo para el entorno de pruebas**: en Guardify la instalación de Gonz
 - **Cortar acceso**: cierre de sesión remoto y revocación de sesiones; el servidor consulta a Guardify la lista de revocaciones.
 - **Sesión del empleado en Guardify** («login del dispositivo»): al entrar a la app se abre su sesión con la cédula; en pruebas Guardify admite a cualquier empleado con el rol Operativo. Si González lo bloquea, la app muestra «Acceso no autorizado» y cierra la sesión.
 - **Actualización obligatoria** desde el catálogo de APK de Guardify (versión mínima).
-- **Ubicación en el mapa de Guardify**: aviso de consentimiento una sola vez; con «Aceptar», el latido manda la última ubicación (y la batería) cada 60 s **mientras la app está abierta**. No hay seguimiento en segundo plano: con la app cerrada no se actualiza.
+- **Ubicación en vivo en el mapa de Guardify** (como un viaje): aviso de consentimiento una sola vez; con «Aceptar», la app manda su posición cada pocos segundos (hoy 5 s, lo define González en Guardify, no la build) y el mapa de la consola se mueve solo, con recorrido y velocidad. **Solo mientras la app está abierta**: con la pantalla bloqueada o la app en segundo plano no hay seguimiento (eso requeriría un servicio en primer plano de Android con notificación fija y un permiso nuevo; no está incluido). El latido de 60 s sigue llevando batería y último contacto.
 
 ## Probar (lo mínimo)
 
 1. Instalar el APK en un teléfono: aparece la pantalla «Pendiente de aprobación» (no hay login todavía).
 2. En Guardify el equipo aparece como «Pendiente»; pedirle a González/Aletz que lo apruebe → la app pasa sola al login. Iniciar sesión con **cualquier empleado**: entra con el rol Operativo.
-3. Aceptar el aviso de ubicación → el equipo aparece en el mapa y se mueve a cada latido.
+3. Aceptar el aviso de ubicación → en la consola (Dispositivos → Mapa en vivo) el equipo aparece como «En vivo» y se mueve cada ~5 s mientras la app esté abierta.
 4. Desde Guardify bloquear el equipo → la app muestra «bloqueado» en cuanto consulta su estado (órdenes cada 10 s, latido cada 60 s); habilitarlo → vuelve a funcionar (estando bloqueada, la app vuelve a preguntar cada 60 s).
 5. Cerrar sesión de la persona desde Guardify → la app cierra sesión.
 
