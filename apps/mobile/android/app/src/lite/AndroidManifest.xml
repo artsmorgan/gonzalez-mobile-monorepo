@@ -1,11 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <!--
-    Rastreo de ubicación en segundo plano para el mapa de Guardify (servicio en primer plano de expo-location, con notificación fija).
-    Se declara SOLO en la variante `lite` (pruebas): las variantes `full` y `prod` no cambian sus permisos. La app solo pide el permiso
-    «todo el tiempo» si Guardify está encendido y la empresa activó el rastreo en vivo; sin esto, el arranque del servicio falla y la app
-    sigue rastreando solo con la pantalla abierta.
+    Rastreo de ubicación para el mapa de Guardify con la app en segundo plano: servicio en primer plano de expo-location (notificación fija).
+    Se declara SOLO en la variante `lite` (pruebas): `full` y `prod` no cambian sus permisos. No se necesita ACCESS_BACKGROUND_LOCATION: el servicio
+    de tipo ubicación se arranca con la app visible. Si el sistema no deja arrancarlo, la app sigue rastreando solo con la pantalla abierta.
+    Justificación en android-permissions.json (soloVarianteLite).
   -->
-  <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 </manifest>

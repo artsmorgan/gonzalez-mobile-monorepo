@@ -245,18 +245,37 @@ export function appendLivePoints(buffer: LivePoint[], add: LivePoint[], max = LI
 }
 
 /**
- * ¿Debe estar corriendo el rastreo? Solo con la empresa activándolo, la persona consintiendo, el permiso del sistema y la sesión del empleado abierta.
- * Con el permiso «todo el tiempo» sigue en segundo plano; sin él, solo con la app abierta.
+ * ¿Debe estar corriendo el rastreo? Solo con la empresa activándolo, la persona consintiendo, el permiso de ubicación y la sesión del empleado abierta.
+ * Con la app visible se puede arrancar; en segundo plano solo se mantiene si el servicio en primer plano ya está corriendo (Android no deja arrancarlo desde ahí).
  */
 export function wantLiveTracking(p: {
   seconds: number;
   consent: LocationConsent | null | undefined;
   permissionGranted: boolean;
-  backgroundGranted: boolean;
+  serviceRunning: boolean;
   appActive: boolean;
   sessionOpen: boolean;
 }): boolean {
-  return p.seconds > 0 && p.consent === 'granted' && p.permissionGranted && p.sessionOpen && (p.appActive || p.backgroundGranted);
+  return p.seconds > 0 && p.consent === 'granted' && p.permissionGranted && p.sessionOpen && (p.appActive || p.serviceRunning);
+}
+
+/** Huella con la que se arrancó el servicio: hora de arranque del equipo (aprox.) y versión de la app. */
+export type ServiceMarker = { boot: number | null; v: string };
+
+/**
+ * ¿La huella guardada corresponde a este arranque del equipo y a esta versión de la app? Si no, la tarea que Android restauró (tras reiniciar el
+ * equipo o actualizar la app) no tiene su notificación y debe apagarse. La hora de arranque se estima restando el tiempo encendido, así que se tolera un margen.
+ */
+export function serviceMarkerValid(stored: string | null | undefined, current: ServiceMarker, toleranceMs = 120_000): boolean {
+  if (!stored) return false;
+  try {
+    const m = JSON.parse(stored) as Partial<ServiceMarker>;
+    if (typeof m.v !== 'string' || m.v !== current.v) return false;
+    if (typeof m.boot === 'number' && typeof current.boot === 'number') return Math.abs(m.boot - current.boot) <= toleranceMs;
+    return true; // sin dato de arranque en alguno de los dos lados: solo cuenta la versión
+  } catch {
+    return false;
+  }
 }
 
 /** Qué hacer si falla un envío: `retry` = conservar los puntos y reintentar (sin red, error del servidor o límite de frecuencia); `stop` = dejar de rastrear (lo desactivaron, falta consentimiento o el equipo ya no está activo). */

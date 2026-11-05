@@ -96,9 +96,9 @@ export default function GuardifyGate({ logout, isAuthenticated, cedula }: Props)
         <View style={styles.container}>
           <Text style={styles.title}>Ubicación del equipo</Text>
           <Text style={styles.body}>
-            Tu empresa puede ver la ubicación de este equipo en un mapa en tiempo real mientras trabajas con la sesión abierta. Si das el permiso
-            «todo el tiempo», se comparte también con la pantalla bloqueada y verás una notificación fija mientras dure. Solo se envía con tu
-            autorización y puedes seguir trabajando si no la das; las acciones que registras siguen guardando su ubicación como hasta ahora.
+            Tu empresa puede ver la ubicación de este equipo en un mapa en tiempo real mientras trabajas con la sesión abierta, también con la
+            pantalla bloqueada (verás una notificación fija mientras se comparte). Solo se envía con tu autorización y puedes seguir trabajando
+            si no la das; las acciones que registras siguen guardando su ubicación como hasta ahora.
           </Text>
           <TouchableOpacity style={styles.primary} onPress={() => void setLocationConsent('granted')} accessibilityRole="button">
             <Text style={styles.primaryText}>Aceptar</Text>

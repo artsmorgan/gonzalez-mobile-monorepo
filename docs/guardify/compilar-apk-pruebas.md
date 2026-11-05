@@ -4,7 +4,7 @@ Esta guía es para quien compila el APK. **No hay que cambiar código ni variabl
 
 ## Compilar
 
-Desde la rama `servidor` actualizada (`git pull`):
+Desde la rama `servidor` actualizada (`git pull`). **Esta versión agrega una dependencia nativa (`expo-task-manager`)**: ejecutar `npm ci` en la raíz antes de compilar si se compila en local (EAS lo hace solo).
 
 ```bash
 cd apps/mobile
@@ -41,13 +41,14 @@ Esto es **solo para el entorno de pruebas**: en Guardify la instalación de Gonz
 - **Cortar acceso**: cierre de sesión remoto y revocación de sesiones; el servidor consulta a Guardify la lista de revocaciones.
 - **Sesión del empleado en Guardify** («login del dispositivo»): al entrar a la app se abre su sesión con la cédula; en pruebas Guardify admite a cualquier empleado con el rol Operativo. Si González lo bloquea, la app muestra «Acceso no autorizado» y cierra la sesión.
 - **Actualización obligatoria** desde el catálogo de APK de Guardify (versión mínima).
-- **Ubicación en vivo en el mapa de Guardify** (como un viaje): aviso de consentimiento una sola vez; con «Aceptar», la app manda su posición cada pocos segundos (hoy 5 s; lo define González en Guardify, no la build) y el mapa de la consola se mueve solo, con recorrido y velocidad. Solo mientras la **sesión del empleado está abierta**. Con el permiso de ubicación **«Permitir todo el tiempo»** (la app lo pide una vez, abre los ajustes de Android) el rastreo sigue con la pantalla bloqueada o la app en segundo plano mediante un servicio en primer plano con **notificación fija**; sin ese permiso solo funciona con la app abierta. Los permisos del servicio están declarados solo en la variante `lite` (`android/app/src/lite/AndroidManifest.xml`); `full` y `prod` no cambian. Límites: en algunos teléfonos (Xiaomi, Huawei, Samsung con ahorro de batería) hay que quitar la optimización de batería a la app o Android la detiene; bloquear o retirar el equipo corta el rastreo en el siguiente envío (≤ 5 s), pero «cortar acceso» a una persona estando la app en segundo plano surte efecto al volver a abrirla.
+- **Ubicación en vivo en el mapa de Guardify** (como un viaje): aviso de consentimiento una sola vez; con «Aceptar», la app manda su posición cada pocos segundos (hoy 5 s; lo define González en Guardify, no la build) y el mapa de la consola se mueve solo, con recorrido y velocidad. Solo mientras la **sesión del empleado está abierta**. En Android la app arranca un **servicio en primer plano de ubicación** (notificación fija «Compartiendo la ubicación…») cuando se abre con el rastreo activo: sigue con la pantalla bloqueada o la app en segundo plano. **No pide «Permitir todo el tiempo»**: basta el permiso normal de ubicación («Mientras se usa la app»). Si Android no deja arrancar el servicio, el rastreo corre solo con la app abierta. Los permisos del servicio están declarados solo en la variante `lite` (`android/app/src/lite/AndroidManifest.xml`).
+  - **Límites conocidos:** (1) en segundo plano Android entrega las lecturas por lotes, puede haber retraso de hasta ~1 min; con la app abierta es en tiempo real. (2) Android no permite arrancar el servicio desde segundo plano: si el teléfono se reinicia o la app se actualiza, el rastreo se apaga y vuelve la próxima vez que se abra la app. (3) Bloquear o retirar el **equipo** corta el rastreo en el siguiente envío; «cortar acceso» a una **persona** con la app en segundo plano surte efecto al volver a abrirla. (4) En algunos teléfonos (Xiaomi, Huawei, Samsung con ahorro de batería) hay que quitar la optimización de batería a la app o Android la detiene.
 
 ## Probar (lo mínimo)
 
 1. Instalar el APK en un teléfono: aparece la pantalla «Pendiente de aprobación» (no hay login todavía).
 2. En Guardify el equipo aparece como «Pendiente»; pedirle a González/Aletz que lo apruebe → la app pasa sola al login. Iniciar sesión con **cualquier empleado**: entra con el rol Operativo.
-3. Aceptar el aviso de ubicación → en la consola (Dispositivos → Mapa en vivo) el equipo aparece como «En vivo» y se mueve cada ~5 s mientras la app esté abierta.
+3. Aceptar el aviso de ubicación (y el permiso «Mientras se usa la app») → en la consola (Dispositivos → Mapa en vivo) el equipo aparece como «En vivo» y se mueve cada ~5 s. Bloquear la pantalla y caminar: aparece la notificación fija y el punto sigue moviéndose (con posible retraso de hasta ~1 min por lote).
 4. Desde Guardify bloquear el equipo → la app muestra «bloqueado» en cuanto consulta su estado (órdenes cada 10 s, latido cada 60 s); habilitarlo → vuelve a funcionar (estando bloqueada, la app vuelve a preguntar cada 60 s).
 5. Cerrar sesión de la persona desde Guardify → la app cierra sesión.
 

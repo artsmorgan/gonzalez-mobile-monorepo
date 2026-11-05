@@ -19,6 +19,7 @@ import {
     parseHeartbeatMs,
     renewDue,
     resolveGuardifyConfig,
+    serviceMarkerValid,
 } from "../../mobile/hooks/guardifyLogic";
 import { describeDeviceStatus } from "../../mobile/hooks/deviceNotApproved";
 import { compararVersiones } from "./guardifyDevices";
@@ -183,17 +184,38 @@ describe("rastreo en vivo", () => {
         assert.deepEqual(out.map((p) => p.at), [2, 3, 4, 5]);
         assert.equal(appendLivePoints([], [pt(1)]).length, 1);
     });
-    it("solo rastrea con todo en regla; en segundo plano solo con el permiso «todo el tiempo»", () => {
-        const ok = { seconds: 5, consent: "granted" as const, permissionGranted: true, backgroundGranted: false, appActive: true, sessionOpen: true };
+    it("solo rastrea con todo en regla; en segundo plano solo si el servicio en primer plano ya corre", () => {
+        const ok = { seconds: 5, consent: "granted" as const, permissionGranted: true, serviceRunning: false, appActive: true, sessionOpen: true };
         assert.equal(wantLiveTracking(ok), true);
         for (const bad of [{ seconds: 0 }, { consent: "declined" as const }, { consent: null }, { permissionGranted: false }, { sessionOpen: false }]) {
             assert.equal(wantLiveTracking({ ...ok, ...bad }), false, JSON.stringify(bad));
         }
-        // app en segundo plano: sin permiso «todo el tiempo» se detiene; con él sigue
+        // app en segundo plano: Android no deja arrancar el servicio desde ahí, solo se conserva el que ya corre
         assert.equal(wantLiveTracking({ ...ok, appActive: false }), false);
-        assert.equal(wantLiveTracking({ ...ok, appActive: false, backgroundGranted: true }), true);
-        // sin sesión abierta nunca rastrea, ni con el permiso de segundo plano
-        assert.equal(wantLiveTracking({ ...ok, appActive: false, backgroundGranted: true, sessionOpen: false }), false);
+        assert.equal(wantLiveTracking({ ...ok, appActive: false, serviceRunning: true }), true);
+        // sin sesión abierta, sin consentimiento o apagado por la empresa nunca rastrea, ni con el servicio corriendo
+        assert.equal(wantLiveTracking({ ...ok, appActive: false, serviceRunning: true, sessionOpen: false }), false);
+        assert.equal(wantLiveTracking({ ...ok, appActive: false, serviceRunning: true, consent: "declined" }), false);
+        assert.equal(wantLiveTracking({ ...ok, appActive: false, serviceRunning: true, seconds: 0 }), false);
+    });
+    it("la huella del servicio solo vale para el mismo arranque del equipo y la misma versión de la app", () => {
+        const cur = { boot: 1_000_000, v: "1.4.0" };
+        const stored = JSON.stringify(cur);
+        assert.equal(serviceMarkerValid(stored, cur), true);
+        // el arranque se estima restando el tiempo encendido: se tolera un margen
+        assert.equal(serviceMarkerValid(stored, { ...cur, boot: cur.boot + 60_000 }), true);
+        // equipo reiniciado: Android restauró la tarea sin notificación
+        assert.equal(serviceMarkerValid(stored, { ...cur, boot: cur.boot + 10 * 60_000 }), false);
+        // app actualizada
+        assert.equal(serviceMarkerValid(stored, { ...cur, v: "1.4.1" }), false);
+        // sin huella o dañada
+        assert.equal(serviceMarkerValid(null, cur), false);
+        assert.equal(serviceMarkerValid("", cur), false);
+        assert.equal(serviceMarkerValid("no-json", cur), false);
+        assert.equal(serviceMarkerValid(JSON.stringify({ boot: 1 }), cur), false);
+        // sin dato de arranque en alguno de los lados: solo cuenta la versión
+        assert.equal(serviceMarkerValid(JSON.stringify({ boot: null, v: "1.4.0" }), cur), true);
+        assert.equal(serviceMarkerValid(stored, { boot: null, v: "1.4.0" }), true);
     });
     it("un envío fallido se reintenta si es de red, de límite o del servidor; se detiene si lo desactivaron o falta consentimiento", () => {
         assert.equal(liveFailureAction(0, "network"), 'retry');

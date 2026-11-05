@@ -20,7 +20,9 @@ function permisosQuitados(xml: string): string[] {
         .filter((m) => /tools:node="remove"/.test(m[1]!))
         .map((m) => /android:name="([^"]+)"/.exec(m[1]!)![1]!);
 }
-const permitidos: { permission: string; funcion: string; cuando: string }[] = JSON.parse(leer("android-permissions.json")).permitidos;
+const politica = JSON.parse(leer("android-permissions.json"));
+const permitidos: { permission: string; funcion: string; cuando: string }[] = politica.permitidos;
+const soloLite: { permission: string; funcion: string; cuando: string }[] = politica.soloVarianteLite ?? [];
 
 describe("permisos de Android (issue #180)", () => {
     it("el manifiesto no tiene ningún permiso activo que no esté en la lista permitida y justificada", () => {
@@ -42,6 +44,20 @@ describe("permisos de Android (issue #180)", () => {
             assert.ok(permisosQuitados(xml).includes(p), `${p} debe llevar tools:node="remove" para que tampoco entre por una librería`);
         }
         assert.match(xml, /xmlns:tools="http:\/\/schemas\.android\.com\/tools"/);
+    });
+    it("la variante lite (pruebas) solo agrega los permisos del servicio de ubicación, justificados, y full/prod no los tienen", () => {
+        const lite = permisosActivos(leer("android/app/src/lite/AndroidManifest.xml"));
+        assert.deepEqual([...lite].sort(), soloLite.map((p) => p.permission).sort());
+        for (const p of soloLite) {
+            assert.ok(p.funcion.trim().length > 10 && p.cuando.trim().length > 5, `${p.permission}: falta justificación`);
+        }
+        // nada de ubicación «todo el tiempo»: el servicio en primer plano se arranca con la app visible
+        assert.equal(lite.includes("android.permission.ACCESS_BACKGROUND_LOCATION"), false);
+        assert.equal(permisosActivos(manifest()).includes("android.permission.ACCESS_BACKGROUND_LOCATION"), false);
+        for (const flavor of ["full", "prod"]) {
+            const f = path.join(mobile, "android/app/src", flavor, "AndroidManifest.xml");
+            if (fs.existsSync(f)) assert.deepEqual(permisosActivos(fs.readFileSync(f, "utf8")).filter((p) => soloLite.some((l) => l.permission === p)), [], `${flavor} no debe declarar los permisos de lite`);
+        }
     });
     it("lo quitado y lo permitido no se cruzan", () => {
         const lista = permitidos.map((p) => p.permission);

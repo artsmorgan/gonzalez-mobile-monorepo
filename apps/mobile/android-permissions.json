@@ -51,5 +51,18 @@
       "funcion": "Actualización de la app descargando el APK (retirar si se deja de distribuir por descarga)",
       "cuando": "El sistema pide «instalar apps desconocidas» al instalar la actualización"
     }
-  ]
+  ],
+  "soloVarianteLite": [
+    {
+      "permission": "android.permission.FOREGROUND_SERVICE",
+      "funcion": "Servicio en primer plano que comparte la ubicación del equipo con el mapa de Guardify mientras el empleado trabaja",
+      "cuando": "Instalación (permiso normal); el servicio solo arranca con Guardify encendido, la empresa activando el rastreo y el consentimiento de la persona"
+    },
+    {
+      "permission": "android.permission.FOREGROUND_SERVICE_LOCATION",
+      "funcion": "Tipo «ubicación» del servicio en primer plano (obligatorio desde Android 14)",
+      "cuando": "Instalación (permiso normal); mismas condiciones que FOREGROUND_SERVICE"
+    }
+  ],
+  "descripcion_soloVarianteLite": "Permisos declarados únicamente en android/app/src/lite/AndroidManifest.xml (variante de pruebas). Las variantes full y prod no los tienen."
 }
