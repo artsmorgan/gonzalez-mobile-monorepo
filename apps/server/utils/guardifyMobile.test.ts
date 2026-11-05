@@ -5,11 +5,13 @@ import {
     batteryPercent,
     commandEffect,
     compareVersions,
+    DEFAULT_HEARTBEAT_MS,
     decideUpdate,
     gateScreenFor,
     isGateOpen,
     isTruthyFlag,
     normalizeCompanyCode,
+    parseHeartbeatMs,
     renewDue,
     resolveGuardifyConfig,
 } from "../../mobile/hooks/guardifyLogic";
@@ -58,6 +60,16 @@ describe("configuración", () => {
         const sinUrl = resolveGuardifyConfig({ GUARDIFY_ENABLED: "true" }, "prod");
         assert.deepEqual([sinUrl.enabled, sinUrl.switchedOn], [false, true]);
         for (const encendido of ["true", "TRUE", " 1 ", "on", "yes", "si", "sí", true]) assert.equal(resolveGuardifyConfig({ ...conUrl, GUARDIFY_ENABLED: encendido }, "prod").enabled, true, String(encendido));
+    });
+    it("el latido es de 5 minutos salvo que la build diga otra cosa, con piso de 30 s y techo de 1 h", () => {
+        for (const v of [undefined, null, "", "  ", "abc", "0", "-5", NaN]) assert.equal(parseHeartbeatMs(v), DEFAULT_HEARTBEAT_MS, String(v));
+        assert.equal(DEFAULT_HEARTBEAT_MS, 300_000);
+        assert.equal(parseHeartbeatMs("60"), 60_000);
+        assert.equal(parseHeartbeatMs(" 90 "), 90_000);
+        assert.equal(parseHeartbeatMs("5"), 30_000); // el piso respeta el límite de Guardify (60 latidos por minuto y por IP)
+        assert.equal(parseHeartbeatMs("999999"), 3_600_000);
+        assert.equal(resolveGuardifyConfig({}, "lite").heartbeatMs, DEFAULT_HEARTBEAT_MS);
+        assert.equal(resolveGuardifyConfig({ GUARDIFY_HEARTBEAT_SECONDS: "60" }, "lite").heartbeatMs, 60_000);
     });
     it("el interruptor reconoce solo valores afirmativos", () => {
         for (const v of ["true", "1", "on", "Yes", "SI", true]) assert.equal(isTruthyFlag(v), true, String(v));
