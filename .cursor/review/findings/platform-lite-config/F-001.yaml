@@ -1,0 +1,19 @@
+id: F-001
+module_id: platform-lite-config
+severity: high
+status: fixed
+file: apps/mobile/android/app/build.gradle
+lines: "91-94"
+category: android
+title: Proyecto Android prebuild commiteado como variant FULL — Lite desalineado
+description: |
+  app.config.js define package Lite com.abrjpo98.MonitoreApp.lite cuando APP_VARIANT=lite.
+  android/app/build.gradle tiene namespace y applicationId hardcoded a .full.
+  MainActivity.kt solo existe en .../MonitoreApp/full/.
+  EAS preview-lite setea APP_VARIANT=lite pero si usa carpeta android commiteada, el APK puede ser .full.
+reproduction: |
+  1. Comparar app.config.js android.package (lite) vs build.gradle applicationId (.full).
+  2. Buscar MainActivity bajo lite/ — no existe en baseline.
+  3. eas build --profile preview-lite sin expo prebuild regenerado.
+impact: Soft-release Lite podría publicarse con package incorrecto, FCM/google-services mismatch, imposibilidad de instalar lite+full lado a lado.
+suggested_fix: Regenerar android con APP_VARIANT=lite (expo prebuild) antes de EAS; o flavors Gradle lite/full; verificar applicationId en APK output.

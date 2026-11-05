@@ -1,0 +1,15 @@
+id: F-002
+module_id: general-induction-register
+severity: low
+status: fixed
+file: apps/mobile/hooks/generalInductionRegisterCache.ts
+lines: "10-16"
+category: storage
+title: Migración omitida si caché dedicado vacío
+description: |
+  Array vacío en GIR cache skip migration from evaluations_cache.
+reproduction: |
+  1. GIR cache [] y datos solo en evaluations_cache.
+impact: Registros legacy invisibles.
+suggested_fix: |
+  Migrar si dedicated empty y legacy has rows.

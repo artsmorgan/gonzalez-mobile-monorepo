@@ -1,0 +1,15 @@
+id: F-002
+module_id: surveys
+severity: medium
+status: fixed
+file: apps/mobile/App.tsx
+lines: "7099-7116"
+category: offline
+title: Update/patchFirma no refrescan surveys_cache
+description: |
+  Sync update exitoso no escribe surveys_cache.
+reproduction: |
+  1. Offline edit → sync.
+impact: Cache local stale.
+suggested_fix: |
+  Actualizar surveys_cache tras update sync.

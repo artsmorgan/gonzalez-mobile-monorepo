@@ -1,53 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { actions } from "../../../../public/actions";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 
-const prisma = new PrismaClient();
+import { prisma } from "../../../../utils/prismaClient";
+import { reportError } from "../../../../utils/reportError";
 
 export async function GET(request: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(request);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(request);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
-
-        const { searchParams } = new URL(request.url);
-        const roleName = searchParams.get("roleName");
-        if (!roleName) {
-            return NextResponse.json({ message: "Rol no especificado" }, { status: 404 });
-        }
-        const actionsForRole = [];
-        for (const actionModule of actions) {
-            if (actionModule.actions) {
-                const actionsValidated = [];
-                for (const action of actionModule.actions) {
-                    actionsValidated.push({ nombre: action, validate: false });
-                }
-
-                const roleModule = await prisma.roles_security_modules.findFirst({ where: { role_name: roleName, module_name: actionModule.nombre } });
-                if (roleModule && roleModule.actions != null && roleModule.actions != "") {
-                    for (const actionRole of JSON.parse(roleModule.actions)) {
-                        const actToValidate = actionsValidated.find(a => a.nombre === actionRole);
-                        if (actToValidate) {
-                            actToValidate.validate = true;
-                        }
-                    }
-                }
-                actionsForRole.push({
-                    module_name: actionModule.nombre,
-                    actions: actionsValidated
-                });
-            }
-        }
-
-        return NextResponse.json(actionsForRole);
+        return NextResponse.json([]);
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(request, "api/roles/reglas", "GET", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }

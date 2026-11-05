@@ -1,0 +1,16 @@
+id: F-001
+module_id: trainings
+severity: high
+status: fixed
+file: apps/mobile/hooks/trainingAttachmentsSync.ts
+lines: "64-104"
+category: offline
+title: Sync sube training sin adjuntos si archivos missing
+description: |
+  buildTrainingFilesAndMetaFromFileMeta omite archivos con warn; sync aún envía POST.
+reproduction: |
+  1. Archivo local borrado.
+  2. Sync trainings_actions.
+impact: Capacitación sin adjuntos en servidor.
+suggested_fix: |
+  diskHydrationComplete guard como complaints-master.

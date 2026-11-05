@@ -1,0 +1,17 @@
+id: F-003
+module_id: platform-auth
+severity: medium
+status: fixed
+file: apps/mobile/hooks/authTokenStorage.ts
+lines: "1-170"
+category: architecture
+title: Dos modelos de sesión paralelos (JWT legacy vs Planillas session mode)
+description: |
+  AuthContext persiste JWT access/refresh clásico sin usar authTokenStorage.persistLegacySession ni SESSION_MODE.
+  authTokenStorage define modos planillas/legacy, getValidPlanillasAccessTokenOrLogout, clearAuthStorage distinto a logout de AuthContext.
+  Riesgo de estados híbridos si algún flujo migra a planillas-mode sin alinear AuthContext.
+reproduction: |
+  1. Comparar keys escritas en login (AuthContext) vs persistPlanillasSession/persistLegacySession.
+  2. Buscar rutas que usen getValidPlanillasAccessTokenOrLogout vs getValidAccessTokenOrLogout en el mismo flujo.
+impact: Bugs sutiles de expiración/logout; difícil de diagnosticar en soft-release con Planillas.
+suggested_fix: Documentar camino canónico para test-soft-001 (JWT+Planillas token auxiliar) o consolidar en authTokenStorage con AuthContext como fachada.

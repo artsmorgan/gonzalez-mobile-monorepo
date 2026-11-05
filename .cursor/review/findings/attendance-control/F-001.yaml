@@ -1,0 +1,15 @@
+id: F-001
+module_id: attendance-control
+severity: medium
+status: fixed
+file: apps/mobile/screens/AttendanceControlScreen.tsx
+lines: "1067-1072,1820-1823"
+category: offline
+title: CRUD online-only; sync create/update en App.tsx es código muerto
+description: |
+  Pantalla bloquea offline; no encola create/update en evaluations_actions.
+reproduction: |
+  1. Crear control sin red.
+impact: Sin modo offline para controles.
+suggested_fix: |
+  Encolar offline o eliminar handlers muertos.

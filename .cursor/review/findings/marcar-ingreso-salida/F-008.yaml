@@ -1,0 +1,19 @@
+id: F-008
+module_id: marcar-ingreso-salida
+severity: medium
+status: fixed
+file: apps/mobile/screens/MarcarIngresoSalidaScreen.tsx
+lines: "1113-1114, 1355-1381"
+category: async
+title: horaAccion stale enviada a API tras validación fresca
+description: |
+  validateBeforeMarkAction obtiene getHoraAccion() y llama setHoraAccion(nowMs), pero
+  confirmAction pasa el state React horaAccion a saveMarca. setState es async; el valor
+  puede ser el del polling anterior (intervalo ~30s).
+reproduction: |
+  1. Pantalla abierta cerca del límite de salida anticipada (15 min).
+  2. Validación pasa con nowMs fresco; confirmAction envía horaAccion stale.
+  3. API clasifica tarde/temprano distinto a la validación local.
+impact: Clasificación incorrecta en el límite del turno; edge case en QA de horarios.
+suggested_fix: |
+  Retornar nowMs desde validateBeforeMarkAction y usar ese valor en saveMarca/appendAttendanceAction.

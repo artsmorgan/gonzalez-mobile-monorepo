@@ -1,0 +1,15 @@
+id: F-003
+module_id: visitors
+severity: low
+status: fixed
+file: apps/mobile/screens/VisitorsScreen.tsx
+lines: "467-475"
+category: connectivity
+title: expo-network gate only
+description: |
+  Sin resolveAppConnectivity.
+reproduction: |
+  1. Offline parcial.
+impact: Ruta incorrecta online/offline.
+suggested_fix: |
+  resolveAppConnectivity.
