@@ -23,6 +23,10 @@ El perfil (`apps/mobile/eas.json`) ya trae, para esta build y ninguna otra:
 | `EXPO_PUBLIC_GUARDIFY_HEARTBEAT_SECONDS` | `60` (latido cada minuto; por defecto son 5 min) |
 | `EXPO_PUBLIC_API_SERVER` | servidor de pruebas de MonitoreApp |
 
+**Siempre con `--profile guardify-pruebas`.** Las variables viven en ese perfil, no en el `.env`. Si compilas sin él (build local, `expo run:android`, otro perfil), `GUARDIFY_ENABLED` queda en `false`: la app no registra el equipo ni muestra la pantalla de Guardify, y tras el login sale «Equipo no registrado» porque el servidor de pruebas exige el equipo aprobado. Si tienes que compilar en local, copia el bloque de Guardify de `apps/mobile/env.example` a tu `.env`.
+
+**Cómo saber que la build lleva Guardify encendido:** al abrir la app, lo primero que aparece es la pantalla «Pendiente de aprobación», antes del login. Si ves el login directo, esa build no lleva Guardify.
+
 Los perfiles `preview*` y `production*` no cambian: siguen con Guardify **apagado**. Si el perfil `guardify-pruebas` no se usa, la app no habla con Guardify.
 
 ## Cómo funciona el acceso en pruebas (primero el equipo, luego la persona)
