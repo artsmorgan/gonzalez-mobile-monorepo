@@ -25,19 +25,28 @@ El perfil (`apps/mobile/eas.json`) ya trae, para esta build y ninguna otra:
 
 Los perfiles `preview*` y `production*` no cambian: siguen con Guardify **apagado**. Si el perfil `guardify-pruebas` no se usa, la app no habla con Guardify.
 
+## Cómo funciona el acceso en pruebas (primero el equipo, luego la persona)
+
+1. **Instalar o actualizar la app** → lo primero que aparece es la pantalla de Guardify, antes del inicio de sesión. El equipo se registra solo con el código de la empresa y queda **«Pendiente de aprobación»**. Ni siquiera se puede ver la pantalla de login.
+2. **González revisa la solicitud en Guardify** (Apps → MonitoreApp → Dispositivos): **aprueba** (la app pasa sola al login en unos 15 s) o **rechaza** (la app muestra «Rechazado» con el motivo). También puede bloquear o retirar un equipo ya aprobado.
+3. **Ya con el equipo aprobado, cualquier empleado entra.** La app lo autentica como siempre (cédula y contraseña de MonitoreApp) y Guardify lo da de alta solo con el rol **Operativo**. No hay que registrar a nadie antes. En Guardify → Usuarios de apps González ve quién entró y le cambia el rol o lo bloquea.
+4. **El servidor de pruebas exige el equipo aprobado** (`GUARDIFY_DEVICE_ENFORCE=on`): un APK viejo, la versión web o cualquier equipo sin aprobar recibe `403 device_not_approved`. Es lo esperado.
+
+Esto es **solo para el entorno de pruebas**: en Guardify la instalación de González tiene «admisión abierta» con rol por defecto. En producción no se usa.
+
 ## Qué incluye la build (ya estaba en el código)
 
 - **Registro del equipo** al abrir la app: queda «Pendiente» hasta que alguien lo apruebe en la consola de Guardify (Apps → MonitoreApp → Dispositivos).
 - **Habilitar / deshabilitar / retirar / bloquear** desde la consola: la app muestra la pantalla de estado correspondiente y deja de funcionar; retirar un equipo borra sus datos locales (primero sincroniza lo pendiente).
 - **Cortar acceso**: cierre de sesión remoto y revocación de sesiones; el servidor consulta a Guardify la lista de revocaciones.
-- **Sesión del empleado en Guardify** («login del dispositivo»): al entrar a la app se abre su sesión con la cédula; si Guardify no lo autoriza, la app muestra «Acceso no autorizado» y cierra la sesión.
+- **Sesión del empleado en Guardify** («login del dispositivo»): al entrar a la app se abre su sesión con la cédula; en pruebas Guardify admite a cualquier empleado con el rol Operativo. Si González lo bloquea, la app muestra «Acceso no autorizado» y cierra la sesión.
 - **Actualización obligatoria** desde el catálogo de APK de Guardify (versión mínima).
 - **Ubicación en el mapa de Guardify**: aviso de consentimiento una sola vez; con «Aceptar», el latido manda la última ubicación (y la batería) cada 60 s **mientras la app está abierta**. No hay seguimiento en segundo plano: con la app cerrada no se actualiza.
 
 ## Probar (lo mínimo)
 
-1. Instalar el APK en un teléfono e iniciar sesión **con un empleado que ya esté dado de alta en Guardify** (si no, verá «Acceso no autorizado»: pídele a Aletz que lo cree).
-2. En Guardify el equipo aparece como «Pendiente»; aprobarlo → la app lo deja pasar.
+1. Instalar el APK en un teléfono: aparece la pantalla «Pendiente de aprobación» (no hay login todavía).
+2. En Guardify el equipo aparece como «Pendiente»; pedirle a González/Aletz que lo apruebe → la app pasa sola al login. Iniciar sesión con **cualquier empleado**: entra con el rol Operativo.
 3. Aceptar el aviso de ubicación → el equipo aparece en el mapa y se mueve a cada latido.
 4. Desde Guardify bloquear el equipo → la app muestra «bloqueado» en cuanto consulta su estado (órdenes cada 10 s, latido cada 60 s); habilitarlo → vuelve a funcionar (estando bloqueada, la app vuelve a preguntar cada 60 s).
 5. Cerrar sesión de la persona desde Guardify → la app cierra sesión.
@@ -45,9 +54,9 @@ Los perfiles `preview*` y `production*` no cambian: siguen con Guardify **apagad
 ## Qué NO tocar
 
 - No cambiar `app.config.js`, `eas.json` ni el código de `hooks/guardify*` para esta build.
-- No encender `GUARDIFY_DEVICE_ENFORCE=on` en el servidor: lo hace Aletz cuando los equipos de prueba ya estén registrados (en `on` el servidor rechaza cualquier APK sin equipo registrado, incluida la versión web).
+- No cambiar `GUARDIFY_DEVICE_ENFORCE` en el servidor de pruebas: ya está en `on` y es lo que obliga a que el equipo esté aprobado. No ponerlo en producción.
 - No usar este perfil para producción: en producción Guardify sigue apagado.
 
 ## Servidor de pruebas (ya configurado)
 
-`GUARDIFY_URL`, `GUARDIFY_APP_CLIENT_ID/SECRET` y `GUARDIFY_REPORTS_API_KEY` están puestas; `GUARDIFY_DEVICE_ENFORCE=observe` (solo registra). Se comprobó que la lista de revocaciones de Guardify responde con esas credenciales.
+`GUARDIFY_URL`, `GUARDIFY_APP_CLIENT_ID/SECRET` y `GUARDIFY_REPORTS_API_KEY` están puestas; `GUARDIFY_DEVICE_ENFORCE=on` (desde el 2026-11-04). Se comprobó que la lista de revocaciones de Guardify responde con esas credenciales.
