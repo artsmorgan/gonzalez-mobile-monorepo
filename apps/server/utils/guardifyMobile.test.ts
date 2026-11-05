@@ -134,7 +134,8 @@ describe("órdenes de la consola", () => {
     it("WIPE borra, FORCE_UPDATE revisa el catálogo y PING solo se confirma", () => {
         assert.equal(commandEffect("WIPE", {}, null), "wipe");
         assert.equal(commandEffect("force_update", {}, null), "check_update");
-        assert.equal(commandEffect("PING", {}, null), "none");
+        assert.equal(commandEffect("PING", {}, null), "notify");
+        assert.equal(commandEffect("ping", null, "1-0000-0000"), "notify");
         assert.equal(commandEffect("OTRA", null, null), "none");
     });
 });

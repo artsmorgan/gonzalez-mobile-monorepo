@@ -13,7 +13,7 @@ import * as Battery from 'expo-battery';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AppState, Platform } from 'react-native';
+import { Alert, AppState, Platform } from 'react-native';
 import { Paths } from 'expo-file-system';
 import { GuardifyDevice, GuardifyError, type SdkEvent, type SdkState } from '@/vendor/guardify-sdk';
 import { downloadAndShareLargeFile, type DownloadAndShareResult } from './downloadReportFileToDevice';
@@ -158,6 +158,16 @@ function friendlyError(e: unknown): string {
   return e instanceof Error ? e.message : 'Error inesperado con Guardify.';
 }
 
+let pingAlertOpen = false;
+
+/** Aviso de la orden PING de la consola. Si ya hay uno en pantalla no se apila otro. */
+function showAdminPing(): void {
+  if (pingAlertOpen) return;
+  pingAlertOpen = true;
+  const done = () => { pingAlertOpen = false; };
+  Alert.alert('Mensaje del administrador', 'Tu administrador está intentando comunicarse contigo.', [{ text: 'Entendido', onPress: done }], { cancelable: true, onDismiss: done });
+}
+
 function onSdkEvent(e: SdkEvent): void {
   if (e.type === 'state') {
     publishIdentity();
@@ -167,6 +177,7 @@ function onSdkEvent(e: SdkEvent): void {
   if (e.type !== 'command') return; // `wipe` y `force_update` llegan también como `command`
   const effect = commandEffect(e.command, e.payload, handlers?.getCedula() ?? null);
   if (effect === 'check_update') void checkGuardifyUpdate();
+  else if (effect === 'notify') showAdminPing();
   else if (effect === 'wipe') void beginGuardifyWipe('wipe');
   else if (effect === 'logout') void handlers?.logout().catch((error) => console.warn('[guardify] no se pudo cerrar la sesión:', error));
 }

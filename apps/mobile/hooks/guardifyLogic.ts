@@ -138,11 +138,11 @@ export function gateScreenFor(state: GateState, opts: { needsCode: boolean; upda
   }
 }
 
-export type CommandEffect = 'logout' | 'wipe' | 'check_update' | 'none';
+export type CommandEffect = 'logout' | 'wipe' | 'check_update' | 'notify' | 'none';
 
 /**
  * Efecto en la app de una orden de la consola. El SDK ya limpia su propia sesión; la app debe cerrar la suya (`logout`), borrar lo local
- * (`wipe`) o revisar el catálogo de APK (`check_update`). `PING` solo se confirma.
+ * (`wipe`) revisar el catálogo de APK (`check_update`) o avisar a la persona (`notify`: `PING` muestra que el administrador intenta comunicarse).
  */
 export function commandEffect(command: string, payload: { externalUserId?: string } | null | undefined, currentCedula: string | null | undefined): CommandEffect {
   switch (String(command).toUpperCase()) {
@@ -154,6 +154,8 @@ export function commandEffect(command: string, payload: { externalUserId?: strin
       return 'wipe';
     case 'FORCE_UPDATE':
       return 'check_update';
+    case 'PING':
+      return 'notify';
     default:
       return 'none';
   }
