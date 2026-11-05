@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { guardifyFeatureOn } from "./guardifyFlags";
 import { NextRequest } from "next/server";
 import axios from "axios";
 import { resolveUserAccessToken } from "./resolveUserAccessToken";
@@ -15,6 +16,7 @@ const EVIDENCE_HEADERS = ["x-guardify-device", "x-device-uid", "x-evidence-lat",
  */
 async function registrarEvidenciaDeEscritura(req: NextRequest, data: Record<string, any>, resultado: unknown, shouldVerifyAccessToken: boolean) {
     try {
+    if (!guardifyFeatureOn("GUARDIFY_EVIDENCE")) return; // interruptor: GUARDIFY_EVIDENCE=off
     if (!shouldVerifyAccessToken || !TABLAS_CON_EVIDENCIA.has(String(data?.table ?? ""))) return;
     const llavero = llaveroDesdeEntorno(); // clave del sello; sin ella se registra igual, solo con la huella
     const actor = actorFromRequest(req as any);

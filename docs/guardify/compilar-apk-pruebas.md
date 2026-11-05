@@ -41,7 +41,7 @@ Esto es **solo para el entorno de pruebas**: en Guardify la instalación de Gonz
 - **Cortar acceso**: cierre de sesión remoto y revocación de sesiones; el servidor consulta a Guardify la lista de revocaciones.
 - **Sesión del empleado en Guardify** («login del dispositivo»): al entrar a la app se abre su sesión con la cédula; en pruebas Guardify admite a cualquier empleado con el rol Operativo. Si González lo bloquea, la app muestra «Acceso no autorizado» y cierra la sesión.
 - **Actualización obligatoria** desde el catálogo de APK de Guardify (versión mínima).
-- **Ubicación en vivo en el mapa de Guardify** (como un viaje): aviso de consentimiento una sola vez; con «Aceptar», la app manda su posición cada pocos segundos (hoy 5 s, lo define González en Guardify, no la build) y el mapa de la consola se mueve solo, con recorrido y velocidad. **Solo mientras la app está abierta**: con la pantalla bloqueada o la app en segundo plano no hay seguimiento (eso requeriría un servicio en primer plano de Android con notificación fija y un permiso nuevo; no está incluido). El latido de 60 s sigue llevando batería y último contacto.
+- **Ubicación en vivo en el mapa de Guardify** (como un viaje): aviso de consentimiento una sola vez; con «Aceptar», la app manda su posición cada pocos segundos (hoy 5 s; lo define González en Guardify, no la build) y el mapa de la consola se mueve solo, con recorrido y velocidad. Solo mientras la **sesión del empleado está abierta**. Con el permiso de ubicación **«Permitir todo el tiempo»** (la app lo pide una vez, abre los ajustes de Android) el rastreo sigue con la pantalla bloqueada o la app en segundo plano mediante un servicio en primer plano con **notificación fija**; sin ese permiso solo funciona con la app abierta. Los permisos del servicio están declarados solo en la variante `lite` (`android/app/src/lite/AndroidManifest.xml`); `full` y `prod` no cambian. Límites: en algunos teléfonos (Xiaomi, Huawei, Samsung con ahorro de batería) hay que quitar la optimización de batería a la app o Android la detiene; bloquear o retirar el equipo corta el rastreo en el siguiente envío (≤ 5 s), pero «cortar acceso» a una persona estando la app en segundo plano surte efecto al volver a abrirla.
 
 ## Probar (lo mínimo)
 
@@ -60,3 +60,16 @@ Esto es **solo para el entorno de pruebas**: en Guardify la instalación de Gonz
 ## Servidor de pruebas (ya configurado)
 
 `GUARDIFY_URL`, `GUARDIFY_APP_CLIENT_ID/SECRET` y `GUARDIFY_REPORTS_API_KEY` están puestas; `GUARDIFY_DEVICE_ENFORCE=on` (desde el 2026-11-04). Se comprobó que la lista de revocaciones de Guardify responde con esas credenciales.
+
+## Interruptores del servidor (producción)
+
+Con las variables sin definir, el servidor se comporta como antes de Guardify:
+
+| Variable | Sin definir | Efecto |
+|---|---|---|
+| `GUARDIFY_REPORTS_API_KEY` | rutas `/api/guardify/*` responden 503 | Con llave: reportes, documentos y acciones para Guardify |
+| `GUARDIFY_DEVICE_ENFORCE` | `off` | `observe` solo registra; `on` exige equipo aprobado |
+| `GUARDIFY_EVIDENCE` | **encendida** (como hoy) | `off` deja de registrar evidencia en `c_evidencia_registro` |
+| `GUARDIFY_DOCS_DELIVERY` | **encendida** (como hoy) | `off` deja de crear vínculos de entrega de documentos al marcar ingreso |
+
+En la app, Guardify solo se enciende con el perfil de EAS `guardify-pruebas` (`EXPO_PUBLIC_GUARDIFY_ENABLED=true`); en cualquier otro perfil no se ejecuta.

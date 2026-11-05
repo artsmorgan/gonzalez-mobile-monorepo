@@ -22,6 +22,7 @@ import {
 } from "../../mobile/hooks/guardifyLogic";
 import { describeDeviceStatus } from "../../mobile/hooks/deviceNotApproved";
 import { compararVersiones } from "./guardifyDevices";
+import { guardifyFeatureOn } from "./guardifyFlags";
 
 describe("versiones", () => {
     it("compara numéricamente y coincide con la regla del servidor", () => {
@@ -182,12 +183,17 @@ describe("rastreo en vivo", () => {
         assert.deepEqual(out.map((p) => p.at), [2, 3, 4, 5]);
         assert.equal(appendLivePoints([], [pt(1)]).length, 1);
     });
-    it("solo rastrea con todo en regla: activado por la empresa, consentimiento, permiso, app abierta y equipo utilizable", () => {
-        const ok = { seconds: 5, consent: "granted" as const, permissionGranted: true, appActive: true, gateOpen: true };
+    it("solo rastrea con todo en regla; en segundo plano solo con el permiso «todo el tiempo»", () => {
+        const ok = { seconds: 5, consent: "granted" as const, permissionGranted: true, backgroundGranted: false, appActive: true, sessionOpen: true };
         assert.equal(wantLiveTracking(ok), true);
-        for (const bad of [{ seconds: 0 }, { consent: "declined" as const }, { consent: null }, { permissionGranted: false }, { appActive: false }, { gateOpen: false }]) {
+        for (const bad of [{ seconds: 0 }, { consent: "declined" as const }, { consent: null }, { permissionGranted: false }, { sessionOpen: false }]) {
             assert.equal(wantLiveTracking({ ...ok, ...bad }), false, JSON.stringify(bad));
         }
+        // app en segundo plano: sin permiso «todo el tiempo» se detiene; con él sigue
+        assert.equal(wantLiveTracking({ ...ok, appActive: false }), false);
+        assert.equal(wantLiveTracking({ ...ok, appActive: false, backgroundGranted: true }), true);
+        // sin sesión abierta nunca rastrea, ni con el permiso de segundo plano
+        assert.equal(wantLiveTracking({ ...ok, appActive: false, backgroundGranted: true, sessionOpen: false }), false);
     });
     it("un envío fallido se reintenta si es de red, de límite o del servidor; se detiene si lo desactivaron o falta consentimiento", () => {
         assert.equal(liveFailureAction(0, "network"), 'retry');
@@ -196,5 +202,15 @@ describe("rastreo en vivo", () => {
         assert.equal(liveFailureAction(409, "live_location_disabled"), 'stop');
         assert.equal(liveFailureAction(403, "location_consent_required"), 'stop');
         assert.equal(liveFailureAction(403, "device_blocked"), 'stop');
+    });
+});
+
+describe("interruptores del servidor", () => {
+    it("sin definir todo sigue como hoy; solo off/false/0/no apagan la función", () => {
+        assert.equal(guardifyFeatureOn("GUARDIFY_EVIDENCE", {}), true);
+        assert.equal(guardifyFeatureOn("GUARDIFY_DOCS_DELIVERY", { GUARDIFY_DOCS_DELIVERY: "" }), true);
+        assert.equal(guardifyFeatureOn("GUARDIFY_EVIDENCE", { GUARDIFY_EVIDENCE: "on" }), true);
+        for (const v of ["off", "OFF", " false ", "0", "no"]) assert.equal(guardifyFeatureOn("GUARDIFY_EVIDENCE", { GUARDIFY_EVIDENCE: v }), false, v);
+        assert.equal(guardifyFeatureOn("GUARDIFY_EVIDENCE", { GUARDIFY_DOCS_DELIVERY: "off" }), true); // cada una con su variable
     });
 });

@@ -11,6 +11,7 @@ import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Battery from 'expo-battery';
 import * as Location from 'expo-location';
+import * as TaskManager from 'expo-task-manager';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState, Platform } from 'react-native';
 import { Paths } from 'expo-file-system';
@@ -33,7 +34,6 @@ import {
   decideUpdate,
   DEFAULT_HEARTBEAT_MS,
   heartbeatLocation,
-  isGateOpen,
   LIVE_BATCH_MAX,
   liveFailureAction,
   normalizeCompanyCode,
@@ -458,23 +458,42 @@ async function heartbeatExtras() {
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // Rastreo en vivo: el mapa de Guardify se mueve como un viaje. Lo activa y gradúa la empresa en Guardify (el latido trae los segundos);
-// solo con el consentimiento de la persona y con la app abierta (no hay seguimiento en segundo plano ni con la pantalla bloqueada).
+// solo con el consentimiento de la persona y con su sesión abierta en la app.
+//
+// Dos modos: con el permiso de ubicación «todo el tiempo» el rastreo corre en un servicio en primer plano de Android (notificación fija
+// «compartiendo ubicación»), también con la pantalla bloqueada o la app en segundo plano. Sin ese permiso corre solo con la app abierta.
+// Los permisos del servicio solo están declarados en la variante `lite` (pruebas); en otra variante el arranque falla y queda el modo con la app abierta.
+
+const LIVE_LOCATION_TASK = 'guardify-live-location';
+const BACKGROUND_ASKED_KEY = 'guardify.background_location_asked';
+const SERVICE_NOTIFICATION = { notificationTitle: 'MonitoreApp', notificationBody: 'Compartiendo la ubicación de este equipo con tu empresa mientras trabajas.', notificationColor: '#1f4f99' };
 
 let liveSeconds = 0;
 let liveRunning = 0;
+let liveMode: 'foreground' | 'background' | null = null;
 let liveSub: Location.LocationSubscription | null = null;
-let liveTimer: ReturnType<typeof setInterval> | null = null;
 let liveBuffer: LivePoint[] = [];
 let liveSending = false;
 let liveStarting = false;
 let forceHeartbeat = false;
+let backgroundMaybeRunning = true; // al arrancar la app puede quedar un servicio de una ejecución anterior
+
+async function stopBackgroundService(): Promise<void> {
+  if (!backgroundMaybeRunning) return;
+  try {
+    if (await Location.hasStartedLocationUpdatesAsync(LIVE_LOCATION_TASK)) await Location.stopLocationUpdatesAsync(LIVE_LOCATION_TASK);
+    backgroundMaybeRunning = false;
+  } catch {
+    /* ya estaba detenido */
+  }
+}
 
 function stopLiveTracking(): void {
   liveSub?.remove();
   liveSub = null;
-  if (liveTimer) clearInterval(liveTimer);
-  liveTimer = null;
   liveRunning = 0;
+  liveMode = null;
+  void stopBackgroundService();
 }
 
 async function flushLiveLocation(): Promise<void> {
@@ -500,31 +519,81 @@ async function flushLiveLocation(): Promise<void> {
   }
 }
 
-/** Enciende o apaga el rastreo según el estado actual (se llama en cada ciclo, al cambiar la app de primer/segundo plano y al cambiar el consentimiento). */
+function pushLivePoints(locations: Location.LocationObject[]): void {
+  for (const loc of locations) {
+    const point = toLivePoint(loc.coords, loc.timestamp);
+    if (point) liveBuffer = appendLivePoints(liveBuffer, [point]);
+  }
+  void flushLiveLocation();
+}
+
+// El sistema entrega aquí las lecturas del servicio en primer plano, aunque la app esté en segundo plano (incluso si el proceso se reinició sin pantalla).
+TaskManager.defineTask(LIVE_LOCATION_TASK, async ({ data, error }) => {
+  if (error) return;
+  await initGuardify().catch(() => undefined);
+  const dev = client;
+  // Sin equipo, sin sesión abierta o sin consentimiento: se apaga el servicio y no se envía nada.
+  if (!dev || dev.state().kind !== 'operational' || snapshot.locationConsent !== 'granted') {
+    await stopBackgroundService();
+    return;
+  }
+  pushLivePoints((data as { locations?: Location.LocationObject[] } | undefined)?.locations ?? []);
+});
+
+/** Pide el permiso de ubicación «todo el tiempo» una sola vez, cuando la empresa ya activó el rastreo y la persona está dentro de la app. */
+async function askBackgroundPermissionOnce(): Promise<boolean> {
+  if (Platform.OS !== 'android' || AppState.currentState !== 'active') return false;
+  if (await guardifyStorage.get(BACKGROUND_ASKED_KEY).catch(() => null)) return false;
+  await guardifyStorage.set(BACKGROUND_ASKED_KEY, '1').catch(() => undefined);
+  try {
+    return (await Location.requestBackgroundPermissionsAsync()).granted;
+  } catch {
+    return false; // la variante no declara el permiso
+  }
+}
+
+/** Enciende, cambia o apaga el rastreo según el estado actual (cada ciclo, al pasar la app a segundo plano o primer plano y al cambiar el consentimiento). */
 async function syncLiveTracking(): Promise<void> {
   try {
     const dev = client;
     let permissionGranted = false;
+    let backgroundGranted = false;
     if (dev && liveSeconds > 0 && snapshot.locationConsent === 'granted') {
       permissionGranted = (await Location.getForegroundPermissionsAsync().catch(() => null))?.granted === true;
+      if (permissionGranted && Platform.OS === 'android') {
+        backgroundGranted = (await Location.getBackgroundPermissionsAsync().catch(() => null))?.granted === true;
+        if (!backgroundGranted && dev.state().kind === 'operational' && (await askBackgroundPermissionOnce())) backgroundGranted = true;
+      }
     }
-    const want = !!dev && wantLiveTracking({ seconds: liveSeconds, consent: snapshot.locationConsent, permissionGranted, appActive: AppState.currentState === 'active', gateOpen: isGateOpen(dev.state()) });
+    const want = !!dev && wantLiveTracking({ seconds: liveSeconds, consent: snapshot.locationConsent, permissionGranted, backgroundGranted, appActive: AppState.currentState === 'active', sessionOpen: dev.state().kind === 'operational' });
     if (!want) {
-      if (liveSub) stopLiveTracking();
+      if (liveMode !== null) stopLiveTracking();
+      else await stopBackgroundService();
       return;
     }
+    const mode = backgroundGranted ? 'background' : 'foreground';
     if (liveStarting) return;
-    if (liveSub && liveRunning === liveSeconds) return;
-    stopLiveTracking(); // cambió el intervalo: se reinicia con el nuevo
+    if (liveMode === mode && liveRunning === liveSeconds) return;
+    stopLiveTracking(); // cambió el intervalo o el modo: se reinicia
     liveStarting = true;
     try {
       const seconds = liveSeconds;
-      liveSub = await Location.watchPositionAsync({ accuracy: Location.Accuracy.High, timeInterval: seconds * 1000, distanceInterval: 0 }, (loc) => {
-        const point = toLivePoint(loc.coords, loc.timestamp);
-        if (point) liveBuffer = appendLivePoints(liveBuffer, [point]);
-      });
+      const options = { accuracy: Location.Accuracy.High, timeInterval: seconds * 1000, distanceInterval: 0 };
+      let started: 'foreground' | 'background' = 'foreground';
+      if (mode === 'background') {
+        try {
+          await Location.startLocationUpdatesAsync(LIVE_LOCATION_TASK, { ...options, foregroundService: SERVICE_NOTIFICATION, pausesUpdatesAutomatically: false, showsBackgroundLocationIndicator: true });
+          backgroundMaybeRunning = true;
+          started = 'background';
+        } catch {
+          started = 'foreground'; // sin servicio en primer plano (variante sin permisos o Android lo impide): solo con la app abierta
+        }
+      }
+      if (started === 'foreground') {
+        liveSub = await Location.watchPositionAsync(options, (loc) => pushLivePoints([loc]));
+      }
+      liveMode = started;
       liveRunning = seconds;
-      liveTimer = setInterval(() => void flushLiveLocation(), Math.max(seconds, 3) * 1000);
     } finally {
       liveStarting = false;
     }
