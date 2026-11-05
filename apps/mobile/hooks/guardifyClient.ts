@@ -27,16 +27,24 @@ import { parseLocationTimeMs } from './evidenceHeaders';
 import { getGuardifyIdentity, setGuardifyIdentity } from './guardifyIdentity';
 import {
   apkFileName,
+  appendLivePoints,
   batteryPercent,
   commandEffect,
   decideUpdate,
   DEFAULT_HEARTBEAT_MS,
   heartbeatLocation,
+  isGateOpen,
+  LIVE_BATCH_MAX,
+  liveFailureAction,
   normalizeCompanyCode,
+  normalizeLiveSeconds,
   renewDue,
   resolveGuardifyConfig,
+  toLivePoint,
+  wantLiveTracking,
   type CommandEffect,
   type GuardifyConfig,
+  type LivePoint,
   type LocationConsent,
   type UpdateDecision,
 } from './guardifyLogic';
@@ -429,6 +437,8 @@ export async function setLocationConsent(value: LocationConsent): Promise<void> 
   }
   await guardifyStorage.set(LOCATION_CONSENT_KEY, value).catch(() => undefined);
   patch({ locationConsent: value });
+  forceHeartbeat = true; // el latido informa el consentimiento y trae cada cuántos segundos mandar la ubicación en vivo
+  void syncLiveTracking();
 }
 
 async function heartbeatExtras() {
@@ -443,6 +453,83 @@ async function heartbeatExtras() {
     });
   } catch {
     return { consent: { location: false } };
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Rastreo en vivo: el mapa de Guardify se mueve como un viaje. Lo activa y gradúa la empresa en Guardify (el latido trae los segundos);
+// solo con el consentimiento de la persona y con la app abierta (no hay seguimiento en segundo plano ni con la pantalla bloqueada).
+
+let liveSeconds = 0;
+let liveRunning = 0;
+let liveSub: Location.LocationSubscription | null = null;
+let liveTimer: ReturnType<typeof setInterval> | null = null;
+let liveBuffer: LivePoint[] = [];
+let liveSending = false;
+let liveStarting = false;
+let forceHeartbeat = false;
+
+function stopLiveTracking(): void {
+  liveSub?.remove();
+  liveSub = null;
+  if (liveTimer) clearInterval(liveTimer);
+  liveTimer = null;
+  liveRunning = 0;
+}
+
+async function flushLiveLocation(): Promise<void> {
+  const dev = client;
+  if (!dev || liveSending || !liveBuffer.length) return;
+  liveSending = true;
+  const batch = liveBuffer.slice(0, LIVE_BATCH_MAX);
+  try {
+    const r = await dev.sendLocation(batch);
+    liveBuffer = liveBuffer.slice(batch.length);
+    liveSeconds = normalizeLiveSeconds(r.liveLocationSeconds);
+    if (!liveSeconds) stopLiveTracking();
+  } catch (e) {
+    const status = e instanceof GuardifyError ? e.status : 0;
+    const code = e instanceof GuardifyError ? e.code : 'network';
+    if (liveFailureAction(status, code) === 'stop') {
+      liveBuffer = [];
+      if (code === 'live_location_disabled' || code === 'location_consent_required') liveSeconds = 0;
+      stopLiveTracking();
+    }
+  } finally {
+    liveSending = false;
+  }
+}
+
+/** Enciende o apaga el rastreo según el estado actual (se llama en cada ciclo, al cambiar la app de primer/segundo plano y al cambiar el consentimiento). */
+async function syncLiveTracking(): Promise<void> {
+  try {
+    const dev = client;
+    let permissionGranted = false;
+    if (dev && liveSeconds > 0 && snapshot.locationConsent === 'granted') {
+      permissionGranted = (await Location.getForegroundPermissionsAsync().catch(() => null))?.granted === true;
+    }
+    const want = !!dev && wantLiveTracking({ seconds: liveSeconds, consent: snapshot.locationConsent, permissionGranted, appActive: AppState.currentState === 'active', gateOpen: isGateOpen(dev.state()) });
+    if (!want) {
+      if (liveSub) stopLiveTracking();
+      return;
+    }
+    if (liveStarting) return;
+    if (liveSub && liveRunning === liveSeconds) return;
+    stopLiveTracking(); // cambió el intervalo: se reinicia con el nuevo
+    liveStarting = true;
+    try {
+      const seconds = liveSeconds;
+      liveSub = await Location.watchPositionAsync({ accuracy: Location.Accuracy.High, timeInterval: seconds * 1000, distanceInterval: 0 }, (loc) => {
+        const point = toLivePoint(loc.coords, loc.timestamp);
+        if (point) liveBuffer = appendLivePoints(liveBuffer, [point]);
+      });
+      liveRunning = seconds;
+      liveTimer = setInterval(() => void flushLiveLocation(), Math.max(seconds, 3) * 1000);
+    } finally {
+      liveStarting = false;
+    }
+  } catch {
+    /* sin GPS o sin permiso: el latido sigue llevando la última ubicación guardada */
   }
 }
 
@@ -486,9 +573,11 @@ export function startGuardifyBackground(): () => void {
       // Equipo activo (con o sin sesión, o con el permiso vencido por falta de contacto): latidos y órdenes.
       if (kind !== 'blocked') {
         if (kind === 'locked') last.heartbeat = 0; // un contacto exitoso reancla la hora y puede levantar el bloqueo
-        if (due('heartbeat', config?.heartbeatMs ?? DEFAULT_HEARTBEAT_MS, now)) {
+        if (forceHeartbeat || due('heartbeat', config?.heartbeatMs ?? DEFAULT_HEARTBEAT_MS, now)) {
+          forceHeartbeat = false;
           const battery = batteryPercent(await Battery.getBatteryLevelAsync().catch(() => -1));
-          await dev.heartbeat({ battery, ...(await heartbeatExtras()) }).catch(() => undefined);
+          const hb = await dev.heartbeat({ battery, ...(await heartbeatExtras()) }).catch(() => undefined);
+          if (hb) liveSeconds = snapshot.locationConsent === 'granted' ? normalizeLiveSeconds(hb.liveLocationSeconds) : 0;
         }
         if (due('commands', COMMANDS_MS, now)) await dev.pollCommands().catch(() => undefined);
         if (due('update', UPDATE_MS, now)) await checkGuardifyUpdate();
@@ -506,6 +595,7 @@ export function startGuardifyBackground(): () => void {
       patch({ sdk: dev.state() });
     } finally {
       running = false;
+      void syncLiveTracking();
     }
   };
 
@@ -518,10 +608,12 @@ export function startGuardifyBackground(): () => void {
       last.wipe = 0;
       void tick();
     }
+    void syncLiveTracking(); // en segundo plano se apaga; al volver se reanuda
   });
   return () => {
     stopped = true;
     clearInterval(timer);
     appState.remove();
+    stopLiveTracking();
   };
 }

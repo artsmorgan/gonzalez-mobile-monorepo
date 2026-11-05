@@ -1,5 +1,8 @@
 # Cambios del SDK
 
+## 0.4.0 — 2026-11-05
+- Rastreo en vivo: `sendLocation(points)` manda lotes de ubicación a `POST /api/v1/devices/self/location` y el latido responde `liveLocationSeconds` (cada cuántos segundos mandar; 0 = solo en el latido). Solo con consentimiento y si la empresa lo activó.
+
 ## 0.3.0 — 2026-10-22
 - `GET /api/v1/revocations` trae `minAppVersion` y el verificador del servidor lo expone con `createVerifier(...).minAppVersion()`: el servidor de la app deja de tenerla a mano en una variable de entorno.
 

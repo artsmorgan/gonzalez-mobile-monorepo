@@ -430,8 +430,17 @@ export class GuardifyDevice {
     return r.commands.length;
   }
 
+  /** Responde `liveLocationSeconds`: cada cuántos segundos debe mandar la ubicación en vivo (0 = solo en el latido). */
   async heartbeat(t: { battery?: number; consent?: { location: boolean }; location?: { lat: number; lng: number } }) {
-    return this.call("POST", "/api/v1/devices/self/heartbeat", { appVersion: this.o.appVersion, ...t });
+    return this.call<{ ok: boolean; locationStored: boolean; liveLocationSeconds?: number }>("POST", "/api/v1/devices/self/heartbeat", { appVersion: this.o.appVersion, ...t });
+  }
+
+  /**
+   * Rastreo en vivo: manda un lote de puntos (`at` en milisegundos). Solo si la empresa lo activó (`liveLocationSeconds` > 0 en el latido) y la
+   * persona dio su consentimiento; si no, el servidor responde 409 `live_location_disabled` o 403 `location_consent_required`.
+   */
+  async sendLocation(points: { lat: number; lng: number; accuracy?: number; speed?: number; heading?: number; at?: number }[]) {
+    return this.call<{ ok: boolean; accepted: number; liveLocationSeconds: number }>("POST", "/api/v1/devices/self/location", { points });
   }
 
   async rotateCredential() {
