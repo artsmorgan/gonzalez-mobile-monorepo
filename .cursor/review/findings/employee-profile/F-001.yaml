@@ -1,0 +1,17 @@
+id: F-001
+module_id: employee-profile
+severity: medium
+status: fixed
+file: apps/mobile/screens/EmployeeProfileScreen.tsx
+lines: "27-32"
+category: data-display
+title: Fecha de contratación desplazada por zona horaria
+description: |
+  formatDate usa new Date(dateString) sobre YYYY-MM-DD sin anclar medianoche local. EmployeeProfile.tsx ya corrige con dateString + T00:00:00.
+reproduction: |
+  1. fechaContratacion 2024-06-15 en employee_data.
+  2. Abrir Perfil en UTC-6.
+  3. Día mostrado puede ser 14.
+impact: Información laboral incorrecta; inconsistencia entre pantallas.
+suggested_fix: |
+  Alinear parseo con EmployeeProfile.tsx (T00:00:00 local).

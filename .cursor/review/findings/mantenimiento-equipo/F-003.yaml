@@ -1,0 +1,15 @@
+id: F-003
+module_id: mantenimiento-equipo
+severity: low
+status: fixed
+file: apps/mobile/screens/MantenimientoEquipoScreen.tsx
+lines: "1660-1663"
+category: platform
+title: Bulk artículos requiere online sin cola offline
+description: |
+  handleSubmitBulkArticulos bloquea sin conexión.
+reproduction: |
+  1. Bulk upload offline.
+impact: Función no disponible sin red (esperado).
+suggested_fix: |
+  Documentar en UI o cola offline futura.

@@ -1,0 +1,93 @@
+{
+  "cli": {
+    "version": ">= 3.20.0"
+  },
+  "build": {
+    "preview": {
+      "extends": "preview-lite",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleLiteRelease"
+      },
+      "env": {
+        "APP_VARIANT": "lite"
+      }
+    },
+    "preview-lite": {
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleLiteRelease"
+      },
+      "env": {
+        "APP_VARIANT": "lite"
+      }
+    },
+    "preview-full": {
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleFullRelease"
+      },
+      "env": {
+        "APP_VARIANT": "full"
+      }
+    },
+    "preview-prod": {
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleProdRelease"
+      },
+      "env": {
+        "APP_VARIANT": "prod"
+      }
+    },
+    "production": {
+      "extends": "production-lite",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleLiteRelease"
+      },
+      "env": {
+        "APP_VARIANT": "lite"
+      }
+    },
+    "production-lite": {
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleLiteRelease"
+      },
+      "env": {
+        "APP_VARIANT": "lite"
+      }
+    },
+    "production-full": {
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleFullRelease"
+      },
+      "env": {
+        "APP_VARIANT": "full"
+      }
+    },
+    "production-prod": {
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleProdRelease"
+      },
+      "env": {
+        "APP_VARIANT": "prod"
+      }
+    },
+    "guardify-pruebas": {
+      "extends": "preview-lite",
+      "env": {
+        "APP_VARIANT": "lite",
+        "EXPO_PUBLIC_API_SERVER": "https://api-gonzalez-mobile-monorepo-production.up.railway.app",
+        "EXPO_PUBLIC_GUARDIFY_ENABLED": "true",
+        "EXPO_PUBLIC_GUARDIFY_URL": "https://guardifyconsole-production.up.railway.app",
+        "EXPO_PUBLIC_GUARDIFY_APP_KEY": "monitoreapp",
+        "EXPO_PUBLIC_GUARDIFY_COMPANY_CODE": "corporacion-gonzalez",
+        "EXPO_PUBLIC_GUARDIFY_HEARTBEAT_SECONDS": "60"
+      }
+    }
+  }
+}

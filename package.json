@@ -9,10 +9,24 @@
   },
   "scripts": {
     "dev:mobile": "cd apps/mobile && expo start",
-    "dev:server": "cd apps/server && next dev",
+    "dev:server": "cd apps/server && npm run dev",
+    "dev:worker": "cd apps/server && npm run dev:worker",
     "dev": "turbo run dev",
     "build": "cd apps/server && npm run build",
     "start": "cd apps/server && npm start",
-    "lint": "turbo run lint"
-  }
+    "start:web": "cd apps/server && npm run start:web",
+    "worker:reports": "cd apps/server && npm run worker:reports",
+    "lint": "turbo run lint",
+    "android": "cd apps/mobile && expo run:android --variant liteDebug",
+    "ios": "expo run:ios"
+  },
+  "dependencies": {
+    "@react-native-picker/picker": "^2.11.4",
+    "is-arrayish": "^0.3.4",
+    "semver": "^7.7.2",
+    "expo": "~54.0.23",
+    "react": "19.1.0",
+    "react-native": "0.81.5"
+  },
+  "version": "1.0.0"
 }

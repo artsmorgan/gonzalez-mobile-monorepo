@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { authorizeMarcaAccess, denialBody, isDevRouteEnabled } from "../../../../../utils/objectAccess";
+import { isSuperAdminEmpleado } from "../../../../../utils/isSuperAdminEmpleado";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
+import { prisma } from "../../../../../utils/prismaClient";
+import { reportError } from "../../../../../utils/reportError";
 
-const prisma = new PrismaClient();
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+    // Ruta de desarrollo: no existe en producción (issue #181).
+    if (!isDevRouteEnabled()) { return NextResponse.json({ status: false, message: "No encontrado" }, { status: 404 }); }
     try {
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
         const resolvedParams = await context.params;
 
         const id = parseInt(resolvedParams.id);
@@ -13,29 +20,31 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         // Params obtenidos con "?"
         const searchParams = req.nextUrl.searchParams;
         const endingTime = searchParams.get("endingTime");
-        const marcaDiaId = searchParams.get("marcaDiaId");
 
         console.log("endingTime", endingTime);
 
         if (!endingTime) {
-            return NextResponse.json({ status: false, message: "Tiempo de finalización no especificado" }, { status: 200 });
+            await reportError(req, "api/lunch-time/[id]/test-ending-time", "GET", 400, "Tiempo de finalización no especificado");
+            return NextResponse.json({ status: false, message: "Tiempo de finalización no especificado" }, { status: 400 });
         }
 
-        if (!marcaDiaId) {
-            return NextResponse.json({ status: false, message: "ID de marca del dia no especificado" }, { status: 200 });
-        }
-
-        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marcaDiaId) } });
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
         if (!marcaDia) {
-            return NextResponse.json({ status: false, message: "Marca del dia no encontrada" }, { status: 200 });
+            await reportError(req, "api/lunch-time/[id]/test-ending-time", "GET", 404, "Marca del dia no encontrada");
+            return NextResponse.json({ status: false, message: "Marca del dia no encontrada" }, { status: 404 });
         }
+        // Issue #181: la marca es de su titular o de quien lo reemplaza (o de un administrador).
+        const access = await authorizeMarcaAccess({ callerId: payload.id, marca: marcaDia, isAdmin: () => isSuperAdminEmpleado(req, Number(payload.id)) });
+        if (!access.allowed) { return NextResponse.json(denialBody(access), { status: access.status }); }
 
         if (!marcaDia.hora_fin || !marcaDia.hora_inicio) {
-            return NextResponse.json({ status: false, message: "Hora de finalización o inicio no establecidas" }, { status: 200 });
+            await reportError(req, "api/lunch-time/[id]/test-ending-time", "GET", 400, "Hora de finalización o inicio no establecidas");
+            return NextResponse.json({ status: false, message: "Hora de finalización o inicio no establecidas" }, { status: 400 });
         }
 
         if (!marcaDia.fecha) {
-            return NextResponse.json({ status: false, message: "Fecha no establecida" }, { status: 200 });
+            await reportError(req, "api/lunch-time/[id]/test-ending-time", "GET", 400, "Fecha no establecida");
+            return NextResponse.json({ status: false, message: "Fecha no establecida" }, { status: 400 });
         }
 
         const endDate = new Date(marcaDia.hora_fin);
@@ -44,13 +53,15 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const endingTime_converted = toZonedTime(new Date(parseInt(endingTime)), "America/Costa_Rica");
 
         if (endingTime_converted.getTime() > endDate.getTime()) {
-            return NextResponse.json({ status: false, message: "Tiempo de finalización de almuerzo es mayor a la hora de finalización" }, { status: 200 });
+            await reportError(req, "api/lunch-time/[id]/test-ending-time", "GET", 400, "Tiempo de finalización de almuerzo es mayor a la hora de finalización");
+            return NextResponse.json({ status: false, message: "Tiempo de finalización de almuerzo es mayor a la hora de finalización" }, { status: 400 });
         }
 
         return NextResponse.json({ status: true, message: "Tiempo de finalización de almuerzo es menor a la hora de finalización" }, { status: 200 });
 
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/lunch-time/[id]/test-ending-time", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

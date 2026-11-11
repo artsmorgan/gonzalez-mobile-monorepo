@@ -1,0 +1,16 @@
+id: F-001
+module_id: general-induction-register
+severity: medium
+status: fixed
+file: apps/mobile/hooks/generalInductionRegisterCache.ts
+lines: "32-38"
+category: storage
+title: writeAll falla si evaluations_cache corrupto
+description: |
+  JSON.parse evaluations_cache sin try en write path.
+reproduction: |
+  1. Corrupt evaluations_cache.
+  2. Guardar GIR.
+impact: No persiste registro GIR.
+suggested_fix: |
+  Try/catch parse; escribir GIR cache independiente.

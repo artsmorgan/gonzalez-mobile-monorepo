@@ -1,0 +1,18 @@
+id: F-001
+module_id: permit-request
+severity: medium
+status: fixed
+file: apps/mobile/screens/PermitRequestScreenV2.tsx
+lines: "449-452"
+category: api
+title: Query param mode=mine enviado pero ignorado por el BFF
+description: |
+  El cliente distingue ejecutivo vs no ejecutivo con ?mode=mine, pero GET /api/permit-request no lee mode;
+  aplica siempre el filtro OR empleado_id | ejecutivo_cuenta=supervisor_id.
+reproduction: |
+  1. Usuario no ejecutivo abre Solicitud de permiso.
+  2. fetchAll llama GET /api/permit-request?mode=mine.
+  3. En apps/server/app/api/permit-request/route.ts GET no hay lectura de searchParams mode.
+  4. La respuesta incluye solicitudes propias y las del ejecutivo_cuenta=supervisor_id.
+impact: Listado puede mostrar solicitudes que el FE asumía restringidas a mode=mine; confusión de visibilidad entre roles.
+suggested_fix: Implementar mode en el BFF o eliminar el param en el cliente y documentar la regla de visibilidad unificada.

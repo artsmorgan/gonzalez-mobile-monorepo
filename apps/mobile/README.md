@@ -25,6 +25,93 @@ In the output, you'll find options to open the app in a
 
 You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
 
+## Configuración del Servidor API
+
+### Desarrollo Local (Por Defecto)
+
+Por defecto, la aplicación usa la URL de ngrok para desarrollo local:
+- **API_SERVER**: `https://598ab127822b.ngrok-free.app`
+
+No se requiere configuración adicional. Simplemente ejecuta:
+```bash
+npm start
+# o
+expo start
+```
+
+### Desarrollo Local con Servidor Personalizado
+
+Si estás ejecutando el servidor localmente (ej: `http://localhost:3000`):
+
+**Opción 1: Crear archivo `.env.local`**
+```bash
+# En apps/mobile/.env.local
+EXPO_PUBLIC_API_SERVER=http://localhost:3000
+```
+
+Luego reinicia Expo:
+```bash
+expo start --clear
+```
+
+**Opción 2: Variable de entorno en terminal**
+```bash
+export EXPO_PUBLIC_API_SERVER=http://localhost:3000
+expo start
+```
+
+O en una sola línea:
+```bash
+EXPO_PUBLIC_API_SERVER=http://localhost:3000 expo start
+```
+
+### Producción en Railway
+
+Para conectar con el backend en producción:
+
+1. Ve a **Railway Dashboard** → Tu Proyecto Mobile (`APP-gonzalez-mobile-monorepo`)
+2. Haz clic en la pestaña **Variables**
+3. Haz clic en **+ New Variable**
+4. Agrega:
+   - **Nombre**: `EXPO_PUBLIC_API_SERVER`
+   - **Valor**: `https://api-gonzalez-mobile-monorepo-production.up.railway.app`
+   - **Alcance**: Selecciona el ambiente (Production/Preview)
+5. Haz clic en **Add**
+
+Railway automáticamente:
+- Detectará la nueva variable
+- Iniciará un nuevo build
+- Inyectará la URL del API en la aplicación durante el build
+
+### Orden de Prioridad
+
+La aplicación usa el API_SERVER en el siguiente orden:
+
+1. `EXPO_PUBLIC_API_SERVER` (variable de entorno - Railway o local)
+2. `API_SERVER` (variable de entorno alternativa)
+3. Por defecto: `https://598ab127822b.ngrok-free.app` (desarrollo local)
+
+### Uso en el Código
+
+El código de la aplicación ya está configurado para usar la variable:
+
+```typescript
+import Constants from 'expo-constants';
+
+const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+// Usará automáticamente la variable de Railway si está configurada
+```
+
+### Verificar la URL del API
+
+Puedes verificar qué URL está siendo usada:
+
+```typescript
+import Constants from 'expo-constants';
+
+console.log('API Server:', Constants.expoConfig?.extra?.API_SERVER);
+```
+
 ## Get a fresh project
 
 When you're ready, run:
