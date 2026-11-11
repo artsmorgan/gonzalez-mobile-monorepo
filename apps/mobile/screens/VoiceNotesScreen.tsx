@@ -39,6 +39,7 @@ import {
 } from '@/hooks/voiceNotesCacheHelpers';
 import { saveFile, deleteFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 type VoiceNotesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'VoiceNotes'>;
 
@@ -435,7 +436,7 @@ export default function VoiceNotesScreen() {
       if (!accessToken || accessToken.trim().length === 0) return url;
       if (/[?&]token=/.test(url)) return url;
       const separator = url.includes('?') ? '&' : '?';
-      return `${url}${separator}token=${encodeURIComponent(accessToken)}`;
+      return `${url}${separator}token=${encodeURIComponent(accessToken)}${appVersionQuery()}`;
     },
     [accessToken]
   );

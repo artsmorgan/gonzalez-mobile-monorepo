@@ -70,6 +70,7 @@ import { downloadAuthedUrlToDevice } from '@/hooks/downloadReportFileToDevice';
 import * as DocumentPicker from 'expo-document-picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 const COMPLAINTS_MASTER_FILE_STORAGE_PREFIX = 'complaints_master';
 const COMPLAINTS_MASTER_DEBUG_LOG = '[ComplaintsMaster]';
@@ -268,7 +269,7 @@ const buildComplaintFileUrl = (complaintId: string | number, file: ComplaintFile
     if (!accessToken || accessToken.trim().length === 0) return url;
     if (/[?&]token=/.test(url)) return url;
     const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}${appVersionQuery()}`;
   };
   let base: string;
   if (file.type === 'image') base = `${apiUrl}/api/complaints-master/${idNum}/get-image/${enc}`;

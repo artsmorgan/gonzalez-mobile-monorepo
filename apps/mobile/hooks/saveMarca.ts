@@ -70,6 +70,12 @@ export default async function saveMarca({
         }
 
         if (!response.ok) {
+            // 409: Planillas dice que la marca no se puede marcar (p. ej. día libre o sin turno asignado). Se muestra su mensaje en vez de un error genérico.
+            if (response.status === 409) {
+                const body = await response.json().catch(() => null);
+                const message = typeof body?.message === 'string' && body.message.trim() ? body.message.trim() : null;
+                if (message) return { status: false, message, planillas_conflict: true };
+            }
             throw new Error(`HTTP error! status: ${response.status}`);
         }
 

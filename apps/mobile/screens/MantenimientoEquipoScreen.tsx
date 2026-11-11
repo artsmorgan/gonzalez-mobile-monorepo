@@ -64,6 +64,7 @@ import { parseMantenimientoEquipoPlantillaLocal } from '@/hooks/mantenimientoEqu
 import { prioritizePlanByArticuloNomencladorId } from '@/hooks/prioritizePlanByArticuloNomencladorId';
 import { searchActaStructure, type StructureLite } from '@/hooks/reportesFunctions';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 type TipoMantenimientoArticulo = { id: number; nombre: string };
 
@@ -285,7 +286,7 @@ function ActivoFilesViewer({
             if (!accessToken || accessToken.trim().length === 0) return url;
             if (/[?&]token=/.test(url)) return url;
             const sep = url.includes('?') ? '&' : '?';
-            return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+            return `${url}${sep}token=${encodeURIComponent(accessToken)}${appVersionQuery()}`;
         };
 
         if (file.type === 'image') {
@@ -775,7 +776,7 @@ export default function MantenimientoEquipoScreen() {
         if (!accessToken || accessToken.trim().length === 0) return url;
         if (/[?&]token=/.test(url)) return url;
         const sep = url.includes('?') ? '&' : '?';
-        return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+        return `${url}${sep}token=${encodeURIComponent(accessToken)}${appVersionQuery()}`;
     };
 
     const [isMenuVisible, setIsMenuVisible] = useState(false);

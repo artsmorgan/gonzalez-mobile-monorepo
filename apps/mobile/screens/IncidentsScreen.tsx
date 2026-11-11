@@ -50,6 +50,7 @@ import {
   type ChecklistSupervisionIncidentLinkParams,
 } from '@/hooks/checklistSupervisionIncidentLink';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 type IncidentsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Incidents'>;
 type IncidentsScreenRouteProp = RouteProp<RootStackParamList, 'Incidents'>;
@@ -170,7 +171,7 @@ const buildIncidentFileUrl = (incidentId: number | undefined, file: any, accessT
     if (!accessToken || accessToken.trim().length === 0) return url;
     if (/[?&]token=/.test(url)) return url;
     const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}${appVersionQuery()}`;
   };
 
   if (file.type === 'image') {
@@ -199,7 +200,7 @@ const buildContributionFileUrl = (incidentId: number | undefined, contributionId
     if (!accessToken || accessToken.trim().length === 0) return url;
     if (/[?&]token=/.test(url)) return url;
     const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}${appVersionQuery()}`;
   };
 
   if (file.type === 'image') {

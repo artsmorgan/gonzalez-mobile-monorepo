@@ -59,6 +59,7 @@ import {
 } from '@/hooks/openingClosingPositionFilesSync';
 import { loadPuestoArticulosForTable } from '@/hooks/puestoArticulosSync';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 type OpeningClosingPositionScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'OpeningClosingPosition'>;
 
@@ -634,7 +635,7 @@ export default function OpeningClosingPositionScreen() {
     if (!token) return url;
     if (/[?&]token=/.test(url)) return url;
     const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(token)}`;
+    return `${url}${sep}token=${encodeURIComponent(token)}${appVersionQuery()}`;
   }, [queryAccessToken]);
 
   const decodeFirmaHash = (hash?: string | null) => {

@@ -89,6 +89,7 @@ import {
 } from './hooks/documentosEntregadosCacheHelpers';
 import { createApreciacionVulnerabilidad, deleteApreciacionVulnerabilidad, deleteApreciacionVulnerabilidadImage, updateApreciacionVulnerabilidad, updateApreciacionVulnerabilidadFirmaSolicitante } from './hooks/apreciacionVulnerabilidadFunctions';
 import { eventBus } from './hooks/eventBus';
+import { APP_UPDATE_REQUIRED_EVENT, type AppUpdateRequiredPayload } from './hooks/updateRequired';
 import { shouldCheckVersion } from './hooks/versionCheckThrottle';
 import { runQueueRetention } from './hooks/installQueueOwnership';
 import {
@@ -794,6 +795,17 @@ function AppContent() {
     eventBus.on(SESSION_REVOKED_EVENT, onSessionEndedByServer);
     return () => {
       eventBus.off(SESSION_REVOKED_EVENT, onSessionEndedByServer);
+    };
+  }, []);
+
+  /** El servidor exige otra versión de la app (HTTP 426): se explica en vez de dejar solo un error genérico. La descarga está en el inicio de sesión y en la pantalla de inicio. */
+  useEffect(() => {
+    const onUpdateRequired = (payload?: AppUpdateRequiredPayload) => {
+      Alert.alert('Actualización requerida', payload?.message ?? 'Tu versión de la aplicación ya no es compatible. Actualiza para continuar.');
+    };
+    eventBus.on(APP_UPDATE_REQUIRED_EVENT, onUpdateRequired);
+    return () => {
+      eventBus.off(APP_UPDATE_REQUIRED_EVENT, onUpdateRequired);
     };
   }, []);
 

@@ -7,6 +7,7 @@ import {
     formatFechaDMY,
     formatHoraHHmm,
     formatHoraRange,
+    tieneHorarioCompleto,
     isShiftUpcoming,
     levelCode,
     levelLabel,
@@ -44,7 +45,8 @@ describe("Marcar ingreso/salida: formato de la información", () => {
         assert.equal(formatHoraHHmm("14:30:00"), "14:30");
         assert.equal(formatHoraHHmm(null), "");
         assert.equal(formatHoraRange("1970-01-01T06:00:00.000Z", "1970-01-01T14:00:00.000Z"), "06:00 - 14:00");
-        assert.equal(formatHoraRange("06:00:00", null), "06:00");
+        assert.equal(formatHoraRange("06:00:00", null), "", "sin hora de fin no se muestra una hora suelta");
+        assert.equal(formatHoraRange(null, null), "");
         assert.equal(formatHoraRange(null, "14:00:00"), "");
     });
 
@@ -239,18 +241,20 @@ describe("Marcar ingreso/salida: cableado de la pantalla", () => {
         assert.equal(/mark\.(cliente|contrato|corpo)\.nombre/.test(lista), false, "la lista ya no arma esas filas a mano");
     });
 
-    it("muestra empleado (código y nombre) y puesto (código y nombre), y la fecha y hora actual visibles en un recuadro con borde", () => {
+    it("muestra empleado (código y nombre) y puesto (código y nombre), y «Fecha y hora actual» con el mismo estilo que ellos", () => {
         assert.match(pantalla, /levelLabel\(\{ codigo: employee\?\.codigo, nombre: employee\?\.name \}\)/);
-        assert.match(pantalla, /getDisplayDateTimeText\(\)/);
-        const tarjeta = pantalla.slice(pantalla.indexOf("<ThemedView style={styles.dateTimeCard}>"), pantalla.indexOf("styles.identityCard"));
-        assert.match(tarjeta, /\{getDisplayDateTimeText\(\)\}/, "la fecha y hora están visibles dentro del recuadro");
-        const estilo = pantalla.slice(pantalla.indexOf("  dateTimeCard: {"), pantalla.indexOf("  dateTimeText: {"));
-        assert.match(estilo, /borderWidth: 1/, "el recuadro tiene borde visible");
+        const desde = pantalla.indexOf("{/* 2. Fecha y hora actual");
+        const tarjeta = pantalla.slice(desde, pantalla.indexOf("{/* 3 y 4. Empleado y puesto */}"));
+        assert.match(tarjeta, /styles\.identityCard/, "mismo estilo de tarjeta que Empleado y Puesto");
+        assert.match(tarjeta, /styles\.identityLabel\}>Fecha y hora actual</);
+        assert.match(tarjeta, /styles\.identityValue\}>\{getDisplayDateTimeText\(\)\}/);
         assert.equal(pantalla.includes("isDateTimeModalVisible"), false, "no hay modal de fecha y hora");
+        const estilo = pantalla.slice(pantalla.indexOf("  identityCard: {"), pantalla.indexOf("  identityRow: {"));
+        assert.match(estilo, /borderWidth: 1/, "la tarjeta tiene borde visible");
     });
 
     it("el orden de los bloques es el pedido", () => {
-        const orden = ["styles.messageBoxInfo", "styles.dateTimeCard", "styles.identityCard", '<Collapsible title="Información laboral"', "styles.marcaWarningsSection", "styles.statusCard", "styles.actionContainer", "Ver turnos futuros"];
+        const orden = ["styles.messageBoxInfo", "Fecha y hora actual", "Empleado</ThemedText>", '<Collapsible title="Información laboral"', "Fecha y hora de entrada", "styles.marcaWarningsSection", "styles.actionContainer", "<PuestoLocationBlock", "Ver turnos futuros"];
         let desde = pantalla.indexOf("return (\n    <ThemedView style={styles.fullContainer}>");
         assert.ok(desde > 0);
         for (const marca of orden) {
@@ -293,7 +297,7 @@ describe("Marcar ingreso/salida: el servidor trae el siguiente turno y los códi
 
     it("la consulta de la marca actual responde next_shift en todas sus respuestas con datos de marca", () => {
         assert.match(ruta, /pickNextShift\(/);
-        assert.equal((ruta.match(/next_shift: await buscarSiguienteTurno\(\)/g) ?? []).length, 4, "éxito, marca bloqueada, sin turno activo y turno sin datos");
+        assert.equal((ruta.match(/next_shift: await buscarSiguienteTurno\(\)/g) ?? []).length, 3, "éxito, marca bloqueada y sin turno activo");
     });
 
     it("un fallo al buscar el siguiente turno no rompe la marca actual", () => {
@@ -334,5 +338,127 @@ describe("Marcar ingreso/salida: avisos y errores con el mismo estilo", () => {
     it("el error con «Reintentar» ocupa todo el ancho, igual que la caja del mensaje", () => {
         assert.match(pantalla, /errorContainer: \{\s*width: '100%'/);
         assert.match(pantalla, /retryButton: \{\s*width: '100%'/);
+    });
+});
+
+describe("Marcar ingreso/salida: estilo de tarjetas, mensajes, color del botón, fechas, turnos futuros y ubicación del puesto", () => {
+    const pantalla = leer(mobile, "screens/MarcarIngresoSalidaScreen.tsx");
+
+    it("estado, fecha y hora de entrada y de salida usan el estilo de Empleado y Puesto", () => {
+        const a = pantalla.indexOf("{/* 6. Estado y fechas");
+        const bloque = pantalla.slice(a, pantalla.indexOf("{/* 7. Mensajes", a));
+        assert.match(bloque, /styles\.identityCard/);
+        for (const titulo of ["Estado", "Fecha y hora de entrada", "Fecha y hora de salida"]) {
+            assert.match(bloque, new RegExp("styles\\.identityLabel\\}>" + titulo + "<"), titulo);
+        }
+        assert.equal(/styles\.statusCard|styles\.timeLine/.test(bloque), false, "ya no usa la tarjeta anterior");
+    });
+
+    it("los mensajes van debajo del estado y antes del botón de marcar", () => {
+        const estado = pantalla.indexOf("{/* 6. Estado y fechas");
+        const mensajes = pantalla.indexOf("{/* 7. Mensajes");
+        const boton = pantalla.indexOf("{/* 8. Botón de marcar entrada o salida */}");
+        assert.ok(estado > 0 && mensajes > estado && boton > mensajes);
+        assert.ok(pantalla.indexOf("styles.marcaWarningsSection", mensajes) < boton, "los errores también quedan debajo del estado");
+    });
+
+    it("el botón de ingreso es verde y el de salida conserva su color", () => {
+        assert.match(pantalla, /startShiftButton: \{\s*backgroundColor: '#2E7D32'/);
+        assert.match(pantalla, /endShiftButton: \{\s*backgroundColor: '#C0392B'/);
+    });
+
+    it("las fechas visibles son DD-MM-AAAA (la hora de entrada y salida ya no sale como AAAA-MM-DD «a las»)", () => {
+        assert.equal(pantalla.includes("' a las '"), false);
+        assert.match(pantalla, /const convertDateToLocal = \(date: string\) => \{\s*return `\$\{formatFechaDMY\(date\)\} \$\{getNextTime\(date\)\}`;/);
+    });
+
+    it("turnos futuros: «Tienes libre este día» con un solo turno libre y la fecha en cada tarjeta", () => {
+        assert.match(pantalla, /dayMarks\.length === 1 && isDiaLibreTurno\(dayMarks\[0\]\.tipo_turno\)/);
+        assert.match(pantalla, /Tienes libre este día/);
+        assert.equal(pantalla.includes("Estás libre este día"), false);
+        assert.match(pantalla, /<ThemedText style=\{styles\.markItemTime\}>\{formatDateDMY\(mark\.fecha\)\}<\/ThemedText>/);
+    });
+
+    it("la ubicación del puesto se ofrece en la pantalla principal, en el próximo turno y en cada tarjeta de turnos futuros", () => {
+        assert.equal((pantalla.match(/<PuestoLocationBlock /g) ?? []).length, 3);
+        assert.match(pantalla, /<PuestoLocationBlock ubicacion=\{marcaView\.puesto\?\.ubicacion\}/);
+        assert.match(pantalla, /<PuestoLocationBlock ubicacion=\{upcomingNextShift\.puesto\?\.ubicacion\}/);
+        assert.match(pantalla, /<PuestoLocationBlock ubicacion=\{mark\.puesto\?\.ubicacion\}/);
+        const boton = pantalla.indexOf("{/* 8. Botón de marcar entrada o salida */}");
+        assert.ok(pantalla.indexOf("<PuestoLocationBlock ubicacion={marcaView", boton) > boton, "debajo de los botones de ingreso y salida");
+    });
+
+    it("el servidor manda las coordenadas del puesto también en next_shift", () => {
+        const ruta = leer(server, "app/api/attendance/user/[id]/route.ts");
+        const a = ruta.indexOf("const buscarSiguienteTurno");
+        assert.match(ruta.slice(a, a + 6000), /puesto: \{[\s\S]*?ubicacion: \{[\s\S]*?coordenadas_gpslat[\s\S]*?coordenadas_gpslng/);
+    });
+});
+
+describe("Marcar ingreso/salida: sin ventana flotante del mapa y con «Reintentar» a todo el ancho", () => {
+    const pantalla = leer(mobile, "screens/MarcarIngresoSalidaScreen.tsx");
+
+    it("ya no existe la ventana flotante de ubicación fuera de rango ni el botón «Ver mapa»", () => {
+        assert.equal(/<OutOfRangeMap|components\/OutOfRangeMap/.test(pantalla), false, "ni el componente del mapa ni su import");
+        assert.equal(pantalla.includes("isOutOfRangeMapModalVisible"), false);
+        assert.equal(pantalla.includes("Ver mapa"), false);
+        assert.equal(pantalla.includes("outOfRangeMapModalContainer"), false);
+    });
+
+    it("el «Reintentar» de la ubicación ocupa todo el ancho", () => {
+        assert.match(pantalla, /styles\.secondaryButton,\s*styles\.locationRetryButton,/);
+        assert.match(pantalla, /locationRetryButton: \{\s*width: '100%'/);
+    });
+});
+
+describe("Marcar ingreso/salida: marcas sin hora de inicio o de fin", () => {
+    const pantalla = leer(mobile, "screens/MarcarIngresoSalidaScreen.tsx");
+
+    it("hay horario solo con hora de inicio y de fin", () => {
+        assert.equal(tieneHorarioCompleto("1970-01-01T06:00:00.000Z", "1970-01-01T14:00:00.000Z"), true);
+        assert.equal(tieneHorarioCompleto(null, "14:00:00"), false);
+        assert.equal(tieneHorarioCompleto("06:00:00", null), false);
+        assert.equal(tieneHorarioCompleto(undefined, undefined), false);
+    });
+
+    it("la información laboral, el próximo turno y la lista de 30 días muestran el horario solo si está completo (si no, queda la fecha)", () => {
+        assert.equal((pantalla.match(/tieneHorarioCompleto\(/g) ?? []).length >= 5, true);
+        assert.match(pantalla, /tieneHorarioCompleto\(marcaView\.hora_inicio, marcaView\.hora_fin\) \? \(\s*<ThemedView style=\{styles\.infoRow\}>\s*<ThemedText style=\{styles\.infoLabel\}>Horario de la marca/);
+        assert.match(pantalla, /tieneHorarioCompleto\(upcomingNextShift\.hora_inicio, upcomingNextShift\.hora_fin\) \? \(/);
+        assert.match(pantalla, /tieneHorarioCompleto\(mark\.hora_inicio, mark\.hora_fin\) \? \(/);
+        assert.equal(pantalla.includes("'Sin hora'"), false, "ya no se escribe «Sin hora»");
+    });
+
+    it("no se muestra la tardía sin horario completo, ni el servidor ni la app la calculan", () => {
+        assert.match(pantalla, /tieneHorarioCompleto\(marcaView\.hora_inicio, marcaView\.hora_fin\) &&\s*marcaView\.hora_entrada_digitada == null/);
+        assert.match(pantalla, /if \(!tieneHorarioCompleto\(marca\.hora_inicio, marca\.hora_fin\)\) is_late = false;/);
+        const ruta = leer(server, "app/api/attendance/user/[id]/route.ts");
+        assert.match(ruta, /if \(marcaDia\.hora_inicio == null \|\| marcaDia\.hora_fin == null\) \{\s*\/\/ Sin hora de inicio o de fin no hay horario[\s\S]*?\} else if \(estado === "No ingresado"\)/);
+    });
+
+    it("el servidor ya no convierte la hora nula en una hora (06:00): la respuesta conserva el null", () => {
+        const ruta = leer(server, "app/api/attendance/user/[id]/route.ts");
+        assert.equal(/marca\.hora_inicio = new Date|alternativa\.hora_inicio = new Date|new Date\("1970-01-01 00:00:00"\)/.test(ruta), false);
+        assert.match(ruta, /new Date\(marca\.hora_inicio \?\? "1970-01-01T00:00:00\.000Z"\)/);
+        assert.equal(leer(server, "app/api/attendance/[id]/route.ts").includes('new Date("1970-01-01 00:00:00")'), false, "tampoco con la hora local del servidor");
+        assert.match(ruta, /\(marcaDia\.hora_inicio \? " a las " \+ hora_inicio_string : ""\)/);
+    });
+});
+
+describe("Marcar ingreso/salida: fecha y hora de entrada sin hora cuando falta una hora del turno", () => {
+    const pantalla = leer(mobile, "screens/MarcarIngresoSalidaScreen.tsx");
+
+    it("la fecha y hora programadas de entrada y de salida muestran solo la fecha si la marca no tiene hora de inicio o de fin", () => {
+        const a = pantalla.indexOf("const fechaYHoraProgramada =");
+        const calculo = pantalla.slice(a, a + 600);
+        assert.match(calculo, /!tieneHorarioCompleto\(marcaView\.hora_inicio, marcaView\.hora_fin\)\s*\?\s*formatFechaDMY\(attendanceData\.next_time\)/);
+        // las dos filas (entrada y salida) usan ese valor
+        assert.equal((pantalla.match(/\{fechaYHoraProgramada\}|: fechaYHoraProgramada\}/g) ?? []).length, 2);
+        assert.equal(/\$\{formatFechaDMY\(attendanceData\.next_time\)\} \$\{getNextTime\(attendanceData\.next_time\)\}`\}/.test(pantalla.slice(pantalla.indexOf("{/* 6. Estado y fechas"))), false);
+    });
+
+    it("las horas que marcó la persona siguen mostrándose completas", () => {
+        assert.match(pantalla, /convertDateToLocal\(marcaView\.hora_entrada_digitada\)/);
+        assert.match(pantalla, /convertDateToLocal\(marcaView\.hora_salida_digitada\)/);
     });
 });

@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "./callDynamicPrisma";
 import { prisma } from "./prismaClient";
+import { actividadAplicaAlTurno, loadTiposTurnoByActividad } from "./actividadTipoTurno";
 
 export async function getActivities(req: NextRequest, id: number) {
     try {
@@ -51,6 +52,7 @@ export async function getActivities(req: NextRequest, id: number) {
             },
         });
         const actividadById = new Map<number, any>((Array.isArray(actividadesBd) ? actividadesBd : []).map((a: any) => [Number(a.id), a]));
+        const tiposTurnoPorActividad = await loadTiposTurnoByActividad(req, actividadIds);
 
         const actividades: any[] = [];
         for (const actividadPuesto of Array.isArray(actividadesPuesto) ? actividadesPuesto : []) {
@@ -66,9 +68,9 @@ export async function getActivities(req: NextRequest, id: number) {
                 ? (actividad.fecha_fin instanceof Date ? actividad.fecha_fin : new Date(actividad.fecha_fin))
                 : null;
 
-            // Actividades con tipo_turno definido solo aplican al turno de la marca actual.
-            // Si la actividad no tiene tipo_turno (registros previos a esta funcionalidad), no se restringe.
-            if (actividad.tipo_turno && actividad.tipo_turno !== marcaDia.tipo_turno) {
+            // Una actividad con tipos de turno (uno o varios: D, M, N) solo aplica al turno de la marca actual.
+            // Sin tipos en `c_actividades_tipo_turno` se usa el valor único anterior y, sin ninguno, no se restringe.
+            if (!actividadAplicaAlTurno(tiposTurnoPorActividad.get(Number(actividad.id)) ?? [], actividad.tipo_turno, marcaDia.tipo_turno)) {
                 continue;
             }
 

@@ -8,6 +8,7 @@ import { reportError } from "../../../utils/reportError";
 
 import { auditCreateFields } from "../../../utils/auditFields";
 import { syncActividadHierarchy } from "../../../utils/syncActividadHierarchy";
+import { replaceTiposTurno, tipoTurnoRespaldo, tiposTurnoDeLaPeticion } from "../../../utils/actividadTipoTurno";
 export async function GET(req: NextRequest) {
     try {
         return NextResponse.json({ status: true, message: "Método GET" }, { status: 200 });
@@ -24,7 +25,10 @@ export async function POST(req: NextRequest) {
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        const { marca_id, nombre_actividad, fecha_inicio, fecha_fin, frecuencia, es_revision_equipo, descripcion_actividad, reglas, puestos_plazas, firma_responsable, tipo_turno } = await req.json();
+        const { marca_id, nombre_actividad, fecha_inicio, fecha_fin, frecuencia, es_revision_equipo, descripcion_actividad, reglas, puestos_plazas, firma_responsable, tipo_turno, tipos_turno } = await req.json();
+
+        // Tipos de turno de la actividad (uno o varios: D, M, N). `tipo_turno` (uno solo) lo mandan las apps anteriores.
+        const tiposTurno = tiposTurnoDeLaPeticion({ tipos_turno, tipo_turno });
 
         if (!marca_id || !nombre_actividad || !fecha_inicio || !frecuencia || es_revision_equipo === undefined || !descripcion_actividad || !reglas || !firma_responsable) {
             console.log("marca_id", marca_id);
@@ -62,12 +66,15 @@ export async function POST(req: NextRequest) {
                     es_revision_equipo: es_revision_equipo,
                     descripcion_actividad: descripcion_actividad,
                     firma_responsable: firma_responsable,
-                    tipo_turno: tipo_turno || null,
+                    // Respaldo de un solo valor (el primero); los tipos de turno viven en `c_actividades_tipo_turno`.
+                    tipo_turno: tipoTurnoRespaldo(tiposTurno),
                 }
             }
         });
 
         if (actividad) {
+            await replaceTiposTurno(req, Number(actividad.id), tiposTurno);
+
             let plazas_ids: number[] = [];
             const puestos_plazas_parse =
                 typeof puestos_plazas === "string"
@@ -155,7 +162,8 @@ export async function POST(req: NextRequest) {
                                 frecuencia,
                                 es_revision_equipo,
                                 firma_responsable,
-                                tipo_turno: tipo_turno || null,
+                                tipo_turno: tipoTurnoRespaldo(tiposTurno),
+                                tipos_turno: tiposTurno,
                                 puestos_ids: confirmedPuestoIds,
                             },
                         }]),

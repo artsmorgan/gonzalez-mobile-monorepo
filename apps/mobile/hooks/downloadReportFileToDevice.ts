@@ -5,6 +5,7 @@ import * as IntentLauncher from 'expo-intent-launcher';
 import * as Sharing from 'expo-sharing';
 import authedFetch from './authedFetch';
 import getValidAccessTokenOrLogout from './getValidAccessTokenOrLogout';
+import { appVersionHeaders } from './appVersionHeader';
 
 export type DownloadReportFileResult =
   | { ok: true; savedUri: string; fileName: string }
@@ -390,7 +391,7 @@ export async function downloadAndShareLargeFile(params: {
       destFile.delete();
     }
     await File.downloadFileAsync(url, destFile, {
-      headers: params.headers,
+      headers: { ...appVersionHeaders(), ...params.headers },
       idempotent: true,
     });
 

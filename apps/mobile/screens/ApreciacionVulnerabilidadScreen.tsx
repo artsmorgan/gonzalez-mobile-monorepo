@@ -62,6 +62,7 @@ import { buildApreciacionImagenesJsonForUpload, deleteApreciacionLocalFilesFromM
 import Constants from 'expo-constants';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 /** Alcance del listado/caché: sucursal (corpo_id). */
 type ApreciacionListCorpoScope = {
@@ -859,7 +860,7 @@ export default function ApreciacionVulnerabilidadScreen() {
     if (!token) return url;
     if (/[?&]token=/.test(url)) return url;
     const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(token)}`;
+    return `${url}${sep}token=${encodeURIComponent(token)}${appVersionQuery()}`;
   }, [queryAccessToken]);
 
   const filterCorpoIdRef = useRef(filterCorpoId);

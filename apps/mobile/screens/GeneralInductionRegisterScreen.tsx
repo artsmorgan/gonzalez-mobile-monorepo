@@ -62,6 +62,7 @@ import {
 } from '@/hooks/generalInductionRegisterCache';
 import { saveFile, getFile, deleteFile, getLocalFileDisplayUri, hydrateSignatureRef, deleteSignatureLocalRef } from '@/hooks/fileStorage';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 type GeneralInductionRegisterScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -960,7 +961,7 @@ export default function GeneralInductionRegisterScreen() {
     const raw = String(url || '').trim();
     if (!raw) return '';
     if (!accessToken) return raw;
-    return `${raw}${raw.includes('?') ? '&' : '?'}token=${encodeURIComponent(String(accessToken))}`;
+    return `${raw}${raw.includes('?') ? '&' : '?'}token=${encodeURIComponent(String(accessToken))}${appVersionQuery()}`;
   };
 
   const loadImageFromServer = useCallback(async (registroId: number, imageName: string): Promise<string | null> => {

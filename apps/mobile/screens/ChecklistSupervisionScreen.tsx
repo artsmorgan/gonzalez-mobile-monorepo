@@ -78,6 +78,7 @@ import Constants from 'expo-constants';
 import { isStoredPlanillasTokenValid, readStoredPlanillasToken } from '@/hooks/planillasTokenStorage';
 import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRevalidationModal';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 const CHECKLIST_SUPERVISION_PHOTO_PREFIX = 'checklist_supervision';
 
@@ -1576,7 +1577,7 @@ export default function ChecklistSupervisionScreen() {
     if (!token) return url;
     if (/[?&]token=/.test(url)) return url;
     const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(token)}`;
+    return `${url}${sep}token=${encodeURIComponent(token)}${appVersionQuery()}`;
   }, [accessToken, queryAccessToken]);
 
   const [isMenuVisible, setIsMenuVisible] = useState(false);

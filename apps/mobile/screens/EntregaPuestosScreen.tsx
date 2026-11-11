@@ -36,6 +36,7 @@ import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRe
 import { getEmployeeProfilePhotoDisplayUri } from '@/hooks/employeeProfilePhotoStorage';
 import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 type EntregaPuestosScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'EntregaPuestos'>;
 
@@ -260,7 +261,7 @@ export default function EntregaPuestosScreen() {
     if (!accessToken || accessToken.trim().length === 0) return url;
     if (/[?&]token=/.test(url)) return url;
     const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}${appVersionQuery()}`;
   };
 
   const buildEntregaPuestoImageUrl = (

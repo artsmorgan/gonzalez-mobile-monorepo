@@ -38,6 +38,7 @@ import {
   stripVehicleVisitasAttachmentForRow,
 } from '@/hooks/vehiclesVisitasCacheHelpers';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 type VehiclesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Vehicles'>;
 
@@ -264,7 +265,7 @@ export default function VehiclesScreen() {
     if (!accessToken || accessToken.trim().length === 0) return url;
     if (/[?&]token=/.test(url)) return url;
     const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}${appVersionQuery()}`;
   };
 
   // Vehicles state

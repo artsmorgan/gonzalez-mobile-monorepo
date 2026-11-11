@@ -58,6 +58,7 @@ import getValidAccessTokenOrLogout from '../hooks/getValidAccessTokenOrLogout';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 
@@ -471,7 +472,7 @@ export default function JobManualsScreen() {
     if (!accessToken || accessToken.trim().length === 0) return url;
     if (/[?&]token=/.test(url)) return url;
     const separator = url.includes('?') ? '&' : '?';
-    return `${url}${separator}token=${encodeURIComponent(accessToken)}`;
+    return `${url}${separator}token=${encodeURIComponent(accessToken)}${appVersionQuery()}`;
   }, [accessToken]);
 
   // Helpers para construir URLs de archivos en el servidor (similar a IncidentsScreen)

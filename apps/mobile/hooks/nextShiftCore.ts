@@ -4,7 +4,10 @@
  * El servidor responde `next_shift` junto con la marca actual (`GET /api/attendance/user/[id]`): el turno laboral (tipo distinto de «L») más cercano
  * cuya entrada, restados los minutos previos, es posterior al momento de la consulta. La app lo guarda para mostrarlo sin conexión.
  */
-export type ShiftLevel = { id?: number | null; codigo?: string | number | null; nombre?: string | null } | null | undefined;
+export type ShiftLevel =
+  | { id?: number | null; codigo?: string | number | null; nombre?: string | null; ubicacion?: { lat?: unknown; lng?: unknown } | null }
+  | null
+  | undefined;
 
 export type NextShift = {
   id: number;
@@ -27,6 +30,11 @@ export type StoredNextShift = {
   savedAt: number;
   shift: NextShift;
 };
+
+/** Turno de día libre (tipo «L»). */
+export function isDiaLibreTurno(tipoTurno: unknown): boolean {
+  return String(tipoTurno ?? '').trim().toUpperCase() === 'L';
+}
 
 /** Código del elemento; si no tiene código, su número (id). `null` si no hay ninguno de los dos. */
 export function levelCode(level: ShiftLevel): string | null {
@@ -102,12 +110,16 @@ export function formatHoraHHmm(hora: unknown): string {
   return m ? `${m[1]}:${m[2]}` : '';
 }
 
-/** «06:00 - 14:00» (o solo la hora de inicio si no hay fin). Vacío si no hay ninguna. */
+/** «06:00 - 14:00». Vacío si falta la hora de inicio o la de fin: en ese caso solo se muestra la fecha (no se inventa ni se muestra una hora suelta). */
 export function formatHoraRange(inicio: unknown, fin: unknown): string {
   const a = formatHoraHHmm(inicio);
   const b = formatHoraHHmm(fin);
-  if (!a) return '';
-  return b ? `${a} - ${b}` : a;
+  return a && b ? `${a} - ${b}` : '';
+}
+
+/** La marca tiene hora de inicio y de fin (ninguna nula): solo entonces tiene horario que mostrar y puede haber tardía. */
+export function tieneHorarioCompleto(inicio: unknown, fin: unknown): boolean {
+  return formatHoraHHmm(inicio) !== '' && formatHoraHHmm(fin) !== '';
 }
 
 const TIPO_TURNO: Record<string, string> = { D: 'Diurno', M: 'Mixto', N: 'Nocturno', L: 'Libre' };

@@ -71,6 +71,7 @@ import {
 } from '@/hooks/fileStorage';
 import { stripActaEntregaImagesForActionPayload } from '@/hooks/actaEntregaProductosImagesSync';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 type NavProp = NativeStackNavigationProp<RootStackParamList, 'ActaEntregaProductos'>;
 
@@ -512,7 +513,7 @@ export default function ActaEntregaProductosScreen() {
     if (!token) return url;
     if (/[?&]token=/.test(url)) return url;
     const separator = url.includes('?') ? '&' : '?';
-    return `${url}${separator}token=${encodeURIComponent(token)}`;
+    return `${url}${separator}token=${encodeURIComponent(token)}${appVersionQuery()}`;
   }, [accessToken, queryAccessToken]);
 
   const [isMenuVisible, setIsMenuVisible] = useState(false);

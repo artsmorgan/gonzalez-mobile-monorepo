@@ -22,14 +22,6 @@ export function isWorkShift(tipoTurno: string | null | undefined): boolean {
     return t !== "" && t !== "L";
 }
 
-/** Mensaje al empleado cuando el turno obtenido no trae hora de inicio ni tipo de turno: no se puede marcar. */
-export const MENSAJE_TURNO_SIN_DATOS = "Imposible marcar entrada, contacta a tu administrador o supervisor para que revise el caso correspondiente";
-
-/** Turno sin datos: `hora_inicio` nula y `tipo_turno` nulo (o vacío). Debe evaluarse ANTES de normalizar la hora nula a medianoche. */
-export function turnoSinDatos(horaInicio: unknown, tipoTurno: unknown): boolean {
-    return (horaInicio === null || horaInicio === undefined) && String(tipoTurno ?? "").trim() === "";
-}
-
 export function pickNextShift<T extends NextShiftCandidate>(marcas: T[], nowMs: number, previousMinutes: number): T | null {
     const previousMs = Math.max(0, Number(previousMinutes) || 0) * 60 * 1000;
     let best: { marca: T; start: number } | null = null;

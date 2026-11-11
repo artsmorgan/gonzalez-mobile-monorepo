@@ -26,6 +26,7 @@ import {
   type ArticuloMantenimientoRemoteFile,
   remoteArchivosFromUltimoMantenimiento,
 } from '@/utils/articuloMantenimientoFiles';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 type FilePickKind = 'image' | 'audio' | 'video' | 'document';
 
@@ -154,7 +155,7 @@ export default function ArticuloMantenimientoArchivosModal({
     const appendToken = (url: string) => {
       if (!accessToken?.trim()) return url;
       if (/[?&]token=/.test(url)) return url;
-      return `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(accessToken)}`;
+      return `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(accessToken)}${appVersionQuery()}`;
     };
     const t = String(file.type || '').toLowerCase();
     if (t === 'image') {

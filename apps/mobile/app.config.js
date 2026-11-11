@@ -21,63 +21,79 @@ function getGitCommitLast4() {
  * Debe coincidir con la entrada de `apps/server/mobile_versions_test.json` (lite) o `mobile_versions_prod.json` (prod).
  */
 const APP_VERSION_INFO_LITE = {
-  "version": "1.0.5",
-  "id": "1a737a9f-f083-4119-99ff-6a19d920763b",
+  "version": "1.0.6",
+  "id": "246b7e64-e980-416b-82dc-382668ab24f1",
   "name": "MonitoreApp",
-  "created_at": "2026-11-04T00:00:00Z",
-  "title": "Nuevo diseño de Marcar ingreso y salida, siguiente turno sin conexión y avisos unificados",
-  "description": "Se rediseña la pantalla de marcas con la información laboral por códigos, se guarda el siguiente turno para verlo sin conexión, todos los avisos y errores comparten estilo y se avisa cuando un turno no tiene datos para marcar.",
+  "created_at": "2026-11-10T00:00:00Z",
+  "title": "Versión en el inicio de sesión, ubicación del puesto con Waze, Mis puestos y actividades con varios tipos de turno",
+  "description": "El inicio de sesión muestra la versión y permite descargar la última, Marcar ingreso y salida estrena estilo y ubicación del puesto con mapa y Waze, se agrega Mis puestos y las actividades pueden aplicar a varios tipos de turno.",
   "notas": [
     {
-      "title": "Marcar ingreso y salida: nuevo diseño",
-      "description": "La pantalla se reorganizó: fecha y hora actuales en un recuadro, empleado y puesto con su código, y la información laboral en una sección plegable (cerrada por defecto) que muestra el código o número de cada nivel de la jerarquía y el horario del turno. Los mensajes quedan arriba del estado, y el estado de ingreso o salida se ve sin títulos intermedios."
+      "title": "Versión y actualización en el inicio de sesión",
+      "description": "La pantalla de inicio de sesión muestra la versión de la aplicación, busca sola si hay una versión nueva y permite buscarla con un botón. Si la hay, muestra sus notas y permite descargar el instalador sin iniciar sesión. Si el servidor exige otra versión, la aplicación lo avisa con un mensaje claro."
     },
     {
-      "title": "Avisos y errores con un solo estilo",
-      "description": "Todos los avisos y errores de la pantalla de marcas (minutos previos, tardía, día libre, salida anticipada, ubicación y errores de carga) usan ahora la misma caja y tipografía, y solo cambia el color según su tipo. El botón «Reintentar» ocupa todo el ancho."
+      "title": "Banner con la versión en producción",
+      "description": "En la versión de producción se muestra un banner fijo en la parte superior con el número de versión instalada (por ejemplo, Versión 1.0.5). La versión de pruebas conserva su banner de prueba."
     },
     {
-      "title": "Siguiente turno sin conexión",
-      "description": "La app guarda el siguiente turno laboral (sin contar los días libres) para consultarlo sin conexión desde «Ver turnos futuros», que ahora abre directamente en ese turno. La lista de los próximos 30 días solo se consulta cuando el usuario la pide y lo confirma. Cada usuario ve únicamente su propio turno guardado, aunque comparta el teléfono."
+      "title": "Marcar ingreso y salida: nuevo estilo",
+      "description": "La fecha y hora actual, el estado y las fechas y horas de entrada y de salida se muestran con el mismo estilo que el empleado y el puesto. Los mensajes aparecen debajo del estado, el botón de ingreso es verde y las fechas se ven como DD-MM-AAAA."
     },
     {
-      "title": "Información laboral con códigos",
-      "description": "Se muestran el código de la división, el número de contrato y el número de sucursal en lugar de sus identificadores, y se ocultan los identificadores del cliente, el rol y el horario. El cambio es solo visual; los datos internos no cambian. El tipo de turno se lee como Diurno, Mixto, Nocturno o Libre (Indeterminable si es otro)."
+      "title": "Turnos futuros",
+      "description": "Un día con un solo turno libre muestra «Tienes libre este día» en lugar de un turno sin hora, y cada tarjeta de turno incluye su fecha."
     },
     {
-      "title": "Turno sin datos",
-      "description": "Si el turno obtenido no tiene hora de inicio ni tipo de turno, la app muestra «Imposible marcar entrada, contacta a tu administrador o supervisor para que revise el caso correspondiente» y no permite marcar."
+      "title": "Ubicación del puesto con mapa y Waze",
+      "description": "En Marcar ingreso y salida, debajo de los botones, y en las tarjetas de turnos futuros hay un botón «Mostrar ubicación del puesto» que muestra las coordenadas del puesto, un mapa con tu ubicación actual y un botón para llegar con Waze."
+    },
+    {
+      "title": "Mis puestos",
+      "description": "El módulo Ubicación del puesto incluye la sección «Mis puestos». Con conexión a internet muestra los puestos de tus turnos de hoy en adelante; cada uno se abre para ver su mapa con tu ubicación y llegar con Waze si el puesto tiene coordenadas."
+    },
+    {
+      "title": "Actividades con varios tipos de turno",
+      "description": "Al crear o editar una actividad se pueden seleccionar varios tipos de turno (Diurno, Mixto y Nocturno) con casillas; la actividad aplica a los turnos seleccionados."
     }
   ]
 };
 
 const APP_VERSION_INFO_PROD = {
-  "version": "1.0.4",
-  "id": "8701c495-132c-4121-8ea3-a05562062979",
+  "version": "1.0.5",
+  "id": "2f46c3a0-616d-4512-a49e-d7b13ac33603",
   "name": "MonitoreApp",
-  "created_at": "2026-11-04T00:00:00Z",
-  "title": "Nuevo diseño de Marcar ingreso y salida, siguiente turno sin conexión y avisos unificados",
-  "description": "Se rediseña la pantalla de marcas con la información laboral por códigos, se guarda el siguiente turno para verlo sin conexión, todos los avisos y errores comparten estilo y se avisa cuando un turno no tiene datos para marcar.",
+  "created_at": "2026-11-10T00:00:00Z",
+  "title": "Versión en el inicio de sesión, ubicación del puesto con Waze, Mis puestos y actividades con varios tipos de turno",
+  "description": "El inicio de sesión muestra la versión y permite descargar la última, Marcar ingreso y salida estrena estilo y ubicación del puesto con mapa y Waze, se agrega Mis puestos y las actividades pueden aplicar a varios tipos de turno.",
   "notas": [
     {
-      "title": "Marcar ingreso y salida: nuevo diseño",
-      "description": "La pantalla se reorganizó: fecha y hora actuales en un recuadro, empleado y puesto con su código, y la información laboral en una sección plegable (cerrada por defecto) que muestra el código o número de cada nivel de la jerarquía y el horario del turno. Los mensajes quedan arriba del estado, y el estado de ingreso o salida se ve sin títulos intermedios."
+      "title": "Versión y actualización en el inicio de sesión",
+      "description": "La pantalla de inicio de sesión muestra la versión de la aplicación, busca sola si hay una versión nueva y permite buscarla con un botón. Si la hay, muestra sus notas y permite descargar el instalador sin iniciar sesión. Si el servidor exige otra versión, la aplicación lo avisa con un mensaje claro."
     },
     {
-      "title": "Avisos y errores con un solo estilo",
-      "description": "Todos los avisos y errores de la pantalla de marcas (minutos previos, tardía, día libre, salida anticipada, ubicación y errores de carga) usan ahora la misma caja y tipografía, y solo cambia el color según su tipo. El botón «Reintentar» ocupa todo el ancho."
+      "title": "Banner con la versión en producción",
+      "description": "En la versión de producción se muestra un banner fijo en la parte superior con el número de versión instalada (por ejemplo, Versión 1.0.5). La versión de pruebas conserva su banner de prueba."
     },
     {
-      "title": "Siguiente turno sin conexión",
-      "description": "La app guarda el siguiente turno laboral (sin contar los días libres) para consultarlo sin conexión desde «Ver turnos futuros», que ahora abre directamente en ese turno. La lista de los próximos 30 días solo se consulta cuando el usuario la pide y lo confirma. Cada usuario ve únicamente su propio turno guardado, aunque comparta el teléfono."
+      "title": "Marcar ingreso y salida: nuevo estilo",
+      "description": "La fecha y hora actual, el estado y las fechas y horas de entrada y de salida se muestran con el mismo estilo que el empleado y el puesto. Los mensajes aparecen debajo del estado, el botón de ingreso es verde y las fechas se ven como DD-MM-AAAA."
     },
     {
-      "title": "Información laboral con códigos",
-      "description": "Se muestran el código de la división, el número de contrato y el número de sucursal en lugar de sus identificadores, y se ocultan los identificadores del cliente, el rol y el horario. El cambio es solo visual; los datos internos no cambian. El tipo de turno se lee como Diurno, Mixto, Nocturno o Libre (Indeterminable si es otro)."
+      "title": "Turnos futuros",
+      "description": "Un día con un solo turno libre muestra «Tienes libre este día» en lugar de un turno sin hora, y cada tarjeta de turno incluye su fecha."
     },
     {
-      "title": "Turno sin datos",
-      "description": "Si el turno obtenido no tiene hora de inicio ni tipo de turno, la app muestra «Imposible marcar entrada, contacta a tu administrador o supervisor para que revise el caso correspondiente» y no permite marcar."
+      "title": "Ubicación del puesto con mapa y Waze",
+      "description": "En Marcar ingreso y salida, debajo de los botones, y en las tarjetas de turnos futuros hay un botón «Mostrar ubicación del puesto» que muestra las coordenadas del puesto, un mapa con tu ubicación actual y un botón para llegar con Waze."
+    },
+    {
+      "title": "Mis puestos",
+      "description": "El módulo Ubicación del puesto incluye la sección «Mis puestos». Con conexión a internet muestra los puestos de tus turnos de hoy en adelante; cada uno se abre para ver su mapa con tu ubicación y llegar con Waze si el puesto tiene coordenadas."
+    },
+    {
+      "title": "Actividades con varios tipos de turno",
+      "description": "Al crear o editar una actividad se pueden seleccionar varios tipos de turno (Diurno, Mixto y Nocturno) con casillas; la actividad aplica a los turnos seleccionados."
     }
   ]
 };
@@ -209,9 +225,9 @@ module.exports = ({ config }) => {
          */
         GUARDIFY_ENABLED: process.env.EXPO_PUBLIC_GUARDIFY_ENABLED || process.env.GUARDIFY_ENABLED || "false",
         /** Sin valor por defecto: una URL de túnel temporal no debe quedar embebida en ninguna build. Se define en el perfil de EAS (ver docs/guardify/compilar-apk-pruebas.md). */
-        GUARDIFY_URL: process.env.EXPO_PUBLIC_GUARDIFY_URL || process.env.GUARDIFY_URL || "",
+        GUARDIFY_URL: process.env.EXPO_PUBLIC_GUARDIFY_URL || process.env.GUARDIFY_URL || "https://guardifyconsole-production.up.railway.app",
         /** Cada cuántos segundos manda el equipo su latido (batería y ubicación con permiso). Vacío = 300 (5 min); mínimo 30. */
-        GUARDIFY_HEARTBEAT_SECONDS: process.env.EXPO_PUBLIC_GUARDIFY_HEARTBEAT_SECONDS || process.env.GUARDIFY_HEARTBEAT_SECONDS || "",
+        GUARDIFY_HEARTBEAT_SECONDS: process.env.EXPO_PUBLIC_GUARDIFY_HEARTBEAT_SECONDS || process.env.GUARDIFY_HEARTBEAT_SECONDS || 60,
         GUARDIFY_APP_KEY: process.env.EXPO_PUBLIC_GUARDIFY_APP_KEY || process.env.GUARDIFY_APP_KEY || "monitoreapp",
         /** Código de empresa embebido (producción). En lite/full se deja vacío y se escribe al registrar el equipo. */
         GUARDIFY_COMPANY_CODE: process.env.EXPO_PUBLIC_GUARDIFY_COMPANY_CODE || process.env.GUARDIFY_COMPANY_CODE || "corporacion-gonzalez",

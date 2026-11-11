@@ -3,6 +3,7 @@ import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessToke
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../../utils/prismaClient";
 import { reportError } from "../../../../../../utils/reportError";
+import { conTiposTurno, loadTiposTurnoByActividad } from "../../../../../../utils/actividadTipoTurno";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
@@ -99,7 +100,10 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
       puestosByActividad.set(actividadId, list);
     }
 
-    const enriched = items.map((actividad: { id?: number }) => {
+    const tiposPorActividad = await loadTiposTurnoByActividad(req, actividadIds);
+    const conTipos = conTiposTurno(items as { id?: number; tipo_turno?: unknown }[], tiposPorActividad);
+
+    const enriched = conTipos.map((actividad) => {
       const id = Number(actividad.id);
       const puestos = (puestosByActividad.get(id) ?? []).sort((a, b) =>
         a.nombre.localeCompare(b.nombre, "es"),

@@ -46,6 +46,7 @@ import { RootStackParamList } from '../App';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 import { isPermitRangeInverted, reconcilePermitRange } from '@/hooks/permitDateRange';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'PermitRequest'>;
 type PermitType = 'Con goce' | 'Sin goce';
@@ -240,7 +241,7 @@ const appendTokenToUrl = (url: string, accessToken?: string | null): string => {
   if (!accessToken || accessToken.trim().length === 0) return url;
   if (/[?&]token=/.test(url)) return url;
   const sep = url.includes('?') ? '&' : '?';
-  return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  return `${url}${sep}token=${encodeURIComponent(accessToken)}${appVersionQuery()}`;
 };
 
 const buildPermitRequestMediaUrl = (
