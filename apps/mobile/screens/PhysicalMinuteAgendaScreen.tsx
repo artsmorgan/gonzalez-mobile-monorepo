@@ -51,6 +51,7 @@ import authedFetch from '@/hooks/authedFetch';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 type PhysicalMinuteAgendaScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'PhysicalMinuteAgenda'>;
 
@@ -432,7 +433,7 @@ export default function PhysicalMinuteAgendaScreen() {
     if (!accessToken || accessToken.trim().length === 0) return url;
     if (/[?&]token=/.test(url)) return url;
     const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}${appVersionQuery()}`;
   };
   const navigation = useNavigation<PhysicalMinuteAgendaScreenNavigationProp>();
   const [isMenuVisible, setIsMenuVisible] = useState(false);

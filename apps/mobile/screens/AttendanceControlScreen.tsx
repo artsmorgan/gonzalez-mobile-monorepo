@@ -49,6 +49,7 @@ import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache'
 import { deleteFile, getFile, getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
 import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 type AttendanceControlScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'AttendanceControl'>;
 
@@ -673,7 +674,7 @@ export default function AttendanceControlScreen() {
     if (!token) return url;
     if (/[?&]token=/.test(url)) return url;
     const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(token)}`;
+    return `${url}${sep}token=${encodeURIComponent(token)}${appVersionQuery()}`;
   }, [accessToken, queryAccessToken]);
 
   const appendTokenAndCacheToUrl = useCallback(

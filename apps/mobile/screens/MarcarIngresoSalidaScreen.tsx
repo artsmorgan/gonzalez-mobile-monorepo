@@ -35,7 +35,7 @@ import {
   isOutOfRangeLocationMessage,
   validateMarcaLocation,
 } from '@/hooks/attendanceLocalMarcaValidation';
-import OutOfRangeMap from '../components/OutOfRangeMap';
+import PuestoLocationBlock from '../components/PuestoLocationBlock';
 import {
   getMonitoringPreviousMinutesFromStorage,
   setMonitoringPreviousMinutesStorage,
@@ -93,6 +93,8 @@ import { resetLunchTimeCompleted } from '@/hooks/lunchTimeMarcaHierarchy';
 import {
   formatDateTimeLine,
   formatFechaDMY,
+  isDiaLibreTurno,
+  tieneHorarioCompleto,
   formatHoraRange,
   isShiftUpcoming,
   levelLabel,
@@ -203,8 +205,6 @@ interface AttendanceErrorResponse {
   is_salida_anticipada?: boolean;
   /** El último turno terminó hace más de N horas: no hay turno actual (issue #159). */
   no_active_marca?: boolean;
-  /** El turno no trae hora de inicio ni tipo de turno: no se puede marcar (el mensaje viene en `message`). */
-  turno_sin_datos?: boolean;
   horas_eliminar_marca_tras_salida?: number;
   marca?: AttendanceSuccessResponse['marca'];
 }
@@ -384,7 +384,6 @@ export default function MarcarIngresoSalidaScreen() {
     puestoLng: number;
   } | null>(null);
   /** El mapa de "fuera de rango" solo se abre cuando el usuario pulsa el botón, nunca automáticamente. */
-  const [isOutOfRangeMapModalVisible, setIsOutOfRangeMapModalVisible] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigation = useNavigation<MarcarIngresoSalidaScreenNavigationProp>();
   const [horaAccion, setHoraAccion] = useState<number | null>(null);
@@ -614,13 +613,6 @@ export default function MarcarIngresoSalidaScreen() {
     }
     setOutOfRangeMapCoords(null);
   };
-
-  // Si la condición de "fuera de rango" se resuelve, cierra el mapa (por si había quedado abierto).
-  useEffect(() => {
-    if (!outOfRangeMapCoords) {
-      setIsOutOfRangeMapModalVisible(false);
-    }
-  }, [outOfRangeMapCoords]);
 
   const runLocalValidationForMarca = async (
     marca: Record<string, unknown>,
@@ -1204,7 +1196,7 @@ export default function MarcarIngresoSalidaScreen() {
             console.error('Error hydrating auto-ingreso:', hydrateError);
           }
         }
-      } else if ((data as AttendanceErrorResponse)?.no_active_marca || (data as AttendanceErrorResponse)?.turno_sin_datos) {
+      } else if ((data as AttendanceErrorResponse)?.no_active_marca) {
         // El servidor indica que el último turno ya terminó hace más de N horas: no hay turno actual hasta que empiece el siguiente.
         const noActive = data as AttendanceErrorResponse;
         await persistMonitoringMinutesFromResponse(noActive);
@@ -1257,8 +1249,9 @@ export default function MarcarIngresoSalidaScreen() {
     // Inicio y fin del turno como hora de reloj de CR en UTC (mismo convenio que `getHoraAccion`), sin depender de la zona horaria
     // del dispositivo. Solo el FIN suma un día si el turno cruza la medianoche; el inicio siempre es el de la fecha de la marca.
     const crossesMidnight = marca.hora_inicio > marca.hora_fin;
-    const inicioTurnoMs = buildMarcaNaiveMs(marca.fecha, marca.hora_inicio) ?? NaN;
-    const finTurnoMs = buildMarcaNaiveMs(marca.fecha, marca.hora_fin, crossesMidnight ? 1 : 0) ?? NaN;
+    // Una marca sin hora de inicio o de fin se muestra igual (como el servidor): el inicio cae a las 00:00 del día de la marca y el fin a las 23:59:59.
+    const inicioTurnoMs = buildMarcaNaiveMs(marca.fecha, marca.hora_inicio) ?? buildMarcaNaiveMs(marca.fecha, '1970-01-01T00:00:00.000Z') ?? NaN;
+    const finTurnoMs = buildMarcaNaiveMs(marca.fecha, marca.hora_fin, crossesMidnight ? 1 : 0) ?? buildMarcaNaiveMs(marca.fecha, '1970-01-01T23:59:59.000Z') ?? NaN;
 
     const inicioTurno = new Date(inicioTurnoMs);
     const next_time = new Date(estado == "No ingresado" ? inicioTurnoMs : finTurnoMs);
@@ -1292,6 +1285,8 @@ export default function MarcarIngresoSalidaScreen() {
     if (typeof serverFlags?.is_late === 'boolean') {
       is_late = serverFlags.is_late;
     }
+    // Sin hora de inicio o de fin no hay horario contra el cual medir: no hay tardía.
+    if (!tieneHorarioCompleto(marca.hora_inicio, marca.hora_fin)) is_late = false;
 
     const is_salida_anticipada =
       typeof serverFlags?.is_salida_anticipada === 'boolean'
@@ -2232,9 +2227,9 @@ const getActivities = async (marcaId: number) => {
     return false;
   }
 
+  /** «DD-MM-AAAA HH:mm» a partir de un ISO guardado por el servidor. */
   const convertDateToLocal = (date: string) => {
-    const dateSplit = date.split('T');
-    return dateSplit[0] + ' a las ' + getNextTime(date);
+    return `${formatFechaDMY(date)} ${getNextTime(date)}`;
   };
 
   const getLateTime = (attendanceData: AttendanceSuccessResponse, horaAccion: number | null) => {
@@ -2527,9 +2522,9 @@ const getActivities = async (marcaId: number) => {
         return (
           <Collapsible key={key} title={label}>
             <ThemedView style={styles.marksDayContainer}>
-              {dayMarks.length === 0 ? (
+              {dayMarks.length === 0 || (dayMarks.length === 1 && isDiaLibreTurno(dayMarks[0].tipo_turno)) ? (
                 <ThemedText style={styles.marksEmptyText}>
-                  Estás libre este día
+                  Tienes libre este día
                 </ThemedText>
               ) : (
                 dayMarks.map((mark, index) => {
@@ -2541,12 +2536,15 @@ const getActivities = async (marcaId: number) => {
                   return (
                     <ThemedView key={mark.id || index} style={styles.markItem}>
                       <ThemedView style={styles.markItemHeader}>
-                        <Ionicons name="time-outline" size={18} color="#007AFF" />
-                        <ThemedText style={styles.markItemTime}>
-                          {horaInicioStr || 'Sin hora'}
-                          {horaFinStr ? ` - ${horaFinStr}` : ''}
-                        </ThemedText>
+                        <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                        <ThemedText style={styles.markItemTime}>{formatDateDMY(mark.fecha)}</ThemedText>
                       </ThemedView>
+                      {tieneHorarioCompleto(mark.hora_inicio, mark.hora_fin) ? (
+                        <ThemedView style={styles.markItemHeader}>
+                          <Ionicons name="time-outline" size={18} color="#007AFF" />
+                          <ThemedText style={styles.markItemTime}>{`${horaInicioStr} - ${horaFinStr}`}</ThemedText>
+                        </ThemedView>
+                      ) : null}
                       <ThemedView style={styles.markItemDetails}>
                       {shiftInfoRows(mark).map((row) => (
                         <ThemedView key={row.label} style={styles.markItemRow}>
@@ -2565,6 +2563,7 @@ const getActivities = async (marcaId: number) => {
                         </ThemedText>
                       </ThemedView>
                       </ThemedView>
+                      <PuestoLocationBlock ubicacion={mark.puesto?.ubicacion} puestoNombre={mark.puesto?.nombre} />
                     </ThemedView>
                   );
                 })
@@ -2672,6 +2671,16 @@ const getActivities = async (marcaId: number) => {
 
   const marcaView = attendanceData?.marca;
   const isIngresado = attendanceData?.estado === 'Ingresado';
+  /**
+   * Fecha y hora programadas de la siguiente acción (entrada o salida). Si la marca no tiene hora de inicio o de fin no hay hora real que mostrar
+   * (la que calcula el sistema es solo un respaldo): se muestra únicamente la fecha. Las horas marcadas por la persona sí se muestran completas.
+   */
+  const fechaYHoraProgramada =
+    attendanceData?.next_time == null
+      ? '—'
+      : marcaView && !tieneHorarioCompleto(marcaView.hora_inicio, marcaView.hora_fin)
+        ? formatFechaDMY(attendanceData.next_time)
+        : `${formatFechaDMY(attendanceData.next_time)} ${getNextTime(attendanceData.next_time)}`;
 
   return (
     <ThemedView style={styles.fullContainer}>
@@ -2706,10 +2715,12 @@ const getActivities = async (marcaId: number) => {
             </ThemedView>
           ) : null}
 
-          {/* 2. Fecha y hora actual, visibles en un recuadro con borde y en una sola línea */}
-          <ThemedView style={styles.dateTimeCard}>
-            <Ionicons name="time-outline" size={18} color="#4B5563" />
-            <ThemedText style={styles.dateTimeText}>{getDisplayDateTimeText()}</ThemedText>
+          {/* 2. Fecha y hora actual (mismo estilo que Empleado y Puesto) */}
+          <ThemedView style={styles.identityCard}>
+            <ThemedView style={[styles.identityRow, styles.identityRowLast]}>
+              <ThemedText style={styles.identityLabel}>Fecha y hora actual</ThemedText>
+              <ThemedText style={styles.identityValue}>{getDisplayDateTimeText()}</ThemedText>
+            </ThemedView>
           </ThemedView>
 
           {/* 3 y 4. Empleado y puesto */}
@@ -2762,15 +2773,15 @@ const getActivities = async (marcaId: number) => {
                     <ThemedText style={styles.infoValue}>{formatDateDMY(marcaView.fecha)}</ThemedText>
                   </ThemedView>
 
-                  <ThemedView style={styles.infoRow}>
-                    <ThemedText style={styles.infoLabel}>Horario de la marca</ThemedText>
-                    <ThemedView style={styles.infoTimeValue}>
-                      <Ionicons name="time-outline" size={16} color="#007AFF" />
-                      <ThemedText style={styles.infoValue}>
-                        {formatHoraRange(marcaView.hora_inicio, marcaView.hora_fin) || 'Sin hora'}
-                      </ThemedText>
+                  {tieneHorarioCompleto(marcaView.hora_inicio, marcaView.hora_fin) ? (
+                    <ThemedView style={styles.infoRow}>
+                      <ThemedText style={styles.infoLabel}>Horario de la marca</ThemedText>
+                      <ThemedView style={styles.infoTimeValue}>
+                        <Ionicons name="time-outline" size={16} color="#007AFF" />
+                        <ThemedText style={styles.infoValue}>{formatHoraRange(marcaView.hora_inicio, marcaView.hora_fin)}</ThemedText>
+                      </ThemedView>
                     </ThemedView>
-                  </ThemedView>
+                  ) : null}
 
                   <ThemedView style={styles.infoRow}>
                     <ThemedText style={styles.infoLabel}>Empresa</ThemedText>
@@ -2826,9 +2837,41 @@ const getActivities = async (marcaId: number) => {
                 </ThemedView>
               </Collapsible>
 
-              {/* 6. Mensajes: avisos, errores y botones de funciones extra */}
+              {/* 6. Estado y fechas y horas de entrada y de salida (mismo estilo que Empleado y Puesto) */}
+              <ThemedView style={styles.identityCard}>
+                <ThemedView style={styles.identityRow}>
+                  <ThemedText style={styles.identityLabel}>Estado</ThemedText>
+                  <ThemedText style={[styles.identityValue, isIngresado ? styles.statusTextWorking : styles.statusTextOffline]}>
+                    {isIngresado ? 'Ingresado' : 'No ingresado'}
+                  </ThemedText>
+                </ThemedView>
+
+                <ThemedView style={[styles.identityRow, !isIngresado && marcaView.hora_salida_digitada == null ? styles.identityRowLast : null]}>
+                  <ThemedText style={styles.identityLabel}>Fecha y hora de entrada</ThemedText>
+                  <ThemedText style={styles.identityValue}>
+                    {isIngresado
+                      ? marcaView.hora_entrada_digitada != null
+                        ? convertDateToLocal(marcaView.hora_entrada_digitada)
+                        : '—'
+                      : fechaYHoraProgramada}
+                  </ThemedText>
+                </ThemedView>
+
+                {isIngresado || marcaView.hora_salida_digitada != null ? (
+                  <ThemedView style={[styles.identityRow, styles.identityRowLast]}>
+                    <ThemedText style={styles.identityLabel}>Fecha y hora de salida</ThemedText>
+                    <ThemedText style={styles.identityValue}>
+                      {marcaView.hora_salida_digitada != null
+                        ? convertDateToLocal(marcaView.hora_salida_digitada)
+                        : fechaYHoraProgramada}
+                    </ThemedText>
+                  </ThemedView>
+                ) : null}
+              </ThemedView>
+
+              {/* 7. Mensajes: avisos, errores y botones de funciones extra (debajo del estado) */}
               {(resolveMarcaIsLate(marcaView as Record<string, unknown>) || attendanceData.is_late) &&
-                marcaView.hora_inicio != null &&
+                tieneHorarioCompleto(marcaView.hora_inicio, marcaView.hora_fin) &&
                 marcaView.hora_entrada_digitada == null && (
                 <ThemedView style={[styles.messageBox, styles.messageBoxError]}>
                   <Ionicons name="alert-circle-outline" size={18} color="#B42318" />
@@ -2925,48 +2968,28 @@ const getActivities = async (marcaId: number) => {
                           {outOfRangeMapCoords ? simplifyOutOfRangeMessage(errorMessage) : errorMessage}
                         </ThemedText>
                       </ThemedView>
-                      {(outOfRangeMapCoords ||
-                        (showLocationRetry &&
-                          (attendanceData.estado === 'No ingresado' ||
-                            attendanceData.estado === 'Ingresado'))) && (
-                        <View style={styles.entradaLocationButtonsRow}>
-                          {outOfRangeMapCoords && (
-                            <TouchableOpacity
-                              style={styles.secondaryButton}
-                              onPress={() => setIsOutOfRangeMapModalVisible(true)}
-                              activeOpacity={0.85}
-                            >
-                              <Ionicons name="map-outline" size={18} color="#007AFF" />
-                              <ThemedText style={styles.secondaryButtonText}>
-                                Ver mapa
-                              </ThemedText>
-                            </TouchableOpacity>
+                      {showLocationRetry &&
+                        (attendanceData.estado === 'No ingresado' ||
+                          attendanceData.estado === 'Ingresado') && (
+                        <TouchableOpacity
+                          style={[
+                            styles.secondaryButton,
+                            styles.locationRetryButton,
+                            isRefreshingLocation && styles.actionButtonDisabled,
+                          ]}
+                          onPress={() => void handleRetryLocationCheck()}
+                          disabled={isRefreshingLocation}
+                          activeOpacity={0.85}
+                        >
+                          {isRefreshingLocation ? (
+                            <ActivityIndicator size="small" color="#007AFF" />
+                          ) : (
+                            <>
+                              <Ionicons name="refresh" size={18} color="#007AFF" />
+                              <ThemedText style={styles.secondaryButtonText}>Reintentar</ThemedText>
+                            </>
                           )}
-                          {showLocationRetry &&
-                            (attendanceData.estado === 'No ingresado' ||
-                              attendanceData.estado === 'Ingresado') && (
-                              <TouchableOpacity
-                                style={[
-                                  styles.secondaryButton,
-                                  isRefreshingLocation && styles.actionButtonDisabled,
-                                ]}
-                                onPress={() => void handleRetryLocationCheck()}
-                                disabled={isRefreshingLocation}
-                                activeOpacity={0.85}
-                              >
-                                {isRefreshingLocation ? (
-                                  <ActivityIndicator size="small" color="#007AFF" />
-                                ) : (
-                                  <>
-                                    <Ionicons name="refresh" size={18} color="#007AFF" />
-                                    <ThemedText style={styles.secondaryButtonText}>
-                                      Reintentar
-                                    </ThemedText>
-                                  </>
-                                )}
-                              </TouchableOpacity>
-                            )}
-                        </View>
+                        </TouchableOpacity>
                       )}
                     </ThemedView>
                   ) : null}
@@ -2978,50 +3001,6 @@ const getActivities = async (marcaId: number) => {
                   )}
                 </ThemedView>
               )}
-
-              {/* 7. Hora de ingreso y de salida, y estado actual (sin títulos) */}
-              <ThemedView style={styles.statusCard}>
-                <ThemedView
-                  style={[
-                    styles.statusBadge,
-                    isIngresado ? styles.statusBadgeWorking : styles.statusBadgeOffline,
-                  ]}
-                >
-                  <ThemedText
-                    style={[
-                      styles.statusText,
-                      isIngresado ? styles.statusTextWorking : styles.statusTextOffline,
-                    ]}
-                  >
-                    {isIngresado ? 'Ingresado' : 'No ingresado'}
-                  </ThemedText>
-                </ThemedView>
-
-                {isIngresado && marcaView.hora_entrada_digitada != null && (
-                  <ThemedView style={styles.timeLine}>
-                    <Ionicons name="checkmark-circle-outline" size={18} color="#1E6B34" />
-                    <ThemedText style={styles.timeLineText}>
-                      Ingresó el {convertDateToLocal(marcaView.hora_entrada_digitada)}
-                    </ThemedText>
-                  </ThemedView>
-                )}
-                {isIngresado && marcaView.hora_salida_digitada != null && (
-                  <ThemedView style={styles.timeLine}>
-                    <Ionicons name="checkmark-circle-outline" size={18} color="#1E6B34" />
-                    <ThemedText style={styles.timeLineText}>
-                      Salió el {convertDateToLocal(marcaView.hora_salida_digitada)}
-                    </ThemedText>
-                  </ThemedView>
-                )}
-
-                {/* Hora (con fecha) programada de la siguiente acción: la entrada o, ya ingresado, la salida */}
-                <ThemedView style={styles.timeLine}>
-                  <Ionicons name={isIngresado ? 'exit-outline' : 'enter-outline'} size={18} color="#4B5563" />
-                  <ThemedText style={styles.timeLineText}>
-                    {formatFechaDMY(attendanceData.next_time)} {getNextTime(attendanceData.next_time)}
-                  </ThemedText>
-                </ThemedView>
-              </ThemedView>
 
               {/* 8. Botón de marcar entrada o salida */}
               <ThemedView style={styles.actionContainer}>
@@ -3046,6 +3025,9 @@ const getActivities = async (marcaId: number) => {
                   )}
                 </TouchableOpacity>
               </ThemedView>
+
+              {/* 9. Ubicación del puesto (siempre disponible): mapa con la ubicación actual, coordenadas y Waze */}
+              <PuestoLocationBlock ubicacion={marcaView.puesto?.ubicacion} puestoNombre={marcaView.puesto?.nombre} />
             </ThemedView>
           ) : errorMessage ? (
             <ThemedView style={styles.errorContainer}>
@@ -3171,12 +3153,14 @@ const getActivities = async (marcaId: number) => {
                       {formatFechaDMY(upcomingNextShift.fecha)}
                     </ThemedText>
                   </ThemedView>
-                  <ThemedView style={styles.markItemHeader}>
-                    <Ionicons name="time-outline" size={18} color="#007AFF" />
-                    <ThemedText style={styles.markItemTime}>
-                      {formatHoraRange(upcomingNextShift.hora_inicio, upcomingNextShift.hora_fin) || 'Sin hora'}
-                    </ThemedText>
-                  </ThemedView>
+                  {tieneHorarioCompleto(upcomingNextShift.hora_inicio, upcomingNextShift.hora_fin) ? (
+                    <ThemedView style={styles.markItemHeader}>
+                      <Ionicons name="time-outline" size={18} color="#007AFF" />
+                      <ThemedText style={styles.markItemTime}>
+                        {formatHoraRange(upcomingNextShift.hora_inicio, upcomingNextShift.hora_fin)}
+                      </ThemedText>
+                    </ThemedView>
+                  ) : null}
                   <ThemedView style={styles.markItemDetails}>
                     {shiftInfoRows(upcomingNextShift).map((row) => (
                       <ThemedView key={row.label} style={styles.markItemRow}>
@@ -3189,6 +3173,7 @@ const getActivities = async (marcaId: number) => {
                       <ThemedText style={styles.markItemValue}>{tipoTurnoLabel(upcomingNextShift.tipo_turno)}</ThemedText>
                     </ThemedView>
                   </ThemedView>
+                  <PuestoLocationBlock ubicacion={upcomingNextShift.puesto?.ubicacion} puestoNombre={upcomingNextShift.puesto?.nombre} />
                 </ThemedView>
               ) : (
                 <ThemedView style={styles.marksEmptyContainer}>
@@ -3232,48 +3217,6 @@ const getActivities = async (marcaId: number) => {
                 )
               ) : null}
             </ScrollView>
-          </ThemedView>
-        </View>
-      </Modal>
-
-      {/* Modal de mapa: ubicación fuera del radio de 50 m del puesto */}
-      <Modal
-        visible={isOutOfRangeMapModalVisible && outOfRangeMapCoords != null}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setIsOutOfRangeMapModalVisible(false)}
-      >
-        <View style={styles.marksModalOverlay}>
-          <ThemedView style={styles.outOfRangeMapModalContainer}>
-            <View style={styles.marksModalHeader}>
-              <ThemedText style={styles.marksModalTitle}>
-                Ubicación fuera de rango
-              </ThemedText>
-              <TouchableOpacity onPress={() => setIsOutOfRangeMapModalVisible(false)}>
-                <Ionicons name="close" size={24} color="#666666" />
-              </TouchableOpacity>
-            </View>
-
-            {outOfRangeMapCoords && (
-              <>
-                <OutOfRangeMap
-                  deviceLat={outOfRangeMapCoords.deviceLat}
-                  deviceLng={outOfRangeMapCoords.deviceLng}
-                  puestoLat={outOfRangeMapCoords.puestoLat}
-                  puestoLng={outOfRangeMapCoords.puestoLng}
-                />
-                <View style={styles.outOfRangeMapLegendRow}>
-                  <View style={styles.outOfRangeMapLegendItem}>
-                    <View style={[styles.outOfRangeMapLegendDot, { backgroundColor: '#007AFF' }]} />
-                    <ThemedText style={styles.outOfRangeMapLegendText}>Tu ubicación</ThemedText>
-                  </View>
-                  <View style={styles.outOfRangeMapLegendItem}>
-                    <View style={[styles.outOfRangeMapLegendDot, { backgroundColor: '#FF3B30' }]} />
-                    <ThemedText style={styles.outOfRangeMapLegendText}>Puesto</ThemedText>
-                  </View>
-                </View>
-              </>
-            )}
           </ThemedView>
         </View>
       </Modal>
@@ -3482,10 +3425,10 @@ const styles = StyleSheet.create({
     width: '100%',
     gap: 10,
   },
-  entradaLocationButtonsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
+  /** «Reintentar» de la ubicación: ocupa todo el ancho, igual que la caja del mensaje. */
+  locationRetryButton: {
+    width: '100%',
+    paddingVertical: 12,
   },
   secondaryButton: {
     flexDirection: 'row',
@@ -3601,7 +3544,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   startShiftButton: {
-    backgroundColor: '#007AFF',
+    backgroundColor: '#2E7D32',
   },
   endShiftButton: {
     backgroundColor: '#C0392B',
@@ -3787,37 +3730,6 @@ const styles = StyleSheet.create({
     borderColor: '#E0E0E0',
     overflow: 'hidden',
     flexDirection: 'column',
-  },
-  outOfRangeMapModalContainer: {
-    width: '100%',
-    maxWidth: 320,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    overflow: 'hidden',
-    alignItems: 'center',
-    paddingBottom: 16,
-  },
-  outOfRangeMapLegendRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 20,
-    marginTop: 12,
-  },
-  outOfRangeMapLegendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  outOfRangeMapLegendDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-  },
-  outOfRangeMapLegendText: {
-    fontSize: 13,
-    color: '#333333',
   },
   marksModalHeader: {
     flexDirection: 'row',

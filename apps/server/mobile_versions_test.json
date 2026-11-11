@@ -150,5 +150,43 @@
         "description": "Si el turno obtenido no tiene hora de inicio ni tipo de turno, la app muestra «Imposible marcar entrada, contacta a tu administrador o supervisor para que revise el caso correspondiente» y no permite marcar."
       }
     ]
+  },
+  {
+    "version": "1.0.6",
+    "id": "246b7e64-e980-416b-82dc-382668ab24f1",
+    "name": "MonitoreApp",
+    "created_at": "2026-11-10T00:00:00Z",
+    "title": "Versión en el inicio de sesión, ubicación del puesto con Waze, Mis puestos y actividades con varios tipos de turno",
+    "description": "El inicio de sesión muestra la versión y permite descargar la última, Marcar ingreso y salida estrena estilo y ubicación del puesto con mapa y Waze, se agrega Mis puestos y las actividades pueden aplicar a varios tipos de turno.",
+    "notas": [
+      {
+        "title": "Versión y actualización en el inicio de sesión",
+        "description": "La pantalla de inicio de sesión muestra la versión de la aplicación, busca sola si hay una versión nueva y permite buscarla con un botón. Si la hay, muestra sus notas y permite descargar el instalador sin iniciar sesión. Si el servidor exige otra versión, la aplicación lo avisa con un mensaje claro."
+      },
+      {
+        "title": "Banner con la versión en producción",
+        "description": "En la versión de producción se muestra un banner fijo en la parte superior con el número de versión instalada (por ejemplo, Versión 1.0.5). La versión de pruebas conserva su banner de prueba."
+      },
+      {
+        "title": "Marcar ingreso y salida: nuevo estilo",
+        "description": "La fecha y hora actual, el estado y las fechas y horas de entrada y de salida se muestran con el mismo estilo que el empleado y el puesto. Los mensajes aparecen debajo del estado, el botón de ingreso es verde y las fechas se ven como DD-MM-AAAA."
+      },
+      {
+        "title": "Turnos futuros",
+        "description": "Un día con un solo turno libre muestra «Tienes libre este día» en lugar de un turno sin hora, y cada tarjeta de turno incluye su fecha."
+      },
+      {
+        "title": "Ubicación del puesto con mapa y Waze",
+        "description": "En Marcar ingreso y salida, debajo de los botones, y en las tarjetas de turnos futuros hay un botón «Mostrar ubicación del puesto» que muestra las coordenadas del puesto, un mapa con tu ubicación actual y un botón para llegar con Waze."
+      },
+      {
+        "title": "Mis puestos",
+        "description": "El módulo Ubicación del puesto incluye la sección «Mis puestos». Con conexión a internet muestra los puestos de tus turnos de hoy en adelante; cada uno se abre para ver su mapa con tu ubicación y llegar con Waze si el puesto tiene coordenadas."
+      },
+      {
+        "title": "Actividades con varios tipos de turno",
+        "description": "Al crear o editar una actividad se pueden seleccionar varios tipos de turno (Diurno, Mixto y Nocturno) con casillas; la actividad aplica a los turnos seleccionados."
+      }
+    ]
   }
 ]

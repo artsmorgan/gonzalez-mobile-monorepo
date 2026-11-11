@@ -5,6 +5,7 @@ import { toZonedTime } from "date-fns-tz";
 import { reportError } from "../../../../../utils/reportError";
 
 import { auditUpdateFields } from "../../../../../utils/auditFields";
+import { loadTiposTurnoByActividad, normalizeTiposTurno, replaceTiposTurno, tipoTurnoRespaldo, tiposTurnoDeLaPeticion } from "../../../../../utils/actividadTipoTurno";
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -28,7 +29,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       es_revision_equipo,
       firma_responsable,
       tipo_turno,
+      tipos_turno,
     } = await req.json();
+
+    // Tipos de turno (uno o varios: D, M, N). `tipo_turno` (uno solo) lo mandan las apps anteriores.
+    const tiposTurno = tiposTurnoDeLaPeticion({ tipos_turno, tipo_turno });
 
     if (
       !nombre_actividad ||
@@ -56,6 +61,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: false, message: "Actividad no encontrada" }, { status: 404 });
     }
 
+    const tiposAntes = (await loadTiposTurnoByActividad(req, [actividadId])).get(actividadId) ?? normalizeTiposTurno(existing.tipo_turno);
+
     await callDynamicPrisma({
       req,
       data: {
@@ -72,10 +79,12 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
           frecuencia,
           es_revision_equipo,
           firma_responsable,
-          tipo_turno: tipo_turno || null,
+          // Respaldo de un solo valor (el primero); los tipos de turno viven en `c_actividades_tipo_turno`.
+          tipo_turno: tipoTurnoRespaldo(tiposTurno),
         },
       },
     });
+    await replaceTiposTurno(req, actividadId, tiposTurno);
 
     const createdBy = payload?.id ? Number(payload.id) : 0;
     await callDynamicPrisma({
@@ -97,6 +106,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 frecuencia: existing.frecuencia,
                 es_revision_equipo: existing.es_revision_equipo,
                 tipo_turno: existing.tipo_turno,
+                tipos_turno: tiposAntes,
               },
               after: {
                 nombre_actividad,
@@ -105,7 +115,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 fecha_fin: fecha_fin || fecha_inicio,
                 frecuencia,
                 es_revision_equipo,
-                tipo_turno: tipo_turno || null,
+                tipo_turno: tipoTurnoRespaldo(tiposTurno),
+                tipos_turno: tiposTurno,
               },
             },
           ]),

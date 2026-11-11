@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Readable } from "stream";
-import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { fetchDynamicFileStream } from "../../../../utils/callDynamicFilesApi";
 import { apkFileCandidates } from "../../../../utils/apkFiles";
 
@@ -17,11 +16,8 @@ const APP_VERSIONS_FOLDER = "app-versions";
  */
 export async function GET(req: NextRequest, context: { params: Promise<{ version: string }> }) {
   try {
-    const { valid, expired, message } = await verifyAccessTokenByApi(req);
-    if (!valid) {
-      return NextResponse.json({ status: false, expired, message }, { status: expired ? 401 : 403 });
-    }
-
+    // Pública (sin token de sesión): se descarga también desde el inicio de sesión y por una app que el servidor ya no deja usar. El nombre del
+    // instalador se valida en `apkFileCandidates` (solo `MonitoreApp-{versión}[-{abi}].apk` de /app-versions).
     const { version } = await context.params;
     // `?abi=` es la arquitectura del equipo (issue #179): se prueba primero el APK de esa arquitectura y, si no se subió, el universal.
     const candidates = apkFileCandidates(version, req.nextUrl.searchParams.get("abi"));
@@ -39,6 +35,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ version
           type: "file",
           url: `${APP_VERSIONS_FOLDER}/${candidate}`,
           download: true,
+          shouldVerifyAccessToken: false,
         });
         fileName = candidate;
         break;

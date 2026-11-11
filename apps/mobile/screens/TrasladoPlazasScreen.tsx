@@ -36,6 +36,7 @@ import { isStoredPlanillasTokenValid, readStoredPlanillasToken } from '@/hooks/p
 import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRevalidationModal';
 import authedFetch from '@/hooks/authedFetch';
 import { saveFile } from '@/hooks/fileStorage';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'TrasladoPlazas'>;
 
@@ -107,7 +108,7 @@ const buildFileUrl = (accionId: number | string, fileName: string, fileType: str
     if (apiUrl && typeof accionId === 'number' && accionId > 0) {
         const url = `${apiUrl}/api/traslado-plaza/${accionId}/get-file/${encodeURIComponent(fileName)}`;
         if (!accessToken || accessToken.trim().length === 0) return url;
-        return `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(accessToken)}`;
+        return `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(accessToken)}${appVersionQuery()}`;
     }
     return '';
 };

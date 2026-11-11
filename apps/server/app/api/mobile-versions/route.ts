@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import mobile_versions_prod from "../../../mobile_versions_prod.json";
 import mobile_versions_test from "../../../mobile_versions_test.json";
 
@@ -13,11 +12,12 @@ function loadMobileVersions(): unknown[] {
     return Array.isArray(catalog) ? catalog : [];
 }
 
-export async function GET(request: NextRequest) {
+/**
+ * Pública (sin token): la consulta de la última versión se hace también desde el inicio de sesión, antes de tener sesión, y debe seguir funcionando
+ * para una app desactualizada aunque el servidor exija una versión (ver `middleware.ts`). Solo devuelve el catálogo de versiones, que no es sensible.
+ */
+export async function GET(_request: NextRequest) {
     try {
-        const { valid, expired, payload, message } = await verifyAccessTokenByApi(request);
-        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
-
         const lastVersion = process.env.APP_LAST_VERSION?.trim();
         const versions = loadMobileVersions();
         // `APP_LAST_VERSION` identifica cuál entrada del catálogo del entorno es la última publicada;

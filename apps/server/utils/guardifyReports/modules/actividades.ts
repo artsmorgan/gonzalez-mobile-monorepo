@@ -1,4 +1,5 @@
 import { batchFindManyByIds } from "../../reportDynamicPrisma";
+import { tiposTurnoLabel } from "../../actividadTipoTurno";
 import { plazaCodigoExcluyeArroba, queryActividadesReportRows } from "../../reports-functions/actividadesReport";
 import { ejecutivoPorCorpo, nombresEmpleado, usuarioInserta } from "../enrich";
 import type { OutRow } from "../listing";
@@ -22,7 +23,6 @@ const withCode = (code: unknown, name: unknown): string | null => {
     const c = txt(code);
     return c ? `${c} - ${n}` : n;
 };
-const TURNO: Record<string, string> = { D: "Diurno", M: "Mixto", N: "Nocturno" };
 
 /** Textos de la estructura por nivel e id (para mostrar dónde aplica la actividad). */
 export type EstructuraNombres = Record<"empresa" | "cliente" | "division" | "contrato" | "corpo", Map<number, string>>;
@@ -90,7 +90,8 @@ export function mapActividadPuestoRow(act: any, ap: any | null, h: Hierarchy | u
         return id ? (n[nivel].get(Number(id)) ?? null) : null;
     };
     const plazas: any[] = (ap?.e_actividades_puesto_plaza ?? []).filter((pl: any) => !plazaCodigoExcluyeArroba(pl?.e_estructura_plazas?.codigo_plaza));
-    const turno = String(act.tipo_turno ?? "").trim().toUpperCase();
+    // Una actividad puede tener varios tipos de turno (`tipos_turno`, de c_actividades_tipo_turno); sin ellos, el valor único anterior.
+    const turnoTexto = tiposTurnoLabel(act.tipos_turno ?? [], act.tipo_turno, "");
     const desc = txt(act.descripcion_actividad);
     return {
         id: Number(ap?.id ?? act.id),
@@ -103,7 +104,7 @@ export function mapActividadPuestoRow(act: any, ap: any | null, h: Hierarchy | u
         fecha_fin: fmtDay(act.fecha_fin),
         frecuencia: txt(act.frecuencia_titulo),
         horario: txt(act.frecuencia_horario),
-        tipo_turno: TURNO[turno] ?? null,
+        tipo_turno: turnoTexto || null,
         revision_equipo: act.es_revision_equipo ? "Sí" : "No",
         descripcion: desc ? desc.slice(0, 500) : null,
         empresa: name("empresa"),

@@ -65,6 +65,7 @@ import PuestoSearchModal from '@/components/PuestoSearchModal';
 import type { EmployeeSearchHit } from '@/hooks/employeeSearch';
 import type { PuestoSearchHit } from '@/hooks/puestoSearch';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 type TrainingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Trainings'>;
 type TrainingsScreenRouteProp = RouteProp<RootStackParamList, 'Trainings'>;
@@ -411,7 +412,7 @@ export default function TrainingsScreen() {
     if (!accessToken || accessToken.trim().length === 0) return url;
     if (/[?&]token=/.test(url)) return url;
     const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}${appVersionQuery()}`;
   };
   // URLs de adjuntos: mismo criterio que JobManualsScreen (getManual*Url + buildFileUrl)
   const getTrainingImageUrl = (trainingId: number, fileName: string) => {
@@ -3140,7 +3141,7 @@ const TrainingImageComponent: React.FC<{ trainingId: number; fileName?: string }
     if (!accessToken || accessToken.trim().length === 0) return url;
     if (/[?&]token=/.test(url)) return url;
     const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}${appVersionQuery()}`;
   };
 
   useEffect(() => {

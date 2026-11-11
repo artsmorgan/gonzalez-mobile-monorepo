@@ -18,6 +18,7 @@ import { dynDesdeRequest } from "../../../../utils/documentos/dyn";
 import { entregarDocumentosPendientes } from "../../../../utils/documentos/service";
 import { guardifyFeatureOn } from "../../../../utils/guardifyFlags";
 import { reportError } from "../../../../utils/reportError";
+import { conflictBody, extractPlanillasConflict } from "../../../../utils/planillasConflict";
 
 import { auditUpdateFields } from "../../../../utils/auditFields";
 import { resolvePuestoHierarchy } from "../../../../utils/resolvePuestoHierarchy";
@@ -32,7 +33,7 @@ const getUsuarioInsercion = async (req: NextRequest, id: number) => {
 /** Combina fecha + hora_inicio de c_marca_dia en un Date comparable. */
 function buildMarcaDateTime(marca: { fecha: Date; hora_inicio: Date | null }): Date | null {
     if (!marca.fecha) return null;
-    const horaInicio = marca.hora_inicio ?? new Date("1970-01-01 00:00:00");
+    const horaInicio = marca.hora_inicio ?? new Date("1970-01-01T00:00:00.000Z");
     const fechaIso = new Date(marca.fecha).toISOString().split("T")[0];
     const horaIso = new Date(horaInicio).toISOString().split("T")[1];
     const dt = new Date(`${fechaIso}T${horaIso}`);
@@ -239,17 +240,26 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 console.log("is_late", is_late);
 
                 console.log("Procedemos a marcar entrada");
-                const planillasResponse = await axios.post(`${process.env.PLANILLAS_URL}/marcas/entrada`, {
-                    marca_id: marcaDia.id,
-                    hora_entrada: `${time_split[0]}:${time_split[1]}`,
-                    empleado_codigo: empleado.cedula,
-                    generar_tard: is_late
-                }, {
-                    headers: {
-                        "Authorization": `Bearer ${planillasToken}`,
-                        "Content-Type": "application/json"
-                    }
-                });
+                let planillasResponse;
+                try {
+                    planillasResponse = await axios.post(`${process.env.PLANILLAS_URL}/marcas/entrada`, {
+                        marca_id: marcaDia.id,
+                        hora_entrada: `${time_split[0]}:${time_split[1]}`,
+                        empleado_codigo: empleado.cedula,
+                        generar_tard: is_late
+                    }, {
+                        headers: {
+                            "Authorization": `Bearer ${planillasToken}`,
+                            "Content-Type": "application/json"
+                        }
+                    });
+                } catch (planillasError) {
+                    // Planillas responde 409 cuando la marca no se puede marcar (p. ej. día libre o sin turno asignado): se devuelve su `message` tal cual.
+                    const conflict = extractPlanillasConflict(planillasError);
+                    if (!conflict) throw planillasError;
+                    console.warn("[attendance/entrada] Planillas respondió 409:", conflict.code, conflict.message);
+                    return NextResponse.json(conflictBody(conflict), { status: 409 });
+                }
 
                 if (!planillasResponse.data.success) {
                     await reportError(req, "api/attendance/[id]", "PUT", 500, "Error al marcar la entrada en Planillas");
@@ -323,6 +333,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
                 const response = await marcar_salida(req, marcaDia.id, horaAccion, reason, payload, planillasToken, cords);
                 if (!response.status) {
+                    // 409 de Planillas (marca no marcable): se devuelve su `message` sin tratarlo como una falla del servidor.
+                    if ("conflict" in response && response.conflict) return NextResponse.json(conflictBody(response.conflict), { status: 409 });
                     await reportError(req, "api/attendance/[id]", "PUT", 500, response.message);
                     return NextResponse.json({ status: false, message: response.message }, { status: 500 });
                 }
@@ -401,12 +413,21 @@ try {
 
     console.log("bodyPlanillas", bodyPlanillas);
 
-    const planillasResponse = await axios.post(`${process.env.PLANILLAS_URL}/marcas/salida`, bodyPlanillas, {
-        headers: {
-            "Authorization": `Bearer ${planillasToken}`,
-            "Content-Type": "application/json"
-        }
-    });
+    let planillasResponse;
+    try {
+        planillasResponse = await axios.post(`${process.env.PLANILLAS_URL}/marcas/salida`, bodyPlanillas, {
+            headers: {
+                "Authorization": `Bearer ${planillasToken}`,
+                "Content-Type": "application/json"
+            }
+        });
+    } catch (planillasError) {
+        // 409 de Planillas: la marca no se puede marcar. Se devuelve su `message` (la ruta lo responde con HTTP 409).
+        const conflict = extractPlanillasConflict(planillasError);
+        if (!conflict) throw planillasError;
+        console.warn("[attendance/salida] Planillas respondió 409:", conflict.code, conflict.message);
+        return { status: false as const, message: conflict.message, conflict };
+    }
 
     if (!planillasResponse.data.success) {
         console.log("Error al marcar la salida en Planillas", planillasResponse);
@@ -426,13 +447,12 @@ try {
 
     const marca_hora_entrada_date = new Date(`${marca_fecha}T${marca_hora_entrada}`);
 
+    // Hora de salida teórica del turno. Una marca sin hora de inicio o de fin ya no se rechaza: la salida se registra igual, sin hora teórica.
     let hora_salida_real = null;
 
     if (!marcaDia.hora_inicio || !marcaDia.hora_fin) {
-        return { status: false, message: "No se encontró la hora de inicio o fin" };
-    }
-    
-    if (new Date(marcaDia.hora_inicio) < new Date(marcaDia.hora_fin)) {
+        hora_salida_real = null;
+    } else if (new Date(marcaDia.hora_inicio) < new Date(marcaDia.hora_fin)) {
         const marca_hora_salida = marcaDia.hora_fin ? new Date(marcaDia.hora_fin).toISOString().split('T')[1] : "00:00:00";
         const marca_fecha_salida = marcaDia.fecha ? new Date(marcaDia.fecha).toISOString().split('T')[0] : "1970-01-01";
 

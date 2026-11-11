@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { loadTiposTurnoByActividad, normalizeTiposTurno, replaceTiposTurno } from "../../../../../../utils/actividadTipoTurno";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
@@ -51,6 +52,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
           frecuencia: existing.frecuencia,
           es_revision_equipo: existing.es_revision_equipo,
           firma_responsable: existing.firma_responsable,
+          tipo_turno: existing.tipo_turno ?? null,
         },
       },
     });
@@ -60,6 +62,10 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       await reportError(req, "api/activities/created/[id]/duplicate", "POST", 500, "No se pudo crear la actividad duplicada");
       return NextResponse.json({ status: false, message: "No se pudo crear la actividad duplicada" }, { status: 500 });
     }
+
+    // La copia conserva los tipos de turno de la actividad original.
+    const tiposOrigen = (await loadTiposTurnoByActividad(req, [sourceId])).get(sourceId) ?? normalizeTiposTurno(existing.tipo_turno);
+    await replaceTiposTurno(req, newId, tiposOrigen);
 
     const puestoLinks = await callDynamicPrisma({
       req,

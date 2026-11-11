@@ -36,6 +36,7 @@ import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache'
 import { buildNotesImagenesJsonForUpload, deleteNotesLocalFilesFromMeta, stripNoteImagesForActionPayload } from '@/hooks/notesFilesSync';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 /**
  * Botón «Enviar notas al cliente» (y su modal). Oculto para todos los roles: cambiar a `true` para volver a mostrarlo.
@@ -657,7 +658,7 @@ export default function NotesScreen() {
     if (!raw) return '';
     const token = accessToken || imageAccessToken;
     if (!token) return raw;
-    return `${raw}${raw.includes('?') ? '&' : '?'}token=${encodeURIComponent(String(token))}`;
+    return `${raw}${raw.includes('?') ? '&' : '?'}token=${encodeURIComponent(String(token))}${appVersionQuery()}`;
   };
 
   const buildNoteImageApiUrl = (

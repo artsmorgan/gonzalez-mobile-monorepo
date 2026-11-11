@@ -11,12 +11,17 @@ export type BuscarArgs = {
     dbEnv: string;
     full: boolean;
     ancho: number;
+    /** Máximo de registros que se muestran cuando la búsqueda devuelve varios. */
+    max: number;
     ayuda: boolean;
 };
 
 export const ANCHO_POR_DEFECTO = 70;
 export const ANCHO_MINIMO = 20;
 export const ANCHO_MAXIMO = 200;
+/** Registros que se muestran por defecto cuando hay varios, y tope de `--max`. */
+export const MAX_REGISTROS_POR_DEFECTO = 20;
+export const MAX_REGISTROS_TOPE = 200;
 /** Líneas de un mismo valor que se muestran antes de cortar con «… (N caracteres)» (sin `--full`). */
 export const LINEAS_MAXIMAS = 6;
 
@@ -26,12 +31,20 @@ export const esIdentificadorSeguro = (nombre: string): boolean => /^[A-Za-z0-9_]
 const ENV_VALIDA = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function parseBuscarArgs(argv: string[]): BuscarArgs {
-    const out: BuscarArgs = { tabla: null, id: null, pk: null, dbEnv: "DATABASE_URL", full: false, ancho: ANCHO_POR_DEFECTO, ayuda: false };
+    const out: BuscarArgs = { tabla: null, id: null, pk: null, dbEnv: "DATABASE_URL", full: false, ancho: ANCHO_POR_DEFECTO, max: MAX_REGISTROS_POR_DEFECTO, ayuda: false };
     const posicionales: string[] = [];
+    let tablaNombrada: string | null = null;
     for (const arg of argv) {
         if (arg === "--help" || arg === "-h") out.ayuda = true;
         else if (arg === "--full") out.full = true;
         else if (arg.startsWith("--pk=")) out.pk = arg.slice(5).trim() || null;
+        else if (arg.startsWith("--columna=")) out.pk = arg.slice(10).trim() || null;
+        else if (arg.startsWith("--tabla=")) tablaNombrada = arg.slice(8).trim() || null;
+        else if (arg.startsWith("--max=")) {
+            const n = Number(arg.slice(6));
+            if (!Number.isInteger(n) || n < 1 || n > MAX_REGISTROS_TOPE) throw new Error(`--max debe ser un entero entre 1 y ${MAX_REGISTROS_TOPE}.`);
+            out.max = n;
+        }
         else if (arg.startsWith("--db=")) {
             const nombre = arg.slice(5).trim();
             if (!ENV_VALIDA.test(nombre)) throw new Error(`--db debe ser el nombre de una variable de entorno (por ejemplo DATABASE_URL), no «${nombre}».`);
@@ -42,6 +55,13 @@ export function parseBuscarArgs(argv: string[]): BuscarArgs {
             out.ancho = n;
         } else if (arg.startsWith("--")) throw new Error(`Opción desconocida: ${arg}`);
         else posicionales.push(arg);
+    }
+    // La tabla se puede indicar con --tabla=<nombre> o como primer argumento; con --tabla= el único argumento suelto es el id.
+    if (tablaNombrada) {
+        if (posicionales.length > 1) throw new Error("Demasiados argumentos: con --tabla= solo se espera el id.");
+        out.tabla = tablaNombrada;
+        out.id = posicionales[0]?.trim() || null;
+        return out;
     }
     if (posicionales.length > 2) throw new Error("Demasiados argumentos: se esperan solo la tabla y el id.");
     out.tabla = posicionales[0]?.trim() || null;
@@ -158,6 +178,21 @@ export function renderCuadricula(filas: FilaCuadricula[], opciones: { ancho?: nu
     return out.join("\n");
 }
 
+/**
+ * Aviso previo a la lista cuando la búsqueda devuelve más de un registro: «Se obtuvieron X resultados, mostrando...». Si hay más de los que se
+ * muestran, dice cuántos se muestran. Con uno solo (o ninguno) no hay aviso.
+ */
+export function mensajeResultados(total: number, mostrados: number): string | null {
+    if (!Number.isFinite(total) || total <= 1) return null;
+    return mostrados < total ? `Se obtuvieron ${total} resultados, mostrando los primeros ${mostrados}...` : `Se obtuvieron ${total} resultados, mostrando...`;
+}
+
+/** Título de cada tabla de la lista: «tabla · columna = valor (2 de 5) · N columnas». */
+export function tituloRegistro(tabla: string, clave: string, valor: string, indice: number, mostrados: number, columnas: number): string {
+    const posicion = mostrados > 1 ? ` (${indice + 1} de ${mostrados})` : "";
+    return `${tabla} · ${clave} = ${valor}${posicion} · ${columnas} columnas`;
+}
+
 /** Tabla de columnas del registro + valores, lista para `renderCuadricula`. */
 export function armarFilas(columnas: ColumnaInfo[], registro: Record<string, unknown>): FilaCuadricula[] {
     const conocidas = new Set(columnas.map((c) => c.nombre));
@@ -175,15 +210,21 @@ export const AYUDA = `Búsqueda de un registro por id (SOLO LECTURA).
 
 Uso:
   npx tsx scripts/buscarRegistro.ts <tabla> <id> [opciones]
-  npx tsx scripts/buscarRegistro.ts                 (pregunta la tabla y el id)
+  npx tsx scripts/buscarRegistro.ts --tabla=<tabla> <id> [opciones]
+  npx tsx scripts/buscarRegistro.ts                 (pregunta la tabla y el id; escribe ? en la tabla para ver cuáles hay)
 
 Opciones:
-  --pk=<columna>   columna por la que se busca (por defecto «id», o la clave primaria si es una sola)
+  --tabla=<tabla>  tabla que se consulta (también se puede escribir como primer argumento)
+  --pk=<columna>   columna por la que se busca (por defecto «id», o la clave primaria si es una sola); también --columna=<columna>
+  --max=<n>        cuántos registros se muestran si la búsqueda devuelve varios (1-${MAX_REGISTROS_TOPE}, por defecto ${MAX_REGISTROS_POR_DEFECTO})
   --db=<VARIABLE>  variable de entorno con la conexión (por defecto DATABASE_URL), p. ej. --db=DATABASE_URL_SECONDARY
   --ancho=<n>      ancho de la columna Contenido (${ANCHO_MINIMO}-${ANCHO_MAXIMO}, por defecto ${ANCHO_POR_DEFECTO})
   --full           muestra los contenidos largos completos (sin cortarlos)
   -h, --help       esta ayuda
 
-Ejemplo:
+Si la búsqueda devuelve más de un registro, avisa «Se obtuvieron X resultados, mostrando...» y los muestra uno tras otro, cada uno en su cuadrícula.
+
+Ejemplos:
   npx tsx scripts/buscarRegistro.ts c_marca_dia 12345
+  npx tsx scripts/buscarRegistro.ts --tabla=c_marca_dia --columna=empleadoFijo_id 87
 `;

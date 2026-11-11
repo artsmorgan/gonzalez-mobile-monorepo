@@ -11,6 +11,7 @@ import { getEvidenceHeaders, isMutatingMethod } from './evidenceCapture';
 import { getDeviceUid } from './installSecureStorage';
 import { getGuardifyIdentity } from './guardifyIdentity';
 import { getEmbeddedAppVersionInfo } from './appVariant';
+import { notifyIfUpdateRequired } from './updateRequired';
 import { headersFromStamp, takeStampFromBody } from './evidenceQueue';
 
 const g = globalThis as unknown as { fetch: typeof fetch; __evidenceFetchInstalled?: boolean };
@@ -79,7 +80,10 @@ export function installEvidenceFetch(): void {
     } catch {
       nextInit = init;
     }
-    return original(input as RequestInfo, nextInit);
+    const response = await original(input as RequestInfo, nextInit);
+    // El servidor exige otra versión de la app (HTTP 426): se avisa a la app para que lo muestre. La respuesta sigue su camino.
+    if (response.status === 426) void notifyIfUpdateRequired(response);
+    return response;
   };
 }
 

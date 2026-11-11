@@ -1,5 +1,6 @@
 import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
+import AppVersionNotice from '../components/AppVersionNotice';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -194,6 +195,8 @@ export default function LoginScreen() {
                 ¿Olvidó su contraseña?
               </ThemedText>
             </TouchableOpacity>
+
+            <AppVersionNotice />
           </ThemedView>
         </ScrollView>
       </KeyboardAvoidingView>

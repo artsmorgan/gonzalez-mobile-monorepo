@@ -22,6 +22,7 @@ import { Buffer } from 'buffer';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import { eventBus } from '@/hooks/eventBus';
+import { TIPOS_TURNO_OPCIONES, tiposTurnoDeActividad, toggleTipoTurno, type TipoTurnoActividad } from '@/hooks/actividadTiposTurno';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import { appendCreatedActivityPuestos, createActivity, deleteCreatedActivity, duplicateCreatedActivity, listCreatedActivitiesByPuesto, unlinkCreatedActivityPuesto, updateCreatedActivity } from '@/hooks/activitiesFunctions';
 import authedFetch from '@/hooks/authedFetch';
@@ -34,6 +35,7 @@ import ArticuloMantenimientoArchivosModal from '@/components/ArticuloMantenimien
 import type { ArticuloMantenimientoPendingFile } from '@/utils/articuloMantenimientoFiles';
 import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 const ACTIVITIES_MARK_PHOTO_PREFIX = 'activities_mark';
 
@@ -153,7 +155,7 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
       const token = (await AsyncStorage.getItem('access_token')) || '';
       const baseImageUrl = `${apiUrl}/api/activities/${activity.id}/get-image?t=${Date.now()}`;
       const imageUrl = token
-        ? `${baseImageUrl}&token=${encodeURIComponent(token)}`
+        ? `${baseImageUrl}&token=${encodeURIComponent(token)}${appVersionQuery()}`
         : baseImageUrl;
       const response = await authedFetch({
         url: imageUrl,
@@ -439,7 +441,7 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
       const token = (await AsyncStorage.getItem('access_token')) || '';
       const baseImageUrl = `${apiUrl}/api/activities/equipo/${inventory.revision_equipo.id}/get-image?article_id=${inventory.id}&t=${Date.now()}`;
       const imageUrl = token
-        ? `${baseImageUrl}&token=${encodeURIComponent(token)}`
+        ? `${baseImageUrl}&token=${encodeURIComponent(token)}${appVersionQuery()}`
         : baseImageUrl;
       const response = await authedFetch({
         url: imageUrl,
@@ -808,6 +810,8 @@ interface CreatedActivityItem {
   es_revision_equipo: boolean;
   firma_responsable: string;
   tipo_turno?: string | null;
+  /** Tipos de turno de la actividad (D, M, N); el servidor los trae de `c_actividades_tipo_turno`. */
+  tipos_turno?: string[];
   puestos_vinculados?: CreatedActivityPuestoVinculado[];
 }
 
@@ -981,8 +985,8 @@ export default function ActivitiesScreen() {
   const [scheduleSlotPickerIndex, setScheduleSlotPickerIndex] = useState<number | null>(null);
   const scheduleSlotPickerIndexRef = useRef<number | null>(null);
   const [tipoActividad, setTipoActividad] = useState<'Normal' | 'Inventario'>('Normal');
-  /** 'D' Diurno, 'M' Mixto, 'N' Nocturno — se compara contra `c_marca_dia.tipo_turno` al determinar actividades del turno. */
-  const [tipoTurno, setTipoTurno] = useState<'D' | 'M' | 'N'>('D');
+  /** Tipos de turno de la actividad (uno o varios: 'D' Diurno, 'M' Mixto, 'N' Nocturno) — se comparan contra `c_marca_dia.tipo_turno` al determinar actividades del turno. */
+  const [tiposTurno, setTiposTurno] = useState<TipoTurnoActividad[]>(['D']);
   const [puestos, setPuestos] = useState<PuestoOption[]>([]);
   const [selectedPuestoId, setSelectedPuestoId] = useState<string>('');
   const [markedPlazaIds, setMarkedPlazaIds] = useState<string[]>([]);
@@ -1552,7 +1556,7 @@ export default function ActivitiesScreen() {
     setActivityStartDate(start);
     setShowStartDatePicker(false);
     setTipoActividad('Normal');
-    setTipoTurno('D');
+    setTiposTurno(['D']);
     setSelectedPuestoId('');
     setMarkedPlazaIds([]);
     setAssignedResponsables([]);
@@ -2354,6 +2358,9 @@ export default function ActivitiesScreen() {
     if (!activityDescription.trim()) {
       return 'Debes ingresar la descripción de la actividad.';
     }
+    if (tiposTurno.length === 0) {
+      return 'Debes seleccionar al menos un tipo de turno.';
+    }
     if (!isEditingCreatedActivity) {
     if (assignedResponsables.length === 0) {
       return 'Debes asignar al menos un puesto o plaza responsable.';
@@ -2422,7 +2429,8 @@ export default function ActivitiesScreen() {
         reglas: JSON.stringify(reglasPayload),
         puestos_plazas: JSON.stringify(puestosPayload),
         firma_responsable: signatureData?.raw || '',
-        tipo_turno: tipoTurno,
+        tipos_turno: tiposTurno,
+        tipo_turno: tiposTurno[0] ?? null, // respaldo para un servidor anterior (un solo tipo)
       };
 
       const isConnected = await getConnectionStatus();
@@ -2445,7 +2453,8 @@ export default function ActivitiesScreen() {
               frecuencia: frequencyString,
               es_revision_equipo: tipoActividad === 'Inventario',
               firma_responsable: signatureData?.raw || '',
-              tipo_turno: tipoTurno,
+              tipos_turno: tiposTurno,
+              tipo_turno: tiposTurno[0] ?? null, // respaldo para un servidor anterior (un solo tipo)
             },
             refreshAccessToken,
             logout,
@@ -3760,7 +3769,7 @@ export default function ActivitiesScreen() {
       setActivityScheduleSlots([]);
     }
     setTipoActividad(activity.es_revision_equipo ? 'Inventario' : 'Normal');
-    setTipoTurno(activity.tipo_turno === 'M' || activity.tipo_turno === 'N' ? activity.tipo_turno : 'D');
+    setTiposTurno(tiposTurnoDeActividad(activity));
     try {
       const decoded = decodeSignatureHash(activity.firma_responsable || '');
       setSignatureData({
@@ -4290,18 +4299,27 @@ export default function ActivitiesScreen() {
                   </Picker>
                 </ThemedView>
 
-                <ThemedText style={styles.sectionTitle}>Tipo de turno</ThemedText>
-                <ThemedView style={styles.pickerContainer}>
-                  <Picker
-                    selectedValue={tipoTurno}
-                    onValueChange={(value) => setTipoTurno(value as 'D' | 'M' | 'N')}
-                    style={styles.picker}
-                  >
-                    <Picker.Item label="Diurno" value="D" color="#000000" />
-                    <Picker.Item label="Mixto" value="M" color="#000000" />
-                    <Picker.Item label="Nocturno" value="N" color="#000000" />
-                  </Picker>
+                <ThemedText style={styles.sectionTitle}>Tipos de turno</ThemedText>
+                <ThemedView style={styles.turnoCheckboxGroup}>
+                  {TIPOS_TURNO_OPCIONES.map((opcion) => {
+                    const checked = tiposTurno.includes(opcion.value);
+                    return (
+                      <TouchableOpacity
+                        key={opcion.value}
+                        style={styles.turnoCheckboxRow}
+                        onPress={() => setTiposTurno((prev) => toggleTipoTurno(prev, opcion.value))}
+                        activeOpacity={0.7}
+                        accessibilityRole="checkbox"
+                        accessibilityState={{ checked }}
+                        accessibilityLabel={opcion.label}
+                      >
+                        <Ionicons name={checked ? 'checkbox' : 'square-outline'} size={24} color={checked ? '#007AFF' : '#6B7280'} />
+                        <ThemedText style={styles.turnoCheckboxLabel}>{opcion.label}</ThemedText>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </ThemedView>
+                {tiposTurno.length === 0 ? <ThemedText style={styles.formErrorText}>Selecciona al menos un tipo de turno.</ThemedText> : null}
 
                 {!isEditingCreatedActivity ? (
                 <ThemedView style={styles.sectionCard}>
@@ -5666,6 +5684,20 @@ const styles = StyleSheet.create({
     borderColor: '#E5E7EB',
     borderRadius: 12,
     backgroundColor: '#ffffff',
+  },
+  turnoCheckboxGroup: {
+    gap: 4,
+    marginBottom: 12,
+  },
+  turnoCheckboxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 8,
+  },
+  turnoCheckboxLabel: {
+    fontSize: 15,
+    color: '#111827',
   },
   sectionTitle: {
     fontSize: 16,

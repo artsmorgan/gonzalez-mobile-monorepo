@@ -10,8 +10,10 @@ import {
     formatearValor,
     LINEAS_MAXIMAS,
     lineasDeContenido,
+    mensajeResultados,
     parseBuscarArgs,
     renderCuadricula,
+    tituloRegistro,
     validarId,
     validarTabla,
     type ColumnaInfo,
@@ -22,7 +24,7 @@ const cols = (...c: Array<[string, string, boolean?, string?]>): ColumnaInfo[] =
 describe("buscarRegistro: argumentos y validación", () => {
     it("lee la tabla, el id y las opciones", () => {
         const a = parseBuscarArgs(["c_marca_dia", "123", "--pk=codigo", "--db=DATABASE_URL_SECONDARY", "--ancho=50", "--full"]);
-        assert.deepEqual(a, { tabla: "c_marca_dia", id: "123", pk: "codigo", dbEnv: "DATABASE_URL_SECONDARY", full: true, ancho: 50, ayuda: false });
+        assert.deepEqual(a, { tabla: "c_marca_dia", id: "123", pk: "codigo", dbEnv: "DATABASE_URL_SECONDARY", full: true, ancho: 50, max: 20, ayuda: false });
     });
 
     it("sin argumentos deja tabla e id vacíos (el script los pregunta)", () => {
@@ -158,9 +160,47 @@ describe("scripts/buscarRegistro.ts es solo de lectura", () => {
     it("el id viaja como parámetro y no dentro del texto de la consulta; no muestra credenciales", () => {
         assert.match(src, /WHERE \\`\$\{clave\}\\` = \? LIMIT/);
         const llamadas = [...src.matchAll(/\$queryRawUnsafe[\s\S]*?\);/g)].map((m) => m[0]);
-        assert.equal(llamadas.length, 4);
+        assert.equal(llamadas.length, 6, "lista de tablas, existe, parecidas, columnas, conteo y registros");
         for (const q of llamadas) assert.equal(/\$\{id\}/.test(q), false, "el id no se interpola en ninguna consulta");
         assert.match(src, /u\.host\}\$\{u\.pathname/, "solo se muestra servidor y base");
         assert.equal(/u\.(password|username)/.test(src), false);
+    });
+});
+
+describe("buscarRegistro: tabla indicada y varios resultados", () => {
+    it("la tabla se indica como primer argumento o con --tabla=, y la columna con --pk= o --columna=", () => {
+        const a = parseBuscarArgs(["--tabla=c_marca_dia", "123", "--columna=empleadoFijo_id", "--max=50"]);
+        assert.equal(a.tabla, "c_marca_dia");
+        assert.equal(a.id, "123");
+        assert.equal(a.pk, "empleadoFijo_id");
+        assert.equal(a.max, 50);
+        const b = parseBuscarArgs(["c_marca_dia", "9"]);
+        assert.deepEqual([b.tabla, b.id, b.max], ["c_marca_dia", "9", 20]);
+        assert.throws(() => parseBuscarArgs(["--tabla=t", "1", "2"]), /Demasiados/);
+        assert.throws(() => parseBuscarArgs(["t", "1", "--max=0"]), /--max/);
+        assert.throws(() => parseBuscarArgs(["t", "1", "--max=500"]), /--max/);
+        assert.throws(() => validarTabla(parseBuscarArgs(["--tabla=x; DROP TABLE y", "1"]).tabla), /no es un nombre de tabla válido/);
+    });
+
+    it("con más de un registro avisa «Se obtuvieron X resultados, mostrando...»; con uno o ninguno no avisa", () => {
+        assert.equal(mensajeResultados(3, 3), "Se obtuvieron 3 resultados, mostrando...");
+        assert.equal(mensajeResultados(2, 2), "Se obtuvieron 2 resultados, mostrando...");
+        assert.equal(mensajeResultados(150, 20), "Se obtuvieron 150 resultados, mostrando los primeros 20...");
+        assert.equal(mensajeResultados(1, 1), null);
+        assert.equal(mensajeResultados(0, 0), null);
+    });
+
+    it("cada registro lleva su título con la posición dentro de la lista", () => {
+        assert.equal(tituloRegistro("c_marca_dia", "empleadoFijo_id", "87", 1, 3, 25), "c_marca_dia · empleadoFijo_id = 87 (2 de 3) · 25 columnas");
+        assert.equal(tituloRegistro("c_marca_dia", "id", "7", 0, 1, 25), "c_marca_dia · id = 7 · 25 columnas");
+    });
+
+    it("el script cuenta los registros, muestra el aviso y una cuadrícula por registro (todo con SELECT)", () => {
+        const src = fs.readFileSync(path.resolve(__dirname, "..", "scripts", "buscarRegistro.ts"), "utf8");
+        assert.match(src, /SELECT COUNT\(\*\) AS total FROM/);
+        assert.match(src, /mensajeResultados\(total, filas\.length\)/);
+        assert.match(src, /filas\.forEach\(\(registro, i\)/);
+        assert.match(src, /LIMIT \$\{args\.max\}/);
+        assert.match(src, /preguntar\("Tabla \(\? para ver cuáles hay\): "\)/);
     });
 });

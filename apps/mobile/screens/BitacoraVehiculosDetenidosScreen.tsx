@@ -84,6 +84,7 @@ import {
 } from '@/hooks/bitacoraRevisionMediaSync';
 import { deleteFile, hydrateSignatureRef, resolveStoredSignatureDisplayUri } from '@/hooks/fileStorage';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
+import { appVersionQuery } from '../hooks/appVersionHeader';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'BitacoraVehiculosDetenidos'>;
 
@@ -671,7 +672,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
     if (!accessToken || accessToken.trim().length === 0) return url;
     if (/[?&]token=/.test(url)) return url;
     const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}${appVersionQuery()}`;
   };
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<any>(null);

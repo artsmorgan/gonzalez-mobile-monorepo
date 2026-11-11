@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { actividadTieneTurno, loadTiposTurnoFromDb, tiposTurnoLabel } from "../actividadTipoTurno";
 import fs from "fs/promises";
 import path from "path";
 import type { ReportDataAccess } from "../reportDynamicPrisma";
@@ -395,11 +396,20 @@ async function queryActividadesReportRowsInner(prisma: ReportDataAccess, filters
         where: {
             ...(Object.keys(fechaWhere).length ? { fecha_inicio: fechaWhere } : {}),
             ...(puestoClause ? { e_actividades_puesto: puestoClause } : {}),
-            ...(filters.tipoTurno ? { tipo_turno: filters.tipoTurno } : {}),
         },
         ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
         take: 50_000,
     });
+
+    // Tipos de turno de cada actividad (tabla `c_actividades_tipo_turno`; sin filas, el valor único anterior). El filtro por tipo se aplica aquí.
+    const tiposPorActividad = await loadTiposTurnoFromDb(prisma, acts.map((a: any) => a.id));
+    for (const a of acts) (a as any).tipos_turno = tiposPorActividad.get(Number(a.id)) ?? [];
+    if (filters.tipoTurno) {
+        const pedido = filters.tipoTurno;
+        for (let i = acts.length - 1; i >= 0; i--) {
+            if (!actividadTieneTurno((acts[i] as any).tipos_turno, (acts[i] as any).tipo_turno, pedido)) acts.splice(i, 1);
+        }
+    }
 
     const actividadesPuesto = flattenChildRows(acts, "e_actividades_puesto");
     await hydratePreexistentChildRelations(acts, "e_actividades_puesto", [
@@ -596,14 +606,6 @@ export async function buildActividadesExcelConsolidado(
         row.height = 22;
     };
 
-    const tipoTurnoLabel = (v: unknown): string => {
-        const s = String(v ?? "").trim().toUpperCase();
-        if (s === "D") return "Diurno";
-        if (s === "M") return "Mixto";
-        if (s === "N") return "Nocturno";
-        return "";
-    };
-
     /** Los artículos de la tarea se unen en una sola celda por columna, separados por punto y coma (;). */
     const joinDetalle = (articulos: Array<Record<string, unknown>>, key: string): string => {
         const parts = articulos.map((item) => String(item?.[key] ?? ""));
@@ -619,7 +621,7 @@ export async function buildActividadesExcelConsolidado(
             formatDateOnlyDMY(act.fecha_inicio),
             formatDateOnlyDMY(act.fecha_fin),
             frecuenciaTitleOnly(act.frecuencia, ";"),
-            tipoTurnoLabel(act.tipo_turno),
+            tiposTurnoLabel(act.tipos_turno ?? [], act.tipo_turno, ""),
             act.es_revision_equipo ? "Sí" : "No",
             String(act.descripcion_actividad ?? "").slice(0, 5000),
         ];

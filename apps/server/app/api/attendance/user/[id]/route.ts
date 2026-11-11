@@ -12,7 +12,7 @@ import { getTiempoGraciaMarcarSalida } from "../../../../../utils/getTiempoGraci
 import { getValidateGpsSalida } from "../../../../../utils/getValidateGpsSalida";
 import { getHorasEliminarMarcaTrasSalida } from "../../../../../utils/getHorasEliminarMarcaTrasSalida";
 import { marcaCaducada } from "../../../../../utils/marcaCaducada";
-import { MENSAJE_TURNO_SIN_DATOS, pickNextShift, turnoSinDatos } from "../../../../../utils/nextShift";
+import { pickNextShift } from "../../../../../utils/nextShift";
 import { reportError } from "../../../../../utils/reportError";
 import { buildMarcaCandidata, resolverConflictoDeMarcas } from "../../../../../utils/resolveMarcaConflicto";
 import dotenv from "dotenv";
@@ -75,11 +75,11 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             ],
         };
 
+        // Una marca sin hora de inicio NO se modifica (antes se le ponía una hora, que en un servidor con zona de Costa Rica salía como 06:00): solo para ordenar y
+        // comparar se usa la medianoche UTC, y la respuesta conserva el null.
         const buildMarcaDateTime = (marca: { fecha: Date; hora_inicio: Date | null }) => {
-            if (turnoSinDatos(marca.hora_inicio, (marca as { tipo_turno?: string | null }).tipo_turno)) (marca as Record<string, unknown>).__turnoSinDatos = true;
-            if (!marca.hora_inicio) marca.hora_inicio = new Date("1970-01-01 00:00:00");
             const fechaIso = new Date(marca.fecha).toISOString().split("T")[0];
-            const horaIso = new Date(marca.hora_inicio).toISOString().split("T")[1];
+            const horaIso = new Date(marca.hora_inicio ?? "1970-01-01T00:00:00.000Z").toISOString().split("T")[1];
             return new Date(`${fechaIso}T${horaIso}`);
         };
 
@@ -178,9 +178,6 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 console.log(`Conflicto de horario entre marcas: se usa la marca ${idElegido} en lugar de ${elegida.id}`);
                 const alternativa = filas.get(idElegido);
                 if (!alternativa) return elegida;
-                // Misma normalización que `buildMarcaDateTime` aplica a la marca elegida por la búsqueda normal.
-                if (turnoSinDatos(alternativa.hora_inicio, alternativa.tipo_turno)) alternativa.__turnoSinDatos = true;
-                if (!alternativa.hora_inicio) alternativa.hora_inicio = new Date("1970-01-01 00:00:00");
                 return alternativa;
             } catch (conflictError: unknown) {
                 // La resolución de conflictos es un refinamiento: ante cualquier falla se conserva la marca ya elegida.
@@ -227,7 +224,16 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     division: { id: division?.id ?? 0, codigo: division?.codigo ?? null, nombre: division?.nombre ?? "Indeterminable" },
                     contrato: { id: marca.contrato_id ?? 0, codigo: contrato?.nro_contrato ?? null, nombre: contrato?.nombre ?? "Indefinido" },
                     corpo: { id: marca.corpo_id ?? 0, codigo: corpo?.nro_sucursal ?? null, nombre: corpo?.nombre ?? "Indefinido" },
-                    puesto: { id: marca.puesto_id ?? 0, codigo: puesto?.codigo ?? null, nombre: puesto?.nombre ?? "Indefinido" },
+                    puesto: {
+                        id: marca.puesto_id ?? 0,
+                        codigo: puesto?.codigo ?? null,
+                        nombre: puesto?.nombre ?? "Indefinido",
+                        // Para mostrar el puesto en el mapa y llegar con Waze (también sin conexión: el turno se guarda en la app).
+                        ubicacion: {
+                            lat: puesto?.coordenadas_gpslat ? parseFloat(puesto.coordenadas_gpslat) : null,
+                            lng: puesto?.coordenadas_gpslng ? parseFloat(puesto.coordenadas_gpslng) : null,
+                        },
+                    },
                     plaza: { id: marca.plaza_id ?? 0, codigo: plaza?.codigo_plaza ?? null, nombre: plaza?.nombre ?? "Indefinido" },
                     horario: { id: marca.horario_id ?? 0, codigo: null, nombre: horario?.titulo ?? "Indefinido" },
                 };
@@ -312,26 +318,6 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     horas_eliminar_marca_tras_salida: horasEliminarMarca,
                     next_shift: await buscarSiguienteTurno(),
                     message: `No tienes un turno activo: tu último turno terminó hace más de ${horasEliminarMarca} hora(s).`,
-                },
-                { status: 200 }
-            );
-        }
-
-        // Turno sin hora de inicio ni tipo de turno: no se puede marcar; se avisa al empleado (la hora nula ya se normalizó, de ahí la bandera).
-        if (marcaDia.__turnoSinDatos === true) {
-            return NextResponse.json(
-                {
-                    status: false,
-                    turno_sin_datos: true,
-                    marca_id: marcaDia.id,
-                    current_time: currentTime,
-                    monitoring_previous_minutes: monitoringPreviousMinutes,
-                    monitoring_post_minutes: monitoringPostMinutes,
-                    tiempo_gracia_marcar_salida: tiempoGraciaMarcarSalida,
-                    validate_gps_salida: validateGpsSalida,
-                    horas_eliminar_marca_tras_salida: horasEliminarMarca,
-                    next_shift: await buscarSiguienteTurno(),
-                    message: MENSAJE_TURNO_SIN_DATOS,
                 },
                 { status: 200 }
             );
@@ -559,11 +545,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 "Tienes un permiso aprobado para el puesto " +
                     puesto_name +
                     " para el día " +
-                    new Date(marcaDia.fecha).toLocaleDateString("es-ES", {
-                        day: "2-digit",
-                        month: "2-digit",
-                        year: "numeric",
-                    })
+                    // DD-MM-AAAA (la fecha de la marca es un DATE guardado a medianoche UTC: no depende de la zona horaria del servidor)
+                    new Date(marcaDia.fecha).toISOString().slice(0, 10).split("-").reverse().join("-")
             );
         }
 
@@ -624,8 +607,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 return blockedMarcaResponse(
                     "No has marcado la entrada para el turno del día " +
                         fecha_marca_display +
-                        " a las " +
-                        hora_inicio_string +
+                        // Sin hora de inicio solo se dice la fecha.
+                        (marcaDia.hora_inicio ? " a las " + hora_inicio_string : "") +
                         "." +
                         extra_reason,
                     { absent: true, should_response }
@@ -640,7 +623,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             }
 
             const lateThresholdMs = inicio_marca.getTime() + monitoringPostMinutes * 60 * 1000;
-            if (estado === "No ingresado") {
+            if (marcaDia.hora_inicio == null || marcaDia.hora_fin == null) {
+                // Sin hora de inicio o de fin no hay horario contra el cual medir: no se calcula tardía.
+            } else if (estado === "No ingresado") {
                 if (toZonedTime(new Date(), "America/Costa_Rica").getTime() > lateThresholdMs) {
                     is_late = true;
                 }
