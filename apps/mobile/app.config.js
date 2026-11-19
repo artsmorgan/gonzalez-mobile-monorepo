@@ -21,79 +21,95 @@ function getGitCommitLast4() {
  * Debe coincidir con la entrada de `apps/server/mobile_versions_test.json` (lite) o `mobile_versions_prod.json` (prod).
  */
 const APP_VERSION_INFO_LITE = {
-  "version": "1.0.6",
-  "id": "246b7e64-e980-416b-82dc-382668ab24f1",
+  "version": "1.0.7",
+  "id": "2f2dbe94-6fa6-4e48-b7c8-fdcbc75ec977",
   "name": "MonitoreApp",
-  "created_at": "2026-11-10T00:00:00Z",
-  "title": "Versión en el inicio de sesión, ubicación del puesto con Waze, Mis puestos y actividades con varios tipos de turno",
-  "description": "El inicio de sesión muestra la versión y permite descargar la última, Marcar ingreso y salida estrena estilo y ubicación del puesto con mapa y Waze, se agrega Mis puestos y las actividades pueden aplicar a varios tipos de turno.",
+  "created_at": "2026-11-18T00:00:00Z",
+  "title": "Mis puestos, mapa flotante con elección de aplicación, permisos y mutuos acuerdos por turnos, y mensajes claros al marcar",
+  "description": "Se agrega el módulo Mis puestos y el mapa del puesto en una ventana flotante con Google Maps, Waze u otra aplicación; las solicitudes de permiso ya no piden plaza, los mutuos acuerdos permiten elegir los turnos, y Marcar maneja días libres, marcas incompletas y los mensajes de Planillas.",
   "notas": [
     {
-      "title": "Versión y actualización en el inicio de sesión",
-      "description": "La pantalla de inicio de sesión muestra la versión de la aplicación, busca sola si hay una versión nueva y permite buscarla con un botón. Si la hay, muestra sus notas y permite descargar el instalador sin iniciar sesión. Si el servidor exige otra versión, la aplicación lo avisa con un mensaje claro."
-    },
-    {
-      "title": "Banner con la versión en producción",
-      "description": "En la versión de producción se muestra un banner fijo en la parte superior con el número de versión instalada (por ejemplo, Versión 1.0.5). La versión de pruebas conserva su banner de prueba."
-    },
-    {
-      "title": "Marcar ingreso y salida: nuevo estilo",
-      "description": "La fecha y hora actual, el estado y las fechas y horas de entrada y de salida se muestran con el mismo estilo que el empleado y el puesto. Los mensajes aparecen debajo del estado, el botón de ingreso es verde y las fechas se ven como DD-MM-AAAA."
-    },
-    {
-      "title": "Turnos futuros",
-      "description": "Un día con un solo turno libre muestra «Tienes libre este día» en lugar de un turno sin hora, y cada tarjeta de turno incluye su fecha."
-    },
-    {
-      "title": "Ubicación del puesto con mapa y Waze",
-      "description": "En Marcar ingreso y salida, debajo de los botones, y en las tarjetas de turnos futuros hay un botón «Mostrar ubicación del puesto» que muestra las coordenadas del puesto, un mapa con tu ubicación actual y un botón para llegar con Waze."
+      "title": "Ubicación del puesto en una ventana flotante",
+      "description": "El mapa del puesto se abre en una ventana propia, con tu ubicación actual, para moverlo y acercarlo sin chocar con el desplazamiento de la pantalla. El botón «Cómo llegar» permite elegir con qué aplicación abrirlo: Google Maps, Waze u otra aplicación de mapas del teléfono."
     },
     {
       "title": "Mis puestos",
-      "description": "El módulo Ubicación del puesto incluye la sección «Mis puestos». Con conexión a internet muestra los puestos de tus turnos de hoy en adelante; cada uno se abre para ver su mapa con tu ubicación y llegar con Waze si el puesto tiene coordenadas."
+      "description": "Nuevo módulo «Mis puestos», disponible para todos los roles y tipos de usuario, con o sin marca. Muestra los puestos donde tienes turnos de hoy en adelante, cada uno con su mapa y la ruta para llegar."
     },
     {
-      "title": "Actividades con varios tipos de turno",
-      "description": "Al crear o editar una actividad se pueden seleccionar varios tipos de turno (Diurno, Mixto y Nocturno) con casillas; la actividad aplica a los turnos seleccionados."
+      "title": "Marcar ingreso y salida: días libres y marcas incompletas",
+      "description": "Si un día trae varias marcas, se toma la que tiene tipo de turno y horario; si ninguna los tiene, el día se muestra como libre (en el turno actual, el siguiente turno y los turnos futuros). Una marca sin hora de inicio o de fin muestra solo la fecha, sin horas inventadas y sin mensaje de tardía."
+    },
+    {
+      "title": "Mensajes de Planillas al marcar",
+      "description": "Si Planillas no permite marcar la entrada o la salida (por ejemplo, en un día libre o sin turno asignado), la aplicación muestra el mensaje que Planillas envía en lugar de un error genérico."
+    },
+    {
+      "title": "Banner con la versión instalada",
+      "description": "El banner superior de la versión de pruebas muestra el número de versión (por ejemplo, Versión de prueba - 1.0.7) en lugar de los caracteres del repositorio; el de producción muestra Versión y su número."
+    },
+    {
+      "title": "Solicitud de permiso",
+      "description": "Ya no hace falta elegir una plaza: solo se indican las fechas. Al buscar los turnos se revalida la contraseña de Planillas si es necesario, el botón muestra una animación de carga y la lista incluye el código del puesto y descarta los turnos sin tipo ni horario."
+    },
+    {
+      "title": "Mutuos acuerdos",
+      "description": "Ahora se elige qué turno de cada empleado se intercambia. Cada turno indica si es propio o de reemplazo, con una advertencia al elegir uno de reemplazo. No aparecen los turnos sin datos ni los propios que hoy cubre otra persona, y la lista muestra el código del puesto."
+    },
+    {
+      "title": "Notificaciones",
+      "description": "Una persona sin turno ya no recibe un error al abrir las notificaciones: se muestran las propias."
+    },
+    {
+      "title": "Reportes de actividades",
+      "description": "El reporte de actividades incluye las columnas «Horario diurno», «Horario mixto» y «Horario nocturno» (Sí o No). Los reportes de mutuos acuerdos, permisos, control de asistencia y acciones personales muestran el tipo de turno con su nombre y las fechas de los mutuos como DD-MM-AAAA."
     }
   ]
 };
 
 const APP_VERSION_INFO_PROD = {
-  "version": "1.0.5",
-  "id": "2f46c3a0-616d-4512-a49e-d7b13ac33603",
+  "version": "1.0.6",
+  "id": "c0fb0a43-8fcc-4d6c-a61e-ac5687c0c230",
   "name": "MonitoreApp",
-  "created_at": "2026-11-10T00:00:00Z",
-  "title": "Versión en el inicio de sesión, ubicación del puesto con Waze, Mis puestos y actividades con varios tipos de turno",
-  "description": "El inicio de sesión muestra la versión y permite descargar la última, Marcar ingreso y salida estrena estilo y ubicación del puesto con mapa y Waze, se agrega Mis puestos y las actividades pueden aplicar a varios tipos de turno.",
+  "created_at": "2026-11-18T00:00:00Z",
+  "title": "Mis puestos, mapa flotante con elección de aplicación, permisos y mutuos acuerdos por turnos, y mensajes claros al marcar",
+  "description": "Se agrega el módulo Mis puestos y el mapa del puesto en una ventana flotante con Google Maps, Waze u otra aplicación; las solicitudes de permiso ya no piden plaza, los mutuos acuerdos permiten elegir los turnos, y Marcar maneja días libres, marcas incompletas y los mensajes de Planillas.",
   "notas": [
     {
-      "title": "Versión y actualización en el inicio de sesión",
-      "description": "La pantalla de inicio de sesión muestra la versión de la aplicación, busca sola si hay una versión nueva y permite buscarla con un botón. Si la hay, muestra sus notas y permite descargar el instalador sin iniciar sesión. Si el servidor exige otra versión, la aplicación lo avisa con un mensaje claro."
-    },
-    {
-      "title": "Banner con la versión en producción",
-      "description": "En la versión de producción se muestra un banner fijo en la parte superior con el número de versión instalada (por ejemplo, Versión 1.0.5). La versión de pruebas conserva su banner de prueba."
-    },
-    {
-      "title": "Marcar ingreso y salida: nuevo estilo",
-      "description": "La fecha y hora actual, el estado y las fechas y horas de entrada y de salida se muestran con el mismo estilo que el empleado y el puesto. Los mensajes aparecen debajo del estado, el botón de ingreso es verde y las fechas se ven como DD-MM-AAAA."
-    },
-    {
-      "title": "Turnos futuros",
-      "description": "Un día con un solo turno libre muestra «Tienes libre este día» en lugar de un turno sin hora, y cada tarjeta de turno incluye su fecha."
-    },
-    {
-      "title": "Ubicación del puesto con mapa y Waze",
-      "description": "En Marcar ingreso y salida, debajo de los botones, y en las tarjetas de turnos futuros hay un botón «Mostrar ubicación del puesto» que muestra las coordenadas del puesto, un mapa con tu ubicación actual y un botón para llegar con Waze."
+      "title": "Ubicación del puesto en una ventana flotante",
+      "description": "El mapa del puesto se abre en una ventana propia, con tu ubicación actual, para moverlo y acercarlo sin chocar con el desplazamiento de la pantalla. El botón «Cómo llegar» permite elegir con qué aplicación abrirlo: Google Maps, Waze u otra aplicación de mapas del teléfono."
     },
     {
       "title": "Mis puestos",
-      "description": "El módulo Ubicación del puesto incluye la sección «Mis puestos». Con conexión a internet muestra los puestos de tus turnos de hoy en adelante; cada uno se abre para ver su mapa con tu ubicación y llegar con Waze si el puesto tiene coordenadas."
+      "description": "Nuevo módulo «Mis puestos», disponible para todos los roles y tipos de usuario, con o sin marca. Muestra los puestos donde tienes turnos de hoy en adelante, cada uno con su mapa y la ruta para llegar."
     },
     {
-      "title": "Actividades con varios tipos de turno",
-      "description": "Al crear o editar una actividad se pueden seleccionar varios tipos de turno (Diurno, Mixto y Nocturno) con casillas; la actividad aplica a los turnos seleccionados."
+      "title": "Marcar ingreso y salida: días libres y marcas incompletas",
+      "description": "Si un día trae varias marcas, se toma la que tiene tipo de turno y horario; si ninguna los tiene, el día se muestra como libre (en el turno actual, el siguiente turno y los turnos futuros). Una marca sin hora de inicio o de fin muestra solo la fecha, sin horas inventadas y sin mensaje de tardía."
+    },
+    {
+      "title": "Mensajes de Planillas al marcar",
+      "description": "Si Planillas no permite marcar la entrada o la salida (por ejemplo, en un día libre o sin turno asignado), la aplicación muestra el mensaje que Planillas envía en lugar de un error genérico."
+    },
+    {
+      "title": "Banner con la versión instalada",
+      "description": "El banner superior de la versión de pruebas muestra el número de versión (por ejemplo, Versión de prueba - 1.0.7) en lugar de los caracteres del repositorio; el de producción muestra Versión y su número."
+    },
+    {
+      "title": "Solicitud de permiso",
+      "description": "Ya no hace falta elegir una plaza: solo se indican las fechas. Al buscar los turnos se revalida la contraseña de Planillas si es necesario, el botón muestra una animación de carga y la lista incluye el código del puesto y descarta los turnos sin tipo ni horario."
+    },
+    {
+      "title": "Mutuos acuerdos",
+      "description": "Ahora se elige qué turno de cada empleado se intercambia. Cada turno indica si es propio o de reemplazo, con una advertencia al elegir uno de reemplazo. No aparecen los turnos sin datos ni los propios que hoy cubre otra persona, y la lista muestra el código del puesto."
+    },
+    {
+      "title": "Notificaciones",
+      "description": "Una persona sin turno ya no recibe un error al abrir las notificaciones: se muestran las propias."
+    },
+    {
+      "title": "Reportes de actividades",
+      "description": "El reporte de actividades incluye las columnas «Horario diurno», «Horario mixto» y «Horario nocturno» (Sí o No). Los reportes de mutuos acuerdos, permisos, control de asistencia y acciones personales muestran el tipo de turno con su nombre y las fechas de los mutuos como DD-MM-AAAA."
     }
   ]
 };
@@ -223,7 +239,7 @@ module.exports = ({ config }) => {
          * Guardify (registro de equipos, órdenes y catálogo de APK) está BLOQUEADO por defecto: aunque haya URL, la app no lo usa mientras este interruptor
          * no sea "true". El código se conserva; para reactivarlo: `EXPO_PUBLIC_GUARDIFY_ENABLED=true` y `EXPO_PUBLIC_GUARDIFY_URL`, y recompilar.
          */
-        GUARDIFY_ENABLED: process.env.EXPO_PUBLIC_GUARDIFY_ENABLED || process.env.GUARDIFY_ENABLED || "false",
+        GUARDIFY_ENABLED: process.env.EXPO_PUBLIC_GUARDIFY_ENABLED || process.env.GUARDIFY_ENABLED || "true",
         /** Sin valor por defecto: una URL de túnel temporal no debe quedar embebida en ninguna build. Se define en el perfil de EAS (ver docs/guardify/compilar-apk-pruebas.md). */
         GUARDIFY_URL: process.env.EXPO_PUBLIC_GUARDIFY_URL || process.env.GUARDIFY_URL || "https://guardifyconsole-production.up.railway.app",
         /** Cada cuántos segundos manda el equipo su latido (batería y ubicación con permiso). Vacío = 300 (5 min); mínimo 30. */

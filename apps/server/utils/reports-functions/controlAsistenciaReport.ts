@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { tipoTurnoReporteLabel } from "./reporteFormatos";
 import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import fs from "fs/promises";
@@ -241,7 +242,7 @@ async function queryControlAsistenciaRowsInner(prisma: ReportDataAccess, filters
             contrato_nombre: contrato ? `${contrato.nro_contrato ? `${contrato.nro_contrato} - ` : ""}${contrato.nombre}` : String(r.contrato_id),
             corpo_nombre: corpo ? `${corpo.nro_sucursal ? `${corpo.nro_sucursal} - ` : ""}${corpo.nombre}` : String(r.corpo_id),
             puesto_nombre: puesto ? `${puesto.codigo ? `${puesto.codigo} - ` : ""}${puesto.nombre}` : String(r.puesto_id),
-            turno_label: r.turno === "D" ? "Diurno" : r.turno === "M" ? "Mixto" : r.turno === "N" ? "Nocturno" : String(r.turno ?? ""),
+            turno_label: tipoTurnoReporteLabel(r.turno),
             fecha_txt: r.fecha instanceof Date ? r.fecha.toISOString().slice(0, 10) : String(r.fecha ?? ""),
             colaboradores_preview: cols,
             firma_manual_supervisor_data_uri: normalizeSignatureDataUri(r.firma_manual_supervisor),

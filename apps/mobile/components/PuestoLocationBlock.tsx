@@ -1,45 +1,43 @@
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, Linking, Modal, Platform, StyleSheet, TouchableOpacity, View } from 'react-native';
 import * as Location from 'expo-location';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import { ThemedText } from '@/components/ThemedText';
 import OutOfRangeMap from '@/components/OutOfRangeMap';
-import { buildWazeLinks, formatCoordinates, parsePuestoPoint, type LatLng } from '@/hooks/puestoLocation';
+import { buildMapAppOptions, formatCoordinates, parsePuestoPoint, type LatLng, type MapAppOption } from '@/hooks/puestoLocation';
 
 type Props = {
-  /** Coordenadas del puesto (`{ lat, lng }`, números o textos). Sin ellas se avisa que el puesto no las tiene definidas. */
+  /** Coordenadas del puesto (`{ lat, lng }`, números o textos). Sin ellas se avisa que el puesto no tiene coordenadas definidas. */
   ubicacion?: { lat?: unknown; lng?: unknown } | null;
-  /** Nombre del puesto, solo para el aviso y el enlace. */
+  /** Nombre del puesto, para el título de la ventana y el destino en el mapa. */
   puestoNombre?: string | null;
-  /** El mapa se muestra ya abierto (por ejemplo, dentro de una sección que el usuario ya desplegó). */
-  initiallyOpen?: boolean;
-  /** Texto del botón que abre el mapa. */
+  /** Texto del botón que abre la ventana con el mapa. */
   buttonLabel?: string;
 };
 
-/** Abre Waze con el puesto como destino: primero la aplicación y, si no se puede, el enlace universal. */
-export async function openWazeTo(destino: LatLng): Promise<void> {
-  const links = buildWazeLinks(destino);
-  try {
-    await Linking.openURL(links.app);
-    return;
-  } catch {
-    /* Waze no está instalada o el sistema no abre el esquema: se prueba el enlace universal */
+/** Abre la aplicación elegida (con su enlace alterno si la primera no abre). */
+export async function openMapApp(option: MapAppOption): Promise<void> {
+  const urls = [option.url, ...(option.fallbackUrl ? [option.fallbackUrl] : [])];
+  for (const url of urls) {
+    try {
+      await Linking.openURL(url);
+      return;
+    } catch {
+      /* se prueba el siguiente enlace */
+    }
   }
-  try {
-    await Linking.openURL(links.web);
-  } catch {
-    Alert.alert('Waze', 'No se pudo abrir Waze. Instálala o abre la ubicación del puesto en otra aplicación de mapas.');
-  }
+  Alert.alert(option.label, 'No se pudo abrir esa aplicación. Elige otra o instálala en el teléfono.');
 }
 
 /**
- * Ubicación del puesto detrás de un botón: coordenadas del puesto y del dispositivo, mapa con ambos puntos y un botón para ir en Waze.
- * Pide la ubicación actual solo al abrir el mapa (no en segundo plano). Si el puesto no tiene coordenadas, lo dice en vez de ocultar la opción.
+ * Ubicación del puesto en una ventana flotante: coordenadas del puesto y del dispositivo, el mapa con ambos puntos y un botón «Cómo llegar» que deja elegir con
+ * qué aplicación de mapas abrirlo (Google Maps, Waze u otra instalada en el teléfono). El mapa va en una ventana propia, fuera de la pantalla que se desplaza,
+ * para poder moverlo y acercarlo sin chocar con el desplazamiento vertical. La ubicación actual se pide al abrir la ventana.
  */
-export default function PuestoLocationBlock({ ubicacion, puestoNombre, initiallyOpen = false, buttonLabel = 'Mostrar ubicación del puesto' }: Props) {
+export default function PuestoLocationBlock({ ubicacion, puestoNombre, buttonLabel = 'Mostrar ubicación del puesto' }: Props) {
   const puesto = parsePuestoPoint(ubicacion);
-  const [open, setOpen] = useState(initiallyOpen);
+  const [open, setOpen] = useState(false);
+  const [choosing, setChoosing] = useState(false);
   const [device, setDevice] = useState<LatLng | null>(null);
   const [locating, setLocating] = useState(false);
   const [locationNote, setLocationNote] = useState<string | null>(null);
@@ -70,63 +68,93 @@ export default function PuestoLocationBlock({ ubicacion, puestoNombre, initially
     }
   }, []);
 
-  const toggle = () => {
-    const next = !open;
-    setOpen(next);
-    if (next && puesto) void locateDevice();
+  const openWindow = () => {
+    setChoosing(false);
+    setOpen(true);
+    if (puesto) void locateDevice();
   };
 
-  React.useEffect(() => {
-    if (initiallyOpen && puesto) void locateDevice();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const options = puesto ? buildMapAppOptions(puesto, device, puestoNombre, Platform.OS) : [];
+  const mapHeight = Math.round(Dimensions.get('window').height * 0.5);
 
   return (
     <View style={styles.wrap}>
-      <TouchableOpacity style={styles.toggle} onPress={toggle} activeOpacity={0.85} accessibilityRole="button">
+      <TouchableOpacity style={styles.toggle} onPress={openWindow} activeOpacity={0.85} accessibilityRole="button">
         <Ionicons name="location-outline" size={18} color="#007AFF" />
-        <ThemedText style={styles.toggleText}>{open ? 'Ocultar ubicación del puesto' : buttonLabel}</ThemedText>
-        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color="#007AFF" />
+        <ThemedText style={styles.toggleText}>{buttonLabel}</ThemedText>
       </TouchableOpacity>
 
-      {open ? (
-        <View style={styles.panel}>
-          {puesto ? (
-            <>
-              <View style={styles.coordRow}>
-                <View style={[styles.dot, { backgroundColor: '#FF3B30' }]} />
-                <ThemedText style={styles.coordText}>
-                  {puestoNombre ? `${puestoNombre}: ` : 'Puesto: '}
-                  {formatCoordinates(puesto)}
-                </ThemedText>
-              </View>
-              <View style={styles.coordRow}>
-                <View style={[styles.dot, { backgroundColor: '#007AFF' }]} />
-                <ThemedText style={styles.coordText}>
-                  Tu ubicación: {locating ? 'buscando…' : device ? formatCoordinates(device) : 'no disponible'}
-                </ThemedText>
-                {locating ? <ActivityIndicator size="small" color="#007AFF" /> : null}
-              </View>
-              {locationNote ? <ThemedText style={styles.note}>{locationNote}</ThemedText> : null}
-              <View style={styles.mapBox}>
-                <OutOfRangeMap deviceLat={device?.lat ?? null} deviceLng={device?.lng ?? null} puestoLat={puesto.lat} puestoLng={puesto.lng} />
-              </View>
-              <TouchableOpacity style={styles.wazeButton} onPress={() => void openWazeTo(puesto)} activeOpacity={0.85} accessibilityRole="button">
-                <Ionicons name="navigate-outline" size={18} color="#FFFFFF" />
-                <ThemedText style={styles.wazeButtonText}>Cómo llegar con Waze</ThemedText>
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+        <View style={styles.overlay}>
+          <View style={styles.window}>
+            <View style={styles.header}>
+              <ThemedText style={styles.title} numberOfLines={2}>
+                {puestoNombre ? `Ubicación de ${puestoNombre}` : 'Ubicación del puesto'}
+              </ThemedText>
+              <TouchableOpacity onPress={() => setOpen(false)} accessibilityLabel="Cerrar">
+                <Ionicons name="close" size={24} color="#333333" />
               </TouchableOpacity>
-            </>
-          ) : (
-            <ThemedText style={styles.note}>Este puesto no tiene coordenadas definidas, por eso no se puede mostrar en el mapa.</ThemedText>
-          )}
+            </View>
+
+            {puesto ? (
+              choosing ? (
+                <View style={styles.body}>
+                  <ThemedText style={styles.subtitle}>¿Con qué aplicación quieres abrir el mapa?</ThemedText>
+                  {options.map((option) => (
+                    <TouchableOpacity key={option.id} style={styles.option} onPress={() => void openMapApp(option)} activeOpacity={0.85} accessibilityRole="button">
+                      <Ionicons name="navigate-outline" size={20} color="#007AFF" />
+                      <View style={styles.optionText}>
+                        <ThemedText style={styles.optionTitle}>{option.label}</ThemedText>
+                        <ThemedText style={styles.optionDetail}>{option.detalle}</ThemedText>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                  <TouchableOpacity style={styles.back} onPress={() => setChoosing(false)} activeOpacity={0.85}>
+                    <Ionicons name="arrow-back" size={16} color="#007AFF" />
+                    <ThemedText style={styles.backText}>Volver al mapa</ThemedText>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <View style={styles.body}>
+                  <View style={styles.coordRow}>
+                    <View style={[styles.dot, { backgroundColor: '#FF3B30' }]} />
+                    <ThemedText style={styles.coordText}>Puesto: {formatCoordinates(puesto)}</ThemedText>
+                  </View>
+                  <View style={styles.coordRow}>
+                    <View style={[styles.dot, { backgroundColor: '#007AFF' }]} />
+                    <ThemedText style={styles.coordText}>Tu ubicación: {locating ? 'buscando…' : device ? formatCoordinates(device) : 'no disponible'}</ThemedText>
+                    {locating ? <ActivityIndicator size="small" color="#007AFF" /> : null}
+                  </View>
+                  {locationNote ? <ThemedText style={styles.note}>{locationNote}</ThemedText> : null}
+                  <View style={styles.mapBox}>
+                    <OutOfRangeMap
+                      deviceLat={device?.lat ?? null}
+                      deviceLng={device?.lng ?? null}
+                      puestoLat={puesto.lat}
+                      puestoLng={puesto.lng}
+                      style={{ width: '100%', height: mapHeight, marginTop: 0, marginBottom: 0 }}
+                    />
+                  </View>
+                  <TouchableOpacity style={styles.go} onPress={() => setChoosing(true)} activeOpacity={0.85} accessibilityRole="button">
+                    <Ionicons name="navigate-outline" size={18} color="#FFFFFF" />
+                    <ThemedText style={styles.goText}>Cómo llegar</ThemedText>
+                  </TouchableOpacity>
+                </View>
+              )
+            ) : (
+              <View style={styles.body}>
+                <ThemedText style={styles.note}>Este puesto no tiene coordenadas definidas, por eso no se puede mostrar en el mapa.</ThemedText>
+              </View>
+            )}
+          </View>
         </View>
-      ) : null}
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { width: '100%', gap: 8 },
+  wrap: { width: '100%' },
   toggle: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -140,20 +168,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   toggleText: { color: '#007AFF', fontSize: 14, fontWeight: '600' },
-  panel: { gap: 8, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0', backgroundColor: '#FFFFFF' },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 16 },
+  window: { backgroundColor: '#FFFFFF', borderRadius: 12, overflow: 'hidden' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: 14, borderBottomWidth: 1, borderBottomColor: '#E0E0E0', backgroundColor: '#FFFFFF' },
+  title: { flex: 1, fontSize: 16, fontWeight: '700', color: '#111827' },
+  body: { padding: 14, gap: 10, backgroundColor: '#FFFFFF' },
+  subtitle: { fontSize: 14, color: '#374151', fontWeight: '600' },
   coordRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   dot: { width: 10, height: 10, borderRadius: 5 },
   coordText: { flex: 1, fontSize: 13, color: '#333333' },
   note: { fontSize: 13, color: '#666666' },
-  mapBox: { alignItems: 'center' },
-  wazeButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    borderRadius: 8,
-    backgroundColor: '#1D8FC7',
-  },
-  wazeButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
+  mapBox: { width: '100%', borderRadius: 8, overflow: 'hidden' },
+  go: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 12, borderRadius: 8, backgroundColor: '#007AFF' },
+  goText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
+  option: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0', backgroundColor: '#FFFFFF' },
+  optionText: { flex: 1, backgroundColor: 'transparent' },
+  optionTitle: { fontSize: 15, fontWeight: '700', color: '#111827' },
+  optionDetail: { fontSize: 12, color: '#6B7280', marginTop: 2 },
+  back: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', paddingVertical: 8 },
+  backText: { color: '#007AFF', fontSize: 14, fontWeight: '600' },
 });

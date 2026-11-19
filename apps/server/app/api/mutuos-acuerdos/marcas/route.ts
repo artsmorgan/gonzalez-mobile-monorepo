@@ -1,13 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { esTurnoPropioCubiertoPorOtro, marcaSinDatos } from "../../../../utils/marcasDelDia";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../utils/prismaClient";
 import { collectPlanillasMarcaIdsForDateRange } from "../../../../utils/getPermitTurnosFromPlanillasRange";
-import {
-  dateAtUtcMidnight,
-  parseIntStrict,
-  ymdFromFecha,
-} from "../../../../utils/mutuosAcuerdosMarcas";
+import { dateAtUtcMidnight, parseIntStrict, ymdFromFecha } from "../../../../utils/mutuosAcuerdosMarcas";
 import { reportError } from "../../../../utils/reportError";
 
 const turnoTexto = (tipoTurno?: string | null) => {
@@ -50,7 +47,8 @@ export async function GET(req: NextRequest) {
     const dayDate = new Date(`${fecha}T00:00:00.000Z`);
     const dayIso = dateAtUtcMidnight(fecha).toISOString();
 
-    // Si el empleado ya tiene mutuo/permiso ese día, no ofrecer turnos
+    // Si el empleado ya tiene mutuo/permiso ese día, no ofrecer turnos. Planillas no permite un cambio de guardia si alguno de los empleados ya definió uno
+    // para esa fecha, así que se avisa desde aquí en lugar de dejar que falle al registrar.
     const mutuoConflict = await callDynamicPrisma({
       req,
       data: {
@@ -126,7 +124,7 @@ export async function GET(req: NextRequest) {
       include: {
         e_estructura_cliente: { select: { nombre: true } },
         e_estructura_sucursal: { select: { nombre: true } },
-        e_estructura_puesto: { select: { nombre: true } },
+        e_estructura_puesto: { select: { nombre: true, codigo: true } },
       },
       orderBy: [{ hora_inicio: "asc" }, { id: "asc" }],
     });
@@ -153,7 +151,9 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ status: true, message: "El empleado está libre ese día", data: [] }, { status: 200 });
     }
 
-    const data = (marcas || []).map((m: any) => {
+    // Se descartan las marcas que no traen tipo de turno ni hora de inicio ni de fin, y los turnos propios que hoy cubre otra persona (tienen un empleado de
+    // reemplazo distinto del consultado): ya no los trabaja el empleado, así que no se ofrecen para intercambiar.
+    const data = (marcas || []).filter((m: any) => !marcaSinDatos(m) && !esTurnoPropioCubiertoPorOtro(m, empleadoId)).map((m: any) => {
       const cId = m.contrato_id != null ? Number(m.contrato_id) : null;
       const divRaw = cId != null && cId > 0 ? divisionByContratoId.get(cId) : null;
       const divId = divRaw != null && Number.isFinite(Number(divRaw)) && Number(divRaw) > 0 ? Number(divRaw) : null;
@@ -164,6 +164,9 @@ export async function GET(req: NextRequest) {
         corpo_id: m.corpo_id ?? null,
         plaza_id: m.plaza_id ?? null,
         empleadoFijo_id: m.empleadoFijo_id ?? null,
+        empleadoReemplaza_id: m.empleadoReemplaza_id ?? null,
+        // «Turno de reemplazo»: el empleado consultado lo cubre en lugar de su titular; si no, es un turno propio.
+        es_reemplazo: m.empleadoReemplaza_id != null && Number(m.empleadoReemplaza_id) === empleadoId,
         empresa_id: m.empresa_id != null ? Number(m.empresa_id) : null,
         puesto_id: m.puesto_id != null ? Number(m.puesto_id) : null,
         contrato_id: cId != null && cId > 0 ? cId : null,
@@ -171,6 +174,7 @@ export async function GET(req: NextRequest) {
         cliente: m.e_estructura_cliente?.nombre || null,
         sucursal: m.e_estructura_sucursal?.nombre || null,
         puesto: m.e_estructura_puesto?.nombre || null,
+        puesto_codigo: m.e_estructura_puesto?.codigo ?? null,
         hora_inicio: m.hora_inicio ? new Date(m.hora_inicio).toISOString() : null,
         hora_fin: m.hora_fin ? new Date(m.hora_fin).toISOString() : null,
         tipo_turno: m.tipo_turno || null,

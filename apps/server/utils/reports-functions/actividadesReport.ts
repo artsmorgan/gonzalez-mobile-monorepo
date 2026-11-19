@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { actividadTieneTurno, loadTiposTurnoFromDb, tiposTurnoLabel } from "../actividadTipoTurno";
+import { actividadAplicaAlTurno, actividadTieneTurno, loadTiposTurnoFromDb, tiposTurnoLabel } from "../actividadTipoTurno";
 import fs from "fs/promises";
 import path from "path";
 import type { ReportDataAccess } from "../reportDynamicPrisma";
@@ -531,6 +531,9 @@ export async function buildActividadesExcelConsolidado(
         "Fecha fin",
         "Frecuencia (título)",
         "Tipo de turno",
+        "Horario diurno",
+        "Horario mixto",
+        "Horario nocturno",
         "Es revisión equipo",
         "Descripción",
         "Puesto",
@@ -573,6 +576,9 @@ export async function buildActividadesExcelConsolidado(
         { width: 14 },
         { width: 14 },
         { width: 30 },
+        { width: 14 },
+        { width: 14 },
+        { width: 14 },
         { width: 14 },
         { width: 18 },
         { width: 55 },
@@ -622,6 +628,8 @@ export async function buildActividadesExcelConsolidado(
             formatDateOnlyDMY(act.fecha_fin),
             frecuenciaTitleOnly(act.frecuencia, ";"),
             tiposTurnoLabel(act.tipos_turno ?? [], act.tipo_turno, ""),
+            // Una casilla por tipo de turno: «Sí» si la actividad aplica a ese turno (una actividad sin tipos definidos aplica a todos, igual que en la app).
+            ...(["D", "M", "N"] as const).map((t) => (actividadAplicaAlTurno(act.tipos_turno ?? [], act.tipo_turno, t) ? "Sí" : "No")),
             act.es_revision_equipo ? "Sí" : "No",
             String(act.descripcion_actividad ?? "").slice(0, 5000),
         ];

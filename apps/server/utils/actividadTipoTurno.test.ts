@@ -175,6 +175,6 @@ describe("Mis puestos (módulo Ubicación del puesto)", () => {
         assert.match(seccion, /necesitas conexión a internet/);
         assert.match(seccion, /\/api\/puestos\/mis-puestos/);
         assert.match(seccion, /<Collapsible key=\{puesto\.id\}/);
-        assert.match(seccion, /<PuestoLocationBlock ubicacion=\{puesto\.ubicacion\}[^>]*initiallyOpen \/>/);
+        assert.match(seccion, /<PuestoLocationBlock ubicacion=\{puesto\.ubicacion\} puestoNombre=\{puesto\.nombre\}\s*\/>/);
     });
 });

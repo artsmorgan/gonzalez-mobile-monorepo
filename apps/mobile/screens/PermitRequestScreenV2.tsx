@@ -60,6 +60,8 @@ type Turno = {
   hora_fin: string | null;
   tipo_turno: string | null;
   horas_duracion: string | null;
+  /** Código del puesto del turno (se muestra junto a su nombre). */
+  puesto_codigo?: string | null;
   reemplazo_id?: number | null;
   reemplazo_nombre?: string | null;
 };
@@ -294,9 +296,6 @@ export default function PermitRequestScreenV2() {
   const [error, setError] = useState<string | null>(null);
 
   const [isCreating, setIsCreating] = useState(false);
-  const [plazas, setPlazas] = useState<PlazaOption[]>([]);
-  const [selectedPlazaId, setSelectedPlazaId] = useState<number | null>(null);
-  const [isLoadingPlazas, setIsLoadingPlazas] = useState(false);
   const [tipo, setTipo] = useState<PermitType | ''>('');
   const [fechaInicio, setFechaInicio] = useState(new Date());
   const [fechaFin, setFechaFin] = useState(new Date());
@@ -305,6 +304,7 @@ export default function PermitRequestScreenV2() {
   const [motivo, setMotivo] = useState('');
   const [turnosPreview, setTurnosPreview] = useState<Turno[]>([]);
   const [turnosMessage, setTurnosMessage] = useState('');
+  const [isSearchingTurnos, setIsSearchingTurnos] = useState(false);
   const [attachedDocuments, setAttachedDocuments] = useState<AttachedDocument[]>([]);
   const [firmaResponsable, setFirmaResponsable] = useState('');
   const [firmaEmpleadoManual, setFirmaEmpleadoManual] = useState('');
@@ -514,52 +514,18 @@ export default function PermitRequestScreenV2() {
     await fetchAll();
   }, [fetchAll]);
 
-  const fetchPlazas = useCallback(async () => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) return;
-    setIsLoadingPlazas(true);
-    try {
-      const resp = await authedFetch({
-        url: `${apiUrl}/api/permit-request/plazas`,
-        init: { method: 'GET', headers: { 'Content-Type': 'application/json' } },
-        refreshAccessToken,
-        logout,
-      });
-      if (!resp) throw new Error('Sesión expirada');
-      const json = await resp.json().catch(() => ({}));
-      if (!resp.ok || !json?.status) throw new Error(json?.message || 'No se pudieron cargar las plazas');
-      const data = Array.isArray(json.data) ? json.data : [];
-      const mapped = data.map((p: any) => ({
-        id: Number(p.id),
-        nombre_plaza: String(p.nombre_plaza ?? '').trim() || 'Plaza',
-        nombre_puesto: p.nombre_puesto != null ? String(p.nombre_puesto).trim() : null,
-        nombre_sucursal: p.nombre_sucursal != null ? String(p.nombre_sucursal).trim() : null,
-        nombre_cliente: p.nombre_cliente != null ? String(p.nombre_cliente).trim() : null,
-      }));
-      setPlazas(mapped);
-      if (mapped.length === 0) {
-        setSelectedPlazaId(null);
-        Alert.alert(
-          'Sin plazas',
-          'No se encontraron plazas asignadas a tu usuario. No puedes crear una solicitud de permiso sin una plaza válida.'
-        );
-      } else {
-        setSelectedPlazaId(Number(mapped[0]?.id) || null);
-      }
-    } catch (e: any) {
-      setPlazas([]);
-      setSelectedPlazaId(null);
-      Alert.alert('Error', e?.message || 'No se pudieron cargar las plazas');
-    } finally {
-      setIsLoadingPlazas(false);
-    }
-  }, [refreshAccessToken, logout]);
-
+  /** «Buscar turnos»: mientras consulta (incluida la revalidación de Planillas) el botón muestra una animación de carga y no se puede pulsar de nuevo. */
   const fetchTurnosPreview = async () => {
-    if (!selectedPlazaId) {
-      setTurnosMessage('Selecciona primero una plaza');
-      return;
+    if (isSearchingTurnos) return;
+    setIsSearchingTurnos(true);
+    try {
+      await fetchTurnosPreviewInner();
+    } finally {
+      setIsSearchingTurnos(false);
     }
+  };
+
+  const fetchTurnosPreviewInner = async () => {
     if (isPermitRangeInverted(fechaInicio, fechaFin)) {
       setTurnosMessage('La fecha fin no puede ser anterior a la fecha inicio.');
       return;
@@ -581,7 +547,7 @@ export default function PermitRequestScreenV2() {
       const fi = formatDateYMD(fechaInicio);
       const ff = formatDateYMD(fechaFin);
       const resp = await authedFetch({
-        url: `${apiUrl}/api/permit-request/turnos?fecha_inicio=${encodeURIComponent(fi)}&fecha_fin=${encodeURIComponent(ff)}&plaza_id=${encodeURIComponent(String(selectedPlazaId))}`,
+        url: `${apiUrl}/api/permit-request/turnos?fecha_inicio=${encodeURIComponent(fi)}&fecha_fin=${encodeURIComponent(ff)}`,
         init: {
           method: 'GET',
           headers: {
@@ -597,7 +563,7 @@ export default function PermitRequestScreenV2() {
       if (!resp.ok || !json?.status) throw new Error(json?.message || 'No se pudieron obtener los turnos');
       const rows = Array.isArray(json.data) ? json.data : [];
       setTurnosPreview(rows);
-      setTurnosMessage(rows.length ? '' : 'El usuario está libre en ese rango de fechas para esta plaza.');
+      setTurnosMessage(rows.length ? '' : 'El usuario está libre en ese rango de fechas.');
     } catch (e: any) {
       setTurnosPreview([]);
       setTurnosMessage(e?.message || 'No se pudieron obtener los turnos');
@@ -745,7 +711,6 @@ export default function PermitRequestScreenV2() {
       }
       return [];
     });
-    setSelectedPlazaId(null);
     setTipo('');
     setFechaInicio(new Date(horaAccion));
     setFechaFin(new Date(horaAccion));
@@ -754,12 +719,6 @@ export default function PermitRequestScreenV2() {
     setTurnosMessage('');
     setFirmaResponsable('');
     setFirmaEmpleadoManual('');
-  };
-
-  const onPlazaChange = (plazaId: number | null) => {
-    setSelectedPlazaId(plazaId);
-    setTurnosPreview([]);
-    setTurnosMessage(plazaId ? 'Cambiaste de plaza. Vuelve a buscar turnos.' : 'Selecciona una plaza y busca turnos.');
   };
 
   const executeCreate = async () => {
@@ -783,18 +742,6 @@ export default function PermitRequestScreenV2() {
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
-
-      const marcaRaw = await AsyncStorage.getItem('current_marca');
-      if (!marcaRaw) throw new Error('No hay marca actual (current_marca). No se puede enviar la jerarquía.');
-      const marca = JSON.parse(marcaRaw);
-      const hierarchy = parsePermitHierarchyFromCurrentMarca(marca);
-      const hierarchyKeys = ['empresa_id', 'cliente_id', 'division_id', 'contrato_id', 'corpo_id', 'puesto_id'] as const;
-      const missingH = hierarchyKeys.filter((k) => hierarchy[k] == null);
-      if (missingH.length) {
-        throw new Error(
-          `Faltan datos de jerarquía en la marca actual (${missingH.join(', ')}). Vuelve a marcar o sincroniza.`
-        );
-      }
 
       const filesPayload: {
         type: string;
@@ -833,8 +780,8 @@ export default function PermitRequestScreenV2() {
         throw new Error('Ninguno de los adjuntos seleccionados pudo incluirse. Revise los archivos e intente de nuevo.');
       }
 
+      // La plaza y la jerarquía ya no se envían: el permiso es de la persona y de sus fechas, y el servidor las resuelve con los turnos del rango.
       const payload: any = {
-        plaza_id: selectedPlazaId,
         tipo,
         fecha_inicio: formatDateYMD(fechaInicio),
         fecha_fin: formatDateYMD(fechaFin),
@@ -842,12 +789,6 @@ export default function PermitRequestScreenV2() {
         motivo: motivo.trim(),
         firma_responsable: firmaResponsable,
         firma_empleado_manual: firmaEmpleadoManual,
-        empresa_id: hierarchy.empresa_id,
-        cliente_id: hierarchy.cliente_id,
-        division_id: hierarchy.division_id,
-        contrato_id: hierarchy.contrato_id,
-        corpo_id: hierarchy.corpo_id,
-        puesto_id: hierarchy.puesto_id,
         files: filesPayload,
       };
       const resp = await authedFetch({
@@ -878,7 +819,6 @@ export default function PermitRequestScreenV2() {
 
   const handleCreate = () => {
     if (!isOnline) return Alert.alert('Sin conexión', 'Este módulo funciona únicamente con internet');
-    if (!selectedPlazaId) return Alert.alert('Error', 'Debes seleccionar una plaza');
     if (!tipo) return Alert.alert('Error', 'Debes seleccionar tipo de solicitud');
     if (!motivo.trim()) return Alert.alert('Error', 'Debes indicar el motivo de la solicitud');
     if (!firmaResponsable) return Alert.alert('Error', 'Debes generar la firma responsable');
@@ -1482,7 +1422,6 @@ export default function PermitRequestScreenV2() {
               onPress={() => {
                 resetCreateForm();
                 setIsCreating(true);
-                fetchPlazas();
               }}
               activeOpacity={0.85}
             >
@@ -1636,49 +1575,6 @@ export default function PermitRequestScreenV2() {
                   <Picker.Item label="Sin goce" value="Sin goce" color="#000000" />
                 </Picker>
               </View>
-              <ThemedText style={styles.label}>Plaza *</ThemedText>
-              {isLoadingPlazas ? (
-                <ThemedView style={{ paddingVertical: 12 }}>
-                  <ActivityIndicator size="small" color="#007AFF" />
-                  <ThemedText style={styles.signatureHintMuted}>Cargando plazas...</ThemedText>
-                </ThemedView>
-              ) : (
-                <View style={styles.plazasList}>
-                  {plazas.map((p) => (
-                    <TouchableOpacity
-                      key={p.id}
-                      style={[
-                        styles.plazaCard,
-                        selectedPlazaId === p.id && styles.plazaCardSelected,
-                      ]}
-                      onPress={() => onPlazaChange(selectedPlazaId === p.id ? null : p.id)}
-                      activeOpacity={0.85}
-                    >
-                      <ThemedText style={styles.plazaCardTitle}>{p.nombre_plaza}</ThemedText>
-                      <ThemedText style={styles.cardLine}>
-                        <ThemedText style={styles.cardLabel}>Puesto: </ThemedText>
-                        {p.nombre_puesto ?? '-'}
-                      </ThemedText>
-                      <ThemedText style={styles.cardLine}>
-                        <ThemedText style={styles.cardLabel}>Sucursal: </ThemedText>
-                        {p.nombre_sucursal ?? '-'}
-                      </ThemedText>
-                      <ThemedText style={styles.cardLine}>
-                        <ThemedText style={styles.cardLabel}>Cliente: </ThemedText>
-                        {p.nombre_cliente ?? '-'}
-                      </ThemedText>
-                      {selectedPlazaId === p.id && (
-                        <ThemedView style={styles.plazaCardBadge}>
-                          <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
-                          <ThemedText style={styles.plazaCardBadgeText}>Seleccionada</ThemedText>
-                        </ThemedView>
-                      )}
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
-
-
               <ThemedText style={styles.label}>Fecha inicio *</ThemedText>
               <TouchableOpacity style={styles.dateBtn} onPress={() => setShowDateInicio(true)}>
                 <ThemedText>{formatDateDMY(fechaInicio.toISOString())}</ThemedText>
@@ -1721,8 +1617,20 @@ export default function PermitRequestScreenV2() {
                 />
               )}
 
-              <TouchableOpacity style={styles.secondaryAction} onPress={fetchTurnosPreview}>
-                <ThemedText style={styles.secondaryActionText}>Buscar turnos</ThemedText>
+              <TouchableOpacity
+                style={[styles.secondaryAction, isSearchingTurnos && { opacity: 0.8 }]}
+                onPress={fetchTurnosPreview}
+                disabled={isSearchingTurnos}
+                accessibilityState={{ busy: isSearchingTurnos, disabled: isSearchingTurnos }}
+              >
+                {isSearchingTurnos ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                    <ThemedText style={styles.secondaryActionText}>Buscando turnos...</ThemedText>
+                  </View>
+                ) : (
+                  <ThemedText style={styles.secondaryActionText}>Buscar turnos</ThemedText>
+                )}
               </TouchableOpacity>
               {!!turnosMessage && <ThemedText style={styles.warningText}>{turnosMessage}</ThemedText>}
 
@@ -1730,7 +1638,7 @@ export default function PermitRequestScreenV2() {
                 <View style={styles.turnosBox}>
                   {turnosPreview.map((t) => (
                     <View key={t.id} style={styles.turnoRow}>
-                      <ThemedText style={styles.turnoText}>#{t.id} | {t.cliente || '-'} | {t.sucursal || '-'} | {t.puesto || '-'}</ThemedText>
+                      <ThemedText style={styles.turnoText}>#{t.id} | {t.cliente || '-'} | {t.sucursal || '-'} | {t.puesto_codigo ? `${t.puesto_codigo} · ` : ''}{t.puesto || '-'}</ThemedText>
                       <ThemedText style={styles.turnoText}>{t.hora_inicio || '-'} - {t.hora_fin || '-'} | {t.tipo_turno || '-'}</ThemedText>
                     </View>
                   ))}
@@ -1914,7 +1822,7 @@ export default function PermitRequestScreenV2() {
               {turnosComplete.map((t) => (
                 <View key={t.id} style={styles.turnoCard}>
                   <ThemedText style={styles.turnoText}>
-                    Turno: #{t.id} | Cliente: {t.cliente || '-'} | Sucursal: {t.sucursal || '-'} | Puesto: {t.puesto || '-'}
+                    Turno: #{t.id} | Cliente: {t.cliente || '-'} | Sucursal: {t.sucursal || '-'} | Puesto: {t.puesto_codigo ? `${t.puesto_codigo} · ` : ''}{t.puesto || '-'}
                   </ThemedText>
                   <ThemedText style={styles.turnoText}>
                     Inicio: {t.hora_inicio || '-'} | Fin: {t.hora_fin || '-'} | Tipo: {t.tipo_turno || '-'} | Duración: {t.horas_duracion ?? '-'} h

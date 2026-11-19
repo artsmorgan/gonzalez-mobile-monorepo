@@ -14,31 +14,30 @@ export async function GET(req: NextRequest) {
         const m = searchParams.get("m");
         const e = searchParams.get("e");
 
-        if (!m || !e) {
-            await reportError(req, "api/notification", "GET", 404, "Marca o empleado no especificados");
-            return NextResponse.json({ status: false, message: "Marca o empleado no especificados" }, { status: 404 });
+        // El empleado es lo único indispensable: las notificaciones propias de la persona no dependen de que tenga un turno.
+        const empleadoId = parseInt(String(e ?? ""), 10);
+        if (!Number.isFinite(empleadoId) || empleadoId <= 0) {
+            await reportError(req, "api/notification", "GET", 400, "Empleado no especificado");
+            return NextResponse.json({ status: false, message: "Empleado no especificado" }, { status: 400 });
         }
 
-        const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(m) } });
-        if (!marca) {
-            await reportError(req, "api/notification", "GET", 404, "Marca no encontrada");
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
-        }
+        // La marca (turno) y su plaza son opcionales: sin turno (marca ausente o 0) o con la plaza en 0, no se toman en cuenta las notificaciones de plaza y se
+        // muestran solo las del empleado. Antes esto terminaba en un 404 y la persona sin turno no veía ninguna notificación.
+        const marcaId = parseInt(String(m ?? ""), 10);
+        const marca = Number.isFinite(marcaId) && marcaId > 0 ? await prisma.c_marca_dia.findUnique({ where: { id: marcaId } }) : null;
+        const plazaId = marca?.plaza_id && marca.plaza_id > 0 ? marca.plaza_id : null;
 
-        if (!marca.plaza_id || !marca.empleadoFijo_id) {
-            await reportError(req, "api/notification", "GET", 404, "Plaza o empleado no encontrados");
-            return NextResponse.json({ status: false, message: "Plaza o empleado no encontrados" }, { status: 404 });
-        }
-
-        const plaza_notifications = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_plaza_notification",
-                operation: "findMany",
-                where: { plazaId: marca.plaza_id }
-            }
-        });
+        const plaza_notifications = plazaId
+            ? await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_plaza_notification",
+                    operation: "findMany",
+                    where: { plazaId }
+                }
+            })
+            : [];
 
         const empleado_notifications = await callDynamicPrisma({
             req,
@@ -46,14 +45,14 @@ export async function GET(req: NextRequest) {
                 action: "GET",
                 table: "c_empleado_notification",
                 operation: "findMany",
-                where: { empleadoId: parseInt(e) }
+                where: { empleadoId }
             }
         });
 
         const notifications_return: { id: number, title: string, description: string, watched: boolean, is_plaza: boolean, created_at: string }[] = [];
 
-        const plaza_noti_ids = plaza_notifications.map((not: { notificationId: number }) => not.notificationId);
-        const empleado_noti_ids = empleado_notifications.map((not: { notificationId: number }) => not.notificationId);
+        const plaza_noti_ids = (Array.isArray(plaza_notifications) ? plaza_notifications : []).map((not: { notificationId: number }) => not.notificationId);
+        const empleado_noti_ids = (Array.isArray(empleado_notifications) ? empleado_notifications : []).map((not: { notificationId: number }) => not.notificationId);
 
         const plazaWatchedByNotificationId = new Map<number, boolean>(
             (Array.isArray(plaza_notifications) ? plaza_notifications : []).map(
@@ -66,10 +65,12 @@ export async function GET(req: NextRequest) {
             )
         );
         
-        const plaza_notifications_data = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_notifications", operation: "findMany", where: { id: { in: plaza_noti_ids } } }
-        });
+        const plaza_notifications_data = plaza_noti_ids.length > 0
+            ? await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "c_notifications", operation: "findMany", where: { id: { in: plaza_noti_ids } } }
+            })
+            : [];
         const empleado_notifications_data = await callDynamicPrisma({
             req,
             data: { action: "GET", table: "c_notifications", operation: "findMany", where: { id: { in: empleado_noti_ids } } }

@@ -5,6 +5,11 @@ export type MarcaDiaResumen = {
   corpo_id: number | null;
   plaza_id: number | null;
   empleadoFijo_id: number | null;
+  empleadoReemplaza_id?: number | null;
+  /** El empleado consultado cubre este turno como reemplazo de otra persona (si no, es un turno propio). */
+  es_reemplazo?: boolean;
+  /** Código del puesto (se muestra junto a su nombre). */
+  puesto_codigo?: string | null;
   /** Jerarquía asociada a la marca (para alta de mutuo acuerdo). */
   empresa_id?: number | null;
   division_id?: number | null;

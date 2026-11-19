@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { ThemedView } from './ThemedView';
 
@@ -12,6 +12,8 @@ type OutOfRangeMapProps = {
   /** Ubicación del puesto usada por la pantalla para la validación de los 50 m. */
   puestoLat?: number | null;
   puestoLng?: number | null;
+  /** Para cambiar el tamaño del recuadro (por defecto 240 × 240). */
+  style?: StyleProp<ViewStyle>;
 };
 
 type PointsPayload = { device: LatLng | null; puesto: LatLng | null };
@@ -104,7 +106,7 @@ const LEAFLET_HTML = `<!DOCTYPE html>
  * Seguro ante coordenadas faltantes: muestra lo que haya disponible (uno, otro, ambos o ninguno)
  * sin lanzar errores.
  */
-export default function OutOfRangeMap({ deviceLat, deviceLng, puestoLat, puestoLng }: OutOfRangeMapProps) {
+export default function OutOfRangeMap({ deviceLat, deviceLng, puestoLat, puestoLng, style }: OutOfRangeMapProps) {
   const webviewRef = useRef<WebView>(null);
   const [isReady, setIsReady] = useState(false);
 
@@ -142,7 +144,7 @@ export default function OutOfRangeMap({ deviceLat, deviceLng, puestoLat, puestoL
   );
 
   return (
-    <ThemedView style={styles.container}>
+    <ThemedView style={[styles.container, style]}>
       <WebView
         ref={webviewRef}
         source={{ html: LEAFLET_HTML }}

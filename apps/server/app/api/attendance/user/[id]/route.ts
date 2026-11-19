@@ -13,6 +13,7 @@ import { getValidateGpsSalida } from "../../../../../utils/getValidateGpsSalida"
 import { getHorasEliminarMarcaTrasSalida } from "../../../../../utils/getHorasEliminarMarcaTrasSalida";
 import { marcaCaducada } from "../../../../../utils/marcaCaducada";
 import { pickNextShift } from "../../../../../utils/nextShift";
+import { depurarMarcasPorDia } from "../../../../../utils/marcasDelDia";
 import { reportError } from "../../../../../utils/reportError";
 import { buildMarcaCandidata, resolverConflictoDeMarcas } from "../../../../../utils/resolveMarcaConflicto";
 import dotenv from "dotenv";
@@ -139,9 +140,12 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             });
             const planillasPorId = new Map<number, any>(planillasMarcas.map((m: any) => [Number(m?.id), m]));
             // Quitar marcas del fijo cuando hay un reemplazo distinto al consultado.
-            return rows
+            const delEmpleado = rows
                 .filter((marca: any) => !(marca.empleadoFijo_id === empleado.id && marca.empleadoReemplaza_id !== null))
                 .map((marca: any) => Object.assign(marca, { __planillas: planillasPorId.get(Number(marca.id)) ?? null }));
+            // Varias marcas en un mismo día: se descartan las que no traen tipo de turno ni horas (si queda una sola, es esa) y, si ninguna trae datos, el día es «Libre»
+            // (tipo «L»): turno actual de día libre, el siguiente turno lo ignora y los turnos futuros dicen «Tienes libre este día».
+            return depurarMarcasPorDia(delEmpleado, (marca: any) => new Date(marca.fecha).toISOString().slice(0, 10));
         };
 
         /**
@@ -527,7 +531,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 operation: "findMany",
                 where: {
                     empleado_id: empleado.id,
-                    plaza_id: marcaDia.plaza_id ?? 0,
+                    // El permiso es del empleado y de sus fechas (ya no se elige una plaza al solicitarlo).
                     fecha_inicio: {
                         lte: marcaDia.fecha
                     },

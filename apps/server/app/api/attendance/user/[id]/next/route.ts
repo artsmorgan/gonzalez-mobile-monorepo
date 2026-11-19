@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { depurarMarcasPorDia } from "../../../../../../utils/marcasDelDia";
 import { authorizeSelfOrAdmin, denialBody } from "../../../../../../utils/objectAccess";
 import { isSuperAdminEmpleado } from "../../../../../../utils/isSuperAdminEmpleado";
 import { toZonedTime } from "date-fns-tz";
@@ -132,10 +133,12 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: true, marcas: [] }, { status: 200 });
     }
 
-    const marcas = await prisma.c_marca_dia.findMany({
+    const marcasDelPeriodo = await prisma.c_marca_dia.findMany({
       where: { id: { in: marcasIds } },
       orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
     });
+    // Varias marcas en un mismo día: se descartan las que no traen tipo de turno ni horas y, si ninguna trae datos, el día queda «Libre» (tipo «L»).
+    const marcas = depurarMarcasPorDia(marcasDelPeriodo, (marca) => new Date(marca.fecha).toISOString().slice(0, 10));
 
     const marcasReturn: MarcaFutureReturn[] = [];
 

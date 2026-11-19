@@ -463,6 +463,11 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     navigation.navigate('PuestoUbicacion');
   };
 
+  const handleMisPuestosPress = () => {
+    onClose();
+    navigation.navigate('MisPuestos');
+  };
+
   const handleJerarquiaPress = () => {
     onClose();
     navigation.navigate('Jerarquia');
@@ -554,6 +559,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
       case 'physical-minute-agenda': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'checklist-supervision': return <Ionicons name="checkmark-circle" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'puesto-ubicacion': return <Ionicons name="location" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'mis-puestos': return <Ionicons name="business" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'jerarquia': return <Ionicons name="git-network" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'nomencladores': return <Ionicons name="albums" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'module-visibility': return <Ionicons name="eye" size={20} color={isActive ? '#007AFF' : '#000000'} />;
@@ -738,6 +744,19 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 ]}
               >
                 Jerarquía
+              </ThemedText>
+            </TouchableOpacity>
+
+            {/* Mis puestos: abierto para todos los roles y tipos de usuario, con o sin marca (no depende de la liberación de módulos ni de la marca actual) */}
+            <TouchableOpacity
+              style={[styles.menuItem, isActiveRoute('MisPuestos') && styles.activeMenuItem]}
+              onPress={handleMisPuestosPress}
+            >
+              <ThemedText style={[styles.menuItemText, isActiveRoute('MisPuestos') && styles.activeMenuItemText]}>
+                {getActionIcon('mis-puestos', isActiveRoute('MisPuestos'))}
+              </ThemedText>
+              <ThemedText style={[styles.menuItemText, isActiveRoute('MisPuestos') && styles.activeMenuItemText]}>
+                Mis puestos
               </ThemedText>
             </TouchableOpacity>
 

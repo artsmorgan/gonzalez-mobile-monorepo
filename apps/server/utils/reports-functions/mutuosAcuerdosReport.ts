@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { tipoTurnoReporteLabel, ymdADmy } from "./reporteFormatos";
 import type { Prisma } from "@prisma/client";
 import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
@@ -313,14 +314,14 @@ function fmtEmpleado(e: any): string {
 
 function fmtMarcaRol(m: any): string {
     if (!m?.fecha) return "";
-    const f = m.fecha instanceof Date ? m.fecha.toISOString().slice(0, 10) : String(m.fecha).slice(0, 10);
-    const tt = m.tipo_turno != null ? String(m.tipo_turno).trim().toUpperCase() : "";
-    return tt ? `${f} / ${tt}` : f;
+    const f = ymdADmy(m.fecha instanceof Date ? m.fecha.toISOString().slice(0, 10) : String(m.fecha).slice(0, 10));
+    // Mismo criterio de la app: Diurno, Mixto, Nocturno, Libre; cualquier otro valor (o ninguno) es «Indeterminable».
+    return `${f} / ${tipoTurnoReporteLabel(m.tipo_turno)}`;
 }
 
 function fmtMarcasRol(marcas: any[], fechaFallback: string | null): string {
-    if (marcas.length === 0) return fechaFallback || "";
-    return marcas.map((m) => fmtMarcaRol(m) || fechaFallback || "").filter(Boolean).join("; ");
+    if (marcas.length === 0) return fechaFallback ? ymdADmy(fechaFallback) : "";
+    return marcas.map((m) => fmtMarcaRol(m) || (fechaFallback ? ymdADmy(fechaFallback) : "")).filter(Boolean).join("; ");
 }
 
 function fmtDateTimeCol(d: Date | string | null | undefined): string {
@@ -862,7 +863,7 @@ export async function buildMutuosAcuerdosExcelIndividual(rows: any[], reportName
         ws.getCell(3, 6).value = "";
         ws.getCell(3, 6).fill = { ...whiteFill };
 
-        ws.getCell(3, 7).value = `Fecha: ${r.created_at_txt?.slice(0, 10) || " "}`;
+        ws.getCell(3, 7).value = `Fecha: ${r.created_at_txt ? ymdADmy(r.created_at_txt.slice(0, 10)) : " "}`;
         ws.getCell(3, 7).font = { bold: true, size: 10 };
         ws.getCell(3, 7).alignment = { horizontal: "left", vertical: "middle", wrapText: false };
         ws.getCell(3, 7).fill = { ...whiteFill };
