@@ -238,8 +238,8 @@ const validateMutuoAcuerdoShiftExchange = async (
   const fechaGte = new Date(minStart - 24 * 60 * 60 * 1000);
   const fechaLte = new Date(maxEnd + 24 * 60 * 60 * 1000);
 
-  const empleadoAusenteId = Number(marcasAusente[0].empleadoFijo_id);
-  const empleadoReemplazaId = Number(marcasReemplaza[0].empleadoFijo_id);
+  const empleadoAusenteId = Number(marcasAusente[0].empleadoReemplaza_id ?? marcasAusente[0].empleadoFijo_id);
+  const empleadoReemplazaId = Number(marcasReemplaza[0].empleadoReemplaza_id ?? marcasReemplaza[0].empleadoFijo_id);
   const idsAusente = marcasAusente.map((m) => Number(m.id)).filter((n) => Number.isFinite(n) && n > 0);
   const idsReemplaza = marcasReemplaza.map((m) => Number(m.id)).filter((n) => Number.isFinite(n) && n > 0);
 
@@ -499,6 +499,16 @@ export async function POST(req: NextRequest) {
     const marcasReemplaza = marcasReemplazaIds.map((id) => marcaByIdLocal.get(id)).filter(Boolean);
     const marcaAusente = marcasAusente[0];
     const marcaReemplaza = marcasReemplaza[0];
+    // Los turnos que se intercambian pueden ser propios o de reemplazo (la persona cubre a otra): en un turno de reemplazo quien lo trabaja es `empleadoReemplaza_id`, no
+    // su titular. Si la app manda el empleado de cada lado, ese es la referencia (y la marca debe ser suya como titular o como reemplazo).
+    const empleadoAusenteBody = parseIntStrict(body?.empleado_ausente_id);
+    const empleadoReemplazaBody = parseIntStrict(body?.empleado_reemplaza_id);
+    const empleadoDeMarca = (m: any, esperado: number | null): number =>
+      esperado && (Number(m.empleadoFijo_id) === esperado || Number(m.empleadoReemplaza_id) === esperado)
+        ? esperado
+        : Number(m.empleadoReemplaza_id ?? m.empleadoFijo_id);
+    const empAusente = empleadoDeMarca(marcaAusente, empleadoAusenteBody);
+    const empReemplaza = empleadoDeMarca(marcaReemplaza, empleadoReemplazaBody);
     if (!marcaAusente || !marcaReemplaza) {
       await reportError(req, "api/mutuos-acuerdos", "POST", 404, "No se encontraron las marcas seleccionadas");
       return NextResponse.json({ status: false, message: "No se encontraron las marcas seleccionadas" }, { status: 404 });
@@ -514,7 +524,7 @@ export async function POST(req: NextRequest) {
           { status: 400 },
         );
       }
-      if (Number(m.empleadoFijo_id) !== Number(marcaAusente.empleadoFijo_id)) {
+      if (empleadoDeMarca(m, empleadoAusenteBody) !== empAusente) {
         await reportError(req, "api/mutuos-acuerdos", "POST", 400, "Todas las marcas del primer turno deben pertenecer al mismo empleado");
         return NextResponse.json(
           { status: false, message: "Todas las marcas del primer turno deben pertenecer al mismo empleado" },
@@ -532,7 +542,7 @@ export async function POST(req: NextRequest) {
           { status: 400 },
         );
       }
-      if (Number(m.empleadoFijo_id) !== Number(marcaReemplaza.empleadoFijo_id)) {
+      if (empleadoDeMarca(m, empleadoReemplazaBody) !== empReemplaza) {
         await reportError(req, "api/mutuos-acuerdos", "POST", 400, "Todas las marcas del segundo turno deben pertenecer al mismo empleado");
         return NextResponse.json(
           { status: false, message: "Todas las marcas del segundo turno deben pertenecer al mismo empleado" },
@@ -541,7 +551,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (Number(marcaAusente.empleadoFijo_id) === Number(marcaReemplaza.empleadoFijo_id)) {
+    if (empAusente === empReemplaza) {
       await reportError(req, "api/mutuos-acuerdos", "POST", 400, "El primer y segundo turno deben corresponder a empleados distintos");
       return NextResponse.json(
         { status: false, message: "El primer y segundo turno deben corresponder a empleados distintos" },
@@ -585,7 +595,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, message: "puesto_id requerido" }, { status: 400 });
     }
 
-    if (!marcaAusente.empleadoFijo_id || !marcaReemplaza.empleadoFijo_id || !marcaAusente.plaza_id || !marcaReemplaza.plaza_id) {
+    if (!empAusente || !empReemplaza || !marcaAusente.plaza_id || !marcaReemplaza.plaza_id) {
       await reportError(req, "api/mutuos-acuerdos", "POST", 400, "Las marcas seleccionadas no tienen empleado/plaza válidos");
       return NextResponse.json({ status: false, message: "Las marcas seleccionadas no tienen empleado/plaza válidos" }, { status: 400 });
     }
@@ -614,8 +624,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, message: shiftValidation.message }, { status: 400 });
     }
 
-    const empleadoAusenteId = Number(marcaAusente.empleadoFijo_id);
-    const empleadoReemplazaId = Number(marcaReemplaza.empleadoFijo_id);
+    const empleadoAusenteId = empAusente;
+    const empleadoReemplazaId = empReemplaza;
     const conflictDays = Array.from(new Set([fechaAusenteYmd, fechaReemplazaYmd]));
     const conflictDayStart = dateAtUtcMidnight(conflictDays.reduce((a, b) => (a < b ? a : b)));
     const conflictDayEnd = dateAtUtcMidnight(conflictDays.reduce((a, b) => (a > b ? a : b)));
@@ -663,6 +673,7 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      // Planillas no permite un cambio de guardia si alguno de los empleados ya definió uno para esa fecha: se valida aquí para avisar antes de registrar.
       const otherMutuos = await callDynamicPrisma({
         req,
         data: {
@@ -779,13 +790,13 @@ export async function POST(req: NextRequest) {
           isActive: true,
           estado: "pendiente",
           ejecutivo_cuenta,
-          empleadoReemplaza_id: Number(marcaReemplaza.empleadoFijo_id),
+          empleadoReemplaza_id: empReemplaza,
           plazaReemplaza_id: Number(marcaReemplaza.plaza_id),
           marcas_reemplaza: marcasReemplazaStr,
           fecha_reemplaza: dateAtUtcMidnight(fechaReemplazaYmd).toISOString(),
           reemplaza_acepta: false,
           reemplaza_acepta_at: null,
-          empleadoAusente_id: Number(marcaAusente.empleadoFijo_id),
+          empleadoAusente_id: empAusente,
           plazaAusente_id: Number(marcaAusente.plaza_id),
           marcas_ausente: marcasAusenteStr,
           fecha_ausente: dateAtUtcMidnight(fechaAusenteYmd).toISOString(),
@@ -855,10 +866,10 @@ export async function POST(req: NextRequest) {
     });
 
     const empleadoAusente = await prisma.c_empleado.findUnique({
-      where: { id: Number(marcaAusente.empleadoFijo_id) },
+      where: { id: empAusente },
     });
     const empleadoReemplaza = await prisma.c_empleado.findUnique({
-      where: { id: Number(marcaReemplaza.empleadoFijo_id) },
+      where: { id: empReemplaza },
     });
 
     const recipients = new Set<number>();
@@ -916,10 +927,10 @@ export async function POST(req: NextRequest) {
       const puestoNombreReemplaza = puestoReemplaza ? puestoReemplaza.nombre : "Desconocido";
       const ausenteNombre = empleadoAusente
         ? `${empleadoAusente.nombre ?? ""} ${empleadoAusente.primer_apellido ?? ""} ${empleadoAusente.segundo_apellido ?? ""}`.trim()
-        : `ID ${marcaAusente.empleadoFijo_id}`;
+        : `ID ${empAusente}`;
       const reemplazaNombre = empleadoReemplaza
         ? `${empleadoReemplaza.nombre ?? ""} ${empleadoReemplaza.primer_apellido ?? ""} ${empleadoReemplaza.segundo_apellido ?? ""}`.trim()
-        : `ID ${marcaReemplaza.empleadoFijo_id}`;
+        : `ID ${empReemplaza}`;
       const ausenteCedula = String((empleadoAusente as any)?.cedula ?? "");
       const reemplazaCedula = String((empleadoReemplaza as any)?.cedula ?? "");
       const fecha = createdAt.toISOString().split("T")[0];

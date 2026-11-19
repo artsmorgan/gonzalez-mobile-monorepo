@@ -1,5 +1,6 @@
 import axios from "axios";
 import { prisma } from "./prismaClient";
+import { marcaSinDatos } from "./marcasDelDia";
 
 const formatHoraLabel = (value?: string | null) => {
   if (!value) return null;
@@ -25,6 +26,11 @@ export type PermitTurnoRow = {
   cliente: string | null;
   sucursal: string | null;
   puesto: string | null;
+  /** Código del puesto (para mostrarlo junto a su nombre). */
+  puesto_codigo: string | null;
+  plaza_id: number | null;
+  puesto_id: number | null;
+  fecha: string | null;
   hora_inicio: string | null;
   hora_fin: string | null;
   tipo_turno: string;
@@ -109,12 +115,17 @@ export async function getPermitTurnosFromPlanillasRange(params: {
     include: {
       e_estructura_cliente: { select: { nombre: true } },
       e_estructura_sucursal: { select: { nombre: true } },
-      e_estructura_puesto: { select: { nombre: true } },
+      e_estructura_puesto: { select: { nombre: true, codigo: true } },
     },
   });
 
-  return marcaArray.map((m: any) => ({
+  // Se descartan los turnos que no traen tipo de turno ni hora de inicio ni hora de fin.
+  return marcaArray.filter((m: any) => !marcaSinDatos(m)).map((m: any) => ({
     id: m.id,
+    fecha: m.fecha ? new Date(m.fecha).toISOString().slice(0, 10) : null,
+    plaza_id: m.plaza_id ?? null,
+    puesto_id: m.puesto_id ?? null,
+    puesto_codigo: m.e_estructura_puesto?.codigo ?? null,
     cliente: m.e_estructura_cliente?.nombre || null,
     sucursal: m.e_estructura_sucursal?.nombre || null,
     puesto: m.e_estructura_puesto?.nombre || null,

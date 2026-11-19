@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { puestoConCodigo, tipoTurnoReporteLabel } from "./reporteFormatos";
 import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import fs from "fs/promises";
@@ -501,10 +502,10 @@ function appendDetalleBlock(wsDet: ExcelJS.Worksheet, r: any): DetalleAnchors {
     } else {
         for (const t of turnos) {
             const row = wsDet.addRow([
-                String(t.puesto ?? ""),
+                puestoConCodigo(t.puesto_codigo, t.puesto),
                 String(t.hora_inicio ?? ""),
                 String(t.hora_fin ?? ""),
-                String(t.tipo_turno ?? ""),
+                tipoTurnoReporteLabel(t.tipo_turno),
                 String(t.horas_duracion ?? ""),
                 String(t.reemplazo_nombre ?? t.reemplazo_id ?? ""),
             ]);
@@ -657,10 +658,10 @@ export async function buildSolicitudesPermisoExcelConsolidado(
         };
 
         const turnos: any[] = r.turnos_list?.length ? r.turnos_list : safeParseTurnos(r.turnos);
-        general[headers.indexOf("Puesto (turno)") + 1] = joinTurnos(turnos, "puesto");
+        general[headers.indexOf("Puesto (turno)") + 1] = turnos.map((t: any) => puestoConCodigo(t?.puesto_codigo, t?.puesto)).join(";");
         general[headers.indexOf("Hora inicio (turno)") + 1] = joinTurnos(turnos, "hora_inicio");
         general[headers.indexOf("Hora fin (turno)") + 1] = joinTurnos(turnos, "hora_fin");
-        general[headers.indexOf("Tipo turno") + 1] = joinTurnos(turnos, "tipo_turno");
+        general[headers.indexOf("Tipo turno") + 1] = turnos.map((t: any) => tipoTurnoReporteLabel(t?.tipo_turno)).join(";");
         general[headers.indexOf("Horas duración (turno)") + 1] = joinTurnos(turnos, "horas_duracion");
         general[headers.indexOf("Reemplazo (turno)") + 1] = turnos
             .map((t: any) => String(t?.reemplazo_nombre ?? t?.reemplazo_id ?? ""))

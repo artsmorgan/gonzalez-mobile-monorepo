@@ -238,6 +238,7 @@ import MutuosAcuerdosScreen from './screens/MutuosAcuerdosScreen';
 import EntregaPuestosScreen from './screens/EntregaPuestosScreen';
 import ChecklistSupervisionScreen from './screens/ChecklistSupervisionScreen';
 import PuestoUbicacionScreen from './screens/PuestoUbicacionScreen';
+import MisPuestosScreen from './screens/MisPuestosScreen';
 import JerarquiaScreen from './screens/JerarquiaScreen';
 import NomencladoresScreen from './screens/NomencladoresScreen';
 import ModuleVisibilityScreen from './screens/ModuleVisibilityScreen';
@@ -579,6 +580,7 @@ export type RootStackParamList = {
   EntregaPuestos: undefined;
   ChecklistSupervision: undefined;
   PuestoUbicacion: undefined;
+  MisPuestos: undefined;
   Jerarquia: undefined;
   Nomencladores: undefined;
   ModuleVisibility: undefined;
@@ -672,6 +674,7 @@ function RootNavigator() {
       <Stack.Screen name="EntregaPuestos" component={EntregaPuestosScreen} />
       <Stack.Screen name="ChecklistSupervision" component={ChecklistSupervisionScreen} />
       <Stack.Screen name="PuestoUbicacion" component={PuestoUbicacionScreen} />
+      <Stack.Screen name="MisPuestos" component={MisPuestosScreen} />
       <Stack.Screen name="Jerarquia" component={JerarquiaScreen} />
       <Stack.Screen name="Nomencladores" component={NomencladoresScreen} />
       <Stack.Screen name="ModuleVisibility" component={ModuleVisibilityScreen} />

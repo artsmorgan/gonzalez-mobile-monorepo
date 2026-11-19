@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { buildWazeLinks, formatCoordinates, parseCoordinate, parsePuestoPoint } from "../../mobile/hooks/puestoLocation";
+import { buildMapAppOptions, buildWazeLinks, formatCoordinates, parseCoordinate, parsePuestoPoint } from "../../mobile/hooks/puestoLocation";
 import { compareAppVersions, isNewerAppVersion } from "../../mobile/hooks/versionCompare";
 import { parseUpdateRequired } from "../../mobile/hooks/updateRequiredCore";
 
@@ -36,13 +36,32 @@ describe("ubicación del puesto: coordenadas y Waze", () => {
         assert.equal(links.web, "https://waze.com/ul?ll=9.934739%2C-84.087502&navigate=yes&zoom=17");
     });
 
-    it("el componente muestra el botón, las coordenadas, el mapa con la ubicación actual y el botón de Waze, y avisa si faltan coordenadas", () => {
+    it("el componente abre una ventana flotante con el mapa (fuera del desplazamiento de la pantalla) y deja elegir la aplicación para llegar", () => {
         const c = leer("components/PuestoLocationBlock.tsx");
         assert.match(c, /Mostrar ubicación del puesto/);
-        assert.match(c, /<OutOfRangeMap deviceLat=\{device\?\.lat \?\? null\}/);
-        assert.match(c, /Cómo llegar con Waze/);
-        assert.match(c, /Linking\.openURL\(links\.app\)/);
+        assert.match(c, /<Modal visible=\{open\} transparent/, "el mapa va en una ventana flotante");
+        assert.match(c, /<OutOfRangeMap[\s\S]*?deviceLat=\{device\?\.lat \?\? null\}/);
+        assert.match(c, /Cómo llegar/);
+        assert.match(c, /¿Con qué aplicación quieres abrir el mapa\?/);
+        assert.match(c, /buildMapAppOptions\(puesto, device, puestoNombre, Platform\.OS\)/);
         assert.match(c, /Este puesto no tiene coordenadas definidas/);
+        assert.equal(/ScrollView/.test(c), false, "sin ScrollView alrededor del mapa");
+    });
+
+    it("las aplicaciones de mapas: Google Maps con origen y destino, Waze y las demás aplicaciones del teléfono", () => {
+        const puesto = { lat: 9.934739, lng: -84.087502 };
+        const yo = { lat: 9.9, lng: -84.0 };
+        const android = buildMapAppOptions(puesto, yo, "Puesto Centro", "android");
+        assert.deepEqual(android.map((o) => o.id), ["google", "waze", "otras"]);
+        assert.match(android[0].url, /^https:\/\/www\.google\.com\/maps\/dir\/\?api=1&origin=9\.9%2C-84&destination=9\.934739%2C-84\.087502&travelmode=driving$/);
+        assert.equal(android[1].url, "waze://?ll=9.934739,-84.087502&navigate=yes");
+        assert.match(android[1].fallbackUrl ?? "", /^https:\/\/waze\.com\/ul/);
+        assert.match(android[2].url, /^geo:9\.934739,-84\.087502\?q=/);
+        assert.match(decodeURIComponent(android[2].url), /\(Puesto Centro\)/);
+        // sin ubicación actual: ruta solo con el destino
+        assert.equal(/origin=/.test(buildMapAppOptions(puesto, null, null, "android")[0].url), false);
+        // iOS ofrece Apple Maps en lugar del enlace geo:
+        assert.deepEqual(buildMapAppOptions(puesto, yo, null, "ios").map((o) => o.id), ["google", "waze", "apple"]);
     });
 });
 

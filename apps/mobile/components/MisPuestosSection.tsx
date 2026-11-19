@@ -14,6 +14,10 @@ import { formatDateDMY } from '@/utils/formatDate';
 type Props = {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<unknown>;
+  /** La sección se abre y busca los puestos al mostrarse. */
+  startOpen?: boolean;
+  /** Dentro de la página del módulo «Mis puestos»: sin el recuadro ni el botón para abrir (la página ya es la sección) y con las tarjetas del resto de módulos. */
+  embedded?: boolean;
 };
 
 async function hasInternet(): Promise<boolean> {
@@ -30,8 +34,8 @@ async function hasInternet(): Promise<boolean> {
  * en adelante) y los lista en secciones plegables; cada una, al abrirse, muestra el mapa con la ubicación del puesto y la actual del dispositivo y un
  * botón para llegar con Waze (solo si el puesto tiene coordenadas).
  */
-export default function MisPuestosSection({ refreshAccessToken, logout }: Props) {
-  const [open, setOpen] = useState(false);
+export default function MisPuestosSection({ refreshAccessToken, logout, startOpen = false, embedded = false }: Props) {
+  const [open, setOpen] = useState(startOpen || embedded);
   const [loading, setLoading] = useState(false);
   const [puestos, setPuestos] = useState<MiPuesto[] | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -69,6 +73,11 @@ export default function MisPuestosSection({ refreshAccessToken, logout }: Props)
     }
   }, [refreshAccessToken, logout]);
 
+  React.useEffect(() => {
+    if (startOpen || embedded) void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const toggle = () => {
     const next = !open;
     setOpen(next);
@@ -76,15 +85,17 @@ export default function MisPuestosSection({ refreshAccessToken, logout }: Props)
   };
 
   return (
-    <ThemedView style={styles.card}>
-      <TouchableOpacity style={styles.header} onPress={toggle} activeOpacity={0.85} accessibilityRole="button">
-        <Ionicons name="business-outline" size={20} color="#007AFF" />
-        <ThemedText style={styles.headerText}>Mis puestos</ThemedText>
-        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
-      </TouchableOpacity>
+    <ThemedView style={embedded ? styles.embeddedCard : styles.card}>
+      {embedded ? null : (
+        <TouchableOpacity style={styles.header} onPress={toggle} activeOpacity={0.85} accessibilityRole="button">
+          <Ionicons name="business-outline" size={20} color="#007AFF" />
+          <ThemedText style={styles.headerText}>Mis puestos</ThemedText>
+          <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
+        </TouchableOpacity>
+      )}
 
       {open ? (
-        <ThemedView style={styles.body}>
+        <ThemedView style={embedded ? styles.embeddedBody : styles.body}>
           {loading ? (
             <ThemedView style={styles.centered}>
               <ActivityIndicator size="small" color="#007AFF" />
@@ -105,7 +116,7 @@ export default function MisPuestosSection({ refreshAccessToken, logout }: Props)
               <Collapsible key={puesto.id} title={misPuestoTitulo(puesto)}>
                 {puesto.sucursal ? <ThemedText style={styles.detail}>Sucursal: {puesto.sucursal.nombre}</ThemedText> : null}
                 {puesto.proxima_fecha ? <ThemedText style={styles.detail}>Próximo turno: {formatDateDMY(puesto.proxima_fecha)}</ThemedText> : null}
-                <PuestoLocationBlock ubicacion={puesto.ubicacion} puestoNombre={puesto.nombre} initiallyOpen />
+                <PuestoLocationBlock ubicacion={puesto.ubicacion} puestoNombre={puesto.nombre}/>
               </Collapsible>
             ))
           )}
@@ -117,6 +128,8 @@ export default function MisPuestosSection({ refreshAccessToken, logout }: Props)
 
 const styles = StyleSheet.create({
   card: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, backgroundColor: '#FFFFFF', overflow: 'hidden' },
+  embeddedCard: { width: '100%', backgroundColor: '#FFFFFF', borderRadius: 10, borderWidth: 1, borderColor: '#E0E0E0', padding: 14 },
+  embeddedBody: { gap: 8, backgroundColor: '#FFFFFF' },
   header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 14, paddingHorizontal: 14 },
   headerText: { flex: 1, fontSize: 16, fontWeight: '700', color: '#111827' },
   body: { padding: 12, gap: 8, borderTopWidth: 1, borderTopColor: '#E0E0E0', backgroundColor: '#FFFFFF' },

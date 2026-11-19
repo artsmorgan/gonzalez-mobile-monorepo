@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { tipoTurnoReporteLabel } from "./reporteFormatos";
 import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import {
@@ -188,7 +189,7 @@ function fmtHorario(h: any): string {
 function fmtLlegadaTardia(x: any): string {
     if (!x) return "";
     const parts = [
-        x.tipo_turno,
+        x.tipo_turno ? tipoTurnoReporteLabel(x.tipo_turno) : "",
         x.horario_str,
         x.cantidad_horas != null ? `${x.cantidad_horas} h` : "",
         x.minutos_descuento != null ? `desc. ${x.minutos_descuento} min` : "",
@@ -198,7 +199,7 @@ function fmtLlegadaTardia(x: any): string {
 
 function fmtSalidaAnticipada(x: any): string {
     if (!x) return "";
-    const parts = [x.tipo_turno, x.horario_str, x.cantidad_horas != null ? `${x.cantidad_horas} h` : "", x.motivo].filter(Boolean);
+    const parts = [x.tipo_turno ? tipoTurnoReporteLabel(x.tipo_turno) : "", x.horario_str, x.cantidad_horas != null ? `${x.cantidad_horas} h` : "", x.motivo].filter(Boolean);
     return parts.join(" · ").slice(0, 500);
 }
 

@@ -37,3 +37,35 @@ export function buildWazeLinks(destino: LatLng): { app: string; web: string } {
     web: `https://waze.com/ul?ll=${encodeURIComponent(ll)}&navigate=yes&zoom=17`,
   };
 }
+
+export type MapAppId = 'google' | 'waze' | 'otras' | 'apple';
+export type MapAppOption = { id: MapAppId; label: string; detalle: string; url: string; fallbackUrl?: string };
+
+/**
+ * Aplicaciones con las que se puede abrir el mapa con el puesto como destino. La persona elige una:
+ *  - Google Maps: ruta con el origen (la ubicación actual del dispositivo, si se conoce) y el destino.
+ *  - Waze: destino (Waze toma la ubicación actual del teléfono como origen).
+ *  - «Otras aplicaciones de mapas»: enlace `geo:` (Android) o Apple Maps (iOS), que le deja al sistema mostrar todas las aplicaciones de mapas instaladas.
+ */
+export function buildMapAppOptions(destino: LatLng, origen: LatLng | null, nombre: string | null | undefined, plataforma: string): MapAppOption[] {
+  const dest = `${destino.lat},${destino.lng}`;
+  const googleParams = ['api=1', `destination=${encodeURIComponent(dest)}`, 'travelmode=driving'];
+  if (origen) googleParams.splice(1, 0, `origin=${encodeURIComponent(`${origen.lat},${origen.lng}`)}`);
+  const waze = buildWazeLinks(destino);
+  const etiqueta = String(nombre ?? '').trim();
+  const opciones: MapAppOption[] = [
+    { id: 'google', label: 'Google Maps', detalle: origen ? 'Ruta desde tu ubicación actual hasta el puesto' : 'Ruta hasta el puesto', url: `https://www.google.com/maps/dir/?${googleParams.join('&')}` },
+    { id: 'waze', label: 'Waze', detalle: 'Ruta hasta el puesto desde tu ubicación actual', url: waze.app, fallbackUrl: waze.web },
+  ];
+  if (plataforma === 'ios') {
+    opciones.push({ id: 'apple', label: 'Apple Maps', detalle: 'Ruta hasta el puesto', url: `http://maps.apple.com/?daddr=${encodeURIComponent(dest)}${origen ? `&saddr=${encodeURIComponent(`${origen.lat},${origen.lng}`)}` : ''}&dirflg=d` });
+  } else {
+    opciones.push({
+      id: 'otras',
+      label: 'Otras aplicaciones de mapas',
+      detalle: 'El teléfono muestra las aplicaciones de mapas que tengas instaladas',
+      url: `geo:${dest}?q=${encodeURIComponent(`${dest}${etiqueta ? `(${etiqueta})` : ''}`)}`,
+    });
+  }
+  return opciones;
+}

@@ -232,7 +232,8 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const tipo = String(body?.tipo || "").trim();
-    const plazaId = parseIntStrict(body?.plaza_id);
+    // La plaza ya no la elige la persona: sale de los turnos del rango (ver más abajo). Si una app anterior la manda, solo filtra los turnos.
+    let plazaId = parseIntStrict(body?.plaza_id);
 
     const fechaInicio = `${body?.fecha_inicio}T00:00:00.000Z`;
     const fechaFin = `${body?.fecha_fin}T00:00:00.000Z`;
@@ -446,9 +447,26 @@ export async function POST(req: NextRequest) {
       await reportError(req, "api/permit-request", "POST", 400, "La firma manual del empleado es obligatoria");
       return NextResponse.json({ status: false, message: "La firma manual del empleado es obligatoria" }, { status: 400 });
     }
+    // Turnos del rango (un día a la vez en Planillas /marcas), sin los que no traen tipo de turno ni horas. El permiso es del empleado por fechas.
+    const turnos = await getTurnosFromRange(
+      planillasToken,
+      String(empleadoForTurnos.codigo || ""),
+      new Date(fechaInicio),
+      new Date(fechaFin),
+      plazaId
+    );
+    if (!turnos.length) {
+      await reportError(req, "api/permit-request", "POST", 400, "No hay turnos en el rango de fechas. El usuario está libre esos días.");
+      return NextResponse.json(
+        { status: false, message: "No hay turnos en el rango de fechas. El usuario está libre esos días." },
+        { status: 400 }
+      );
+    }
+    // La plaza (y con ella el puesto, la sucursal y el ejecutivo de cuenta a quien se avisa) se toma del primer turno.
+    if (!plazaId) plazaId = parseIntStrict(turnos[0]?.plaza_id);
     if (!plazaId) {
-      await reportError(req, "api/permit-request", "POST", 400, "Debes seleccionar una plaza");
-      return NextResponse.json({ status: false, message: "Debes seleccionar una plaza" }, { status: 400 });
+      await reportError(req, "api/permit-request", "POST", 400, "No se pudo determinar la plaza de los turnos");
+      return NextResponse.json({ status: false, message: "No se pudo determinar la plaza de los turnos" }, { status: 400 });
     }
 
     // Resolver ejecutivo_cuenta a partir de la sucursal asociada a la plaza seleccionada
@@ -513,21 +531,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const turnos = await getTurnosFromRange(
-      planillasToken,
-      String(empleadoForTurnos.codigo || ""),
-      new Date(fechaInicio),
-      new Date(fechaFin),
-      plazaId
-    );
-    if (!turnos.length) {
-      await reportError(req, "api/permit-request", "POST", 400, "No hay turnos en el rango de fechas. El usuario está libre esos días.");
-      return NextResponse.json(
-        { status: false, message: "No hay turnos en el rango de fechas. El usuario está libre esos días." },
-        { status: 400 }
-      );
-    }
-
     const resolvedHierarchy = {
       empresa_id: parseIntStrict((contrato as any)?.empresa_id),
       cliente_id: parseIntStrict((contrato as any)?.cliente_id),
@@ -537,59 +540,12 @@ export async function POST(req: NextRequest) {
       puesto_id: plazaPuestoId,
     };
 
-    const bodyHierarchy = {
-      empresa_id: parseIntStrict(body?.empresa_id),
-      cliente_id: parseIntStrict(body?.cliente_id),
-      division_id: parseIntStrict(body?.division_id),
-      contrato_id: parseIntStrict(body?.contrato_id),
-      corpo_id: parseIntStrict(body?.corpo_id),
-      puesto_id: parseIntStrict(body?.puesto_id),
-    };
-
     const hierarchyKeys = ["empresa_id", "cliente_id", "division_id", "contrato_id", "corpo_id", "puesto_id"] as const;
-    const bodyHierarchyComplete = hierarchyKeys.every((k) => bodyHierarchy[k] != null);
-
-    if (bodyHierarchyComplete) {
-      for (const k of hierarchyKeys) {
-        if (
-          k === "division_id" &&
-          resolvedHierarchy.division_id == null &&
-          bodyHierarchy.division_id != null
-        ) {
-          const restKeys = hierarchyKeys.filter((x) => x !== "division_id");
-          const restOk = restKeys.every((rk) => Number(bodyHierarchy[rk]) === Number(resolvedHierarchy[rk]));
-          if (!restOk) {
-            const hierarchyMismatchMessage =
-              "La jerarquía enviada no coincide con la plaza seleccionada. Revisa tu marca actual y la plaza del permiso.";
-            await reportError(req, "api/permit-request", "POST", 400, hierarchyMismatchMessage);
-            return NextResponse.json(
-              {
-                status: false,
-                message: hierarchyMismatchMessage,
-              },
-              { status: 400 }
-            );
-          }
-          continue;
-        }
-        if (Number(bodyHierarchy[k]) !== Number(resolvedHierarchy[k])) {
-          const hierarchyMismatchMessage =
-            "La jerarquía enviada no coincide con la plaza seleccionada. Revisa tu marca actual y la plaza del permiso.";
-          await reportError(req, "api/permit-request", "POST", 400, hierarchyMismatchMessage);
-          return NextResponse.json(
-            {
-              status: false,
-              message: hierarchyMismatchMessage,
-            },
-            { status: 400 }
-          );
-        }
-      }
-    }
+    // La jerarquía enviada por la app ya no se compara con la plaza: el permiso es de la persona y de sus fechas, y la jerarquía se resuelve aquí.
 
     const hierarchyForCreate = {
       ...resolvedHierarchy,
-      division_id: resolvedHierarchy.division_id ?? bodyHierarchy.division_id,
+      division_id: resolvedHierarchy.division_id ?? 0,
     };
 
     for (const k of hierarchyKeys) {

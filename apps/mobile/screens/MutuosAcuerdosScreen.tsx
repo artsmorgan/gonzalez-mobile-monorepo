@@ -60,6 +60,8 @@ type EmployeeSectionState = {
   employeeNombre: string;
   employeeCedula: string;
   marcas: MarcaDiaResumen[];
+  /** Ids de los turnos de este empleado que entran en el mutuo acuerdo (se eligen de la lista). */
+  selectedMarcaIds: number[];
   loadingMarcas: boolean;
   message: string;
 };
@@ -72,6 +74,7 @@ const emptySection = ( horaAccion: number ): EmployeeSectionState => ({
   employeeNombre: '',
   employeeCedula: '',
   marcas: [],
+  selectedMarcaIds: [],
   loadingMarcas: false,
   message: '',
 });
@@ -427,7 +430,7 @@ export default function MutuosAcuerdosScreen() {
   };
 
   const loadMarcas = async (section: SectionKey, employeeId: number, fecha: Date) => {
-    updateSection(section, (prev) => ({ ...prev, loadingMarcas: true, message: '', marcas: [] }));
+    updateSection(section, (prev) => ({ ...prev, loadingMarcas: true, message: '', marcas: [], selectedMarcaIds: [] }));
     try {
       const referenceMs = (await getHoraAccion()) || Date.now();
       const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
@@ -437,6 +440,7 @@ export default function MutuosAcuerdosScreen() {
           ...prev,
           loadingMarcas: false,
           marcas: [],
+          selectedMarcaIds: [],
           message: 'Se requiere revalidar el token de Planillas para consultar turnos.',
         }));
         return;
@@ -458,6 +462,7 @@ export default function MutuosAcuerdosScreen() {
         ...prev,
         loadingMarcas: false,
         marcas: Array.isArray(res.data) ? res.data : [],
+        selectedMarcaIds: Array.isArray(res.data) && res.data.length === 1 ? [Number(res.data[0].id)] : [],
         message: Array.isArray(res.data) && res.data.length === 0 ? (res.message || 'El empleado está libre ese día') : '',
       }));
     } catch (e: any) {
@@ -465,6 +470,7 @@ export default function MutuosAcuerdosScreen() {
         ...prev,
         loadingMarcas: false,
         marcas: [],
+        selectedMarcaIds: [],
         message: e?.message || 'No se pudieron obtener las marcas',
       }));
     }
@@ -591,6 +597,10 @@ export default function MutuosAcuerdosScreen() {
       );
       return;
     }
+    if (!hasSelectedOnBothSides()) {
+      Alert.alert('Error', 'Selecciona el turno de cada empleado que se va a intercambiar (al menos uno del primer turno y uno del segundo).');
+      return;
+    }
 
     const isConnected = await getConnectionStatus();
     if (!isConnected) {
@@ -601,7 +611,7 @@ export default function MutuosAcuerdosScreen() {
       return;
     }
 
-    const marcaAusenteSel = ausente.marcas[0];
+    const marcaAusenteSel = selectedMarcas(ausente)[0];
     const eid = marcaAusenteSel?.empresa_id != null ? Number(marcaAusenteSel.empresa_id) : 0;
     const did = marcaAusenteSel?.division_id != null ? Number(marcaAusenteSel.division_id) : 0;
     const cid = marcaAusenteSel?.contrato_id != null ? Number(marcaAusenteSel.contrato_id) : 0;
@@ -641,8 +651,10 @@ export default function MutuosAcuerdosScreen() {
 
       const response = await createMutuoAcuerdo({
         requestData: {
-          marcas_ausente: ausente.marcas.map((m) => m.id),
-          marcas_reemplaza: reemplaza.marcas.map((m) => m.id),
+          marcas_ausente: selectedMarcas(ausente).map((m) => m.id),
+          marcas_reemplaza: selectedMarcas(reemplaza).map((m) => m.id),
+          empleado_ausente_id: ausente.employeeId,
+          empleado_reemplaza_id: reemplaza.employeeId,
           fecha_ausente: dateToYmd(ausente.fecha),
           fecha_reemplaza: dateToYmd(reemplaza.fecha),
           motivo: motivo.trim(),
@@ -672,6 +684,34 @@ export default function MutuosAcuerdosScreen() {
     }
   };
 
+  /** Turnos elegidos de un lado (en el orden de la lista). */
+  const selectedMarcas = (state: EmployeeSectionState) => state.marcas.filter((m) => state.selectedMarcaIds.includes(Number(m.id)));
+  const hasSelectedOnBothSides = () => selectedMarcas(ausente).length > 0 && selectedMarcas(reemplaza).length > 0;
+
+  const toggleMarcaSelection = (section: SectionKey, marca: MarcaDiaResumen) => {
+    const state = section === 'ausente' ? ausente : reemplaza;
+    const id = Number(marca.id);
+    const isSelected = state.selectedMarcaIds.includes(id);
+    const apply = () =>
+      updateSection(section, (prev) => ({
+        ...prev,
+        selectedMarcaIds: isSelected ? prev.selectedMarcaIds.filter((x) => x !== id) : [...prev.selectedMarcaIds, id],
+      }));
+    // Un turno de reemplazo (la persona cubre a otra) también se puede intercambiar, pero se advierte para no confundirlo con uno propio.
+    if (!isSelected && marca.es_reemplazo) {
+      Alert.alert(
+        'Turno de reemplazo',
+        'Este turno no es propio: lo cubres como reemplazo de otra persona. Si lo incluyes en el mutuo acuerdo, el turno pasará a la otra persona. ¿Quieres incluirlo?',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Incluir', onPress: apply },
+        ],
+      );
+      return;
+    }
+    apply();
+  };
+
   const handleSave = () => {
     if (isSubmitting) return;
     if (!motivo.trim()) {
@@ -687,6 +727,10 @@ export default function MutuosAcuerdosScreen() {
         'Error',
         'Ambas fechas deben tener al menos 1 marca/turno. Seleccione fechas en las que ambos empleados tengan turno.'
       );
+      return;
+    }
+    if (!hasSelectedOnBothSides()) {
+      Alert.alert('Error', 'Selecciona el turno de cada empleado que se va a intercambiar (al menos uno del primer turno y uno del segundo).');
       return;
     }
 
@@ -1067,20 +1111,47 @@ export default function MutuosAcuerdosScreen() {
     return (
       <View style={styles.marcaList}>
         <ThemedText style={styles.helperText}>
-          Se incluirán todos los turnos de este día ({sectionState.marcas.length}).
+          {sectionState.marcas.length === 1
+            ? 'Este es el único turno de ese día.'
+            : `Selecciona el turno que se va a intercambiar (hay ${sectionState.marcas.length} ese día).`}
         </ThemedText>
-        {sectionState.marcas.map((m) => (
-          <ThemedView key={`${section}-${m.id}`} style={styles.marcaItem}>
-            <ThemedText style={styles.marcaItemTitle}>
-              {m.cliente || '—'} | {m.sucursal || '—'}
-            </ThemedText>
-            <ThemedText style={styles.marcaItemText}>Puesto: {m.puesto || '—'}</ThemedText>
-            <ThemedText style={styles.marcaItemText}>
-              Horario: {formatTime(m.hora_inicio)} - {formatTime(m.hora_fin)}
-            </ThemedText>
-            <ThemedText style={styles.marcaItemText}>Turno: {m.tipo_turno_texto}</ThemedText>
-          </ThemedView>
-        ))}
+        {sectionState.marcas.map((m) => {
+          const checked = sectionState.selectedMarcaIds.includes(Number(m.id));
+          return (
+            <TouchableOpacity
+              key={`${section}-${m.id}`}
+              style={[styles.marcaItem, styles.marcaItemCard, checked && styles.marcaItemSelected]}
+              onPress={() => toggleMarcaSelection(section, m)}
+              activeOpacity={0.85}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked }}
+            >
+              <ThemedView style={styles.marcaCardBody}>
+                {/* Puesto arriba a la izquierda y, solo si el turno está elegido, la marca de selección arriba a la derecha */}
+                <ThemedView style={styles.marcaCardTopRow}>
+                  <ThemedText style={styles.marcaPuestoName} numberOfLines={2}>
+                    {m.puesto_codigo ? `${m.puesto_codigo} · ` : ''}
+                    {m.puesto || '—'}
+                  </ThemedText>
+                  {checked ? <Ionicons name="checkmark-circle" size={24} color="#007AFF" /> : null}
+                </ThemedView>
+                <ThemedText style={styles.marcaItemText}>
+                  {m.cliente || '—'} | {m.sucursal || '—'}
+                </ThemedText>
+                <ThemedText style={styles.marcaItemText}>
+                  Horario: {formatTime(m.hora_inicio)} - {formatTime(m.hora_fin)}
+                </ThemedText>
+                <ThemedText style={styles.marcaItemText}>Turno: {m.tipo_turno_texto}</ThemedText>
+              </ThemedView>
+              {/* Franja inferior: de quién es el turno (propio o de reemplazo) */}
+              <ThemedView style={[styles.marcaRibbon, m.es_reemplazo ? styles.marcaRibbonReemplazo : styles.marcaRibbonPropio]}>
+                <ThemedText style={[styles.marcaRibbonText, m.es_reemplazo ? styles.marcaRibbonTextReemplazo : styles.marcaRibbonTextPropio]}>
+                  {m.es_reemplazo ? 'Turno de reemplazo' : 'Turno propio'}
+                </ThemedText>
+              </ThemedView>
+            </TouchableOpacity>
+          );
+        })}
       </View>
     );
   };
@@ -1271,12 +1342,12 @@ export default function MutuosAcuerdosScreen() {
                   style={[
                     styles.formActionBtn,
                     styles.saveBtn,
-                    (isSubmitting || ausente.marcas.length === 0 || reemplaza.marcas.length === 0) &&
+                    (isSubmitting || !hasSelectedOnBothSides()) &&
                       styles.buttonDisabled,
                   ]}
                   onPress={handleSave}
                   activeOpacity={0.85}
-                  disabled={isSubmitting || ausente.marcas.length === 0 || reemplaza.marcas.length === 0}
+                  disabled={isSubmitting || !hasSelectedOnBothSides()}
                 >
                   {isSubmitting ? (
                     <ActivityIndicator size="small" color="#fff" />
@@ -2011,6 +2082,16 @@ const styles = StyleSheet.create({
   freeDayText: { marginTop: 8, color: '#666', fontStyle: 'italic' },
   marcaList: { marginTop: 10, gap: 8 },
   marcaItem: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, padding: 10, backgroundColor: '#FFF' },
+  marcaItemCard: { padding: 0, overflow: 'hidden' },
+  marcaRibbon: { paddingVertical: 6, paddingHorizontal: 10, alignItems: 'center', borderTopWidth: 1, borderTopColor: '#E0E0E0' },
+  marcaRibbonPropio: { backgroundColor: '#EAF5EC' },
+  marcaRibbonReemplazo: { backgroundColor: '#FFF4E5' },
+  marcaRibbonText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.6, textTransform: 'uppercase' },
+  marcaRibbonTextPropio: { color: '#1E6B34' },
+  marcaRibbonTextReemplazo: { color: '#8A5300' },
+  marcaCardBody: { padding: 10, gap: 2, backgroundColor: 'transparent' },
+  marcaCardTopRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 4, backgroundColor: 'transparent' },
+  marcaPuestoName: { flex: 1, fontWeight: '800', color: '#1E1E1E', fontSize: 15 },
   helperText: { fontSize: 13, color: '#666', marginBottom: 8 },
   marcaItemSelected: { borderColor: '#007AFF', backgroundColor: '#EAF3FF' },
   marcaItemTitle: { fontWeight: '800', color: '#1E1E1E', marginBottom: 4 },
