@@ -430,7 +430,8 @@ describe("Marcar ingreso/salida: marcas sin hora de inicio o de fin", () => {
     });
 
     it("no se muestra la tardía sin horario completo, ni el servidor ni la app la calculan", () => {
-        assert.match(pantalla, /tieneHorarioCompleto\(marcaView\.hora_inicio, marcaView\.hora_fin\) &&\s*marcaView\.hora_entrada_digitada == null/);
+        assert.match(pantalla, /\{tardiaVisible && \(/);
+        assert.match(pantalla, /ingresada: marcaView\.hora_entrada_digitada != null,\s*tieneHorario: tieneHorarioCompleto\(marcaView\.hora_inicio, marcaView\.hora_fin\)/);
         assert.match(pantalla, /if \(!tieneHorarioCompleto\(marca\.hora_inicio, marca\.hora_fin\)\) is_late = false;/);
         const ruta = leer(server, "app/api/attendance/user/[id]/route.ts");
         assert.match(ruta, /if \(marcaDia\.hora_inicio == null \|\| marcaDia\.hora_fin == null\) \{\s*\/\/ Sin hora de inicio o de fin no hay horario[\s\S]*?\} else if \(estado === "No ingresado"\)/);
