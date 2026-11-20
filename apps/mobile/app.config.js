@@ -236,17 +236,22 @@ module.exports = ({ config }) => {
           process.env.MOBILE_ACCESS_TOKEN ||
           "",
         /**
-         * Guardify (registro de equipos, órdenes y catálogo de APK) está BLOQUEADO por defecto: aunque haya URL, la app no lo usa mientras este interruptor
-         * no sea "true". El código se conserva; para reactivarlo: `EXPO_PUBLIC_GUARDIFY_ENABLED=true` y `EXPO_PUBLIC_GUARDIFY_URL`, y recompilar.
+         * Guardify (registro de equipos, órdenes y catálogo de APK) está APAGADO por defecto: ninguna build lo trae encendido, ni con URL ni con
+         * código de empresa, salvo que su perfil de EAS lo pida (hoy solo `guardify-pruebas`). Así una build de producción hecha desde esta rama
+         * no puede salir apuntando a Guardify ni a un cliente fijo. Para encenderlo: `EXPO_PUBLIC_GUARDIFY_ENABLED=true` y
+         * `EXPO_PUBLIC_GUARDIFY_URL` en el perfil, y recompilar (ver docs/guardify/compilar-apk-pruebas.md).
          */
-        GUARDIFY_ENABLED: process.env.EXPO_PUBLIC_GUARDIFY_ENABLED || process.env.GUARDIFY_ENABLED || "false",
-        /** Sin valor por defecto: una URL de túnel temporal no debe quedar embebida en ninguna build. Se define en el perfil de EAS (ver docs/guardify/compilar-apk-pruebas.md). */
-        GUARDIFY_URL: process.env.EXPO_PUBLIC_GUARDIFY_URL || process.env.GUARDIFY_URL || "https://guardifyconsole-production.up.railway.app",
+        GUARDIFY_ENABLED: process.env.EXPO_PUBLIC_GUARDIFY_ENABLED || process.env.GUARDIFY_ENABLED || "",
+        /** Sin valor por defecto: la URL de Guardify (staging o producción) se define en el perfil de EAS. */
+        GUARDIFY_URL: process.env.EXPO_PUBLIC_GUARDIFY_URL || process.env.GUARDIFY_URL || "",
         /** Cada cuántos segundos manda el equipo su latido (batería y ubicación con permiso). Vacío = 300 (5 min); mínimo 30. */
         GUARDIFY_HEARTBEAT_SECONDS: process.env.EXPO_PUBLIC_GUARDIFY_HEARTBEAT_SECONDS || process.env.GUARDIFY_HEARTBEAT_SECONDS || 60,
         GUARDIFY_APP_KEY: process.env.EXPO_PUBLIC_GUARDIFY_APP_KEY || process.env.GUARDIFY_APP_KEY || "monitoreapp",
-        /** Código de empresa embebido (producción). En lite/full se deja vacío y se escribe al registrar el equipo. */
-        GUARDIFY_COMPANY_CODE: process.env.EXPO_PUBLIC_GUARDIFY_COMPANY_CODE || process.env.GUARDIFY_COMPANY_CODE || "corporacion-gonzalez",
+        /**
+         * Código de empresa embebido. Sin valor por defecto: la app es multicliente; si el perfil no lo trae, la persona lo escribe al registrar
+         * el equipo (pantalla de registro de Guardify).
+         */
+        GUARDIFY_COMPANY_CODE: process.env.EXPO_PUBLIC_GUARDIFY_COMPANY_CODE || process.env.GUARDIFY_COMPANY_CODE || "",
         /** Variante con la que se evaluó esta configuración (la app usa la real, del paquete nativo: ver hooks/appVariant.ts). */
         APP_VARIANT: variant,
         /** Información de versión de la build según el entorno de construcción. */

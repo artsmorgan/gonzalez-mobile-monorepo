@@ -23,9 +23,18 @@ export type DeviceStatusInfo = { title: string; body: string; canRetry: boolean 
  * Texto provisional de cada estado: más adelante el texto y el contacto de soporte vendrán configurables desde Guardify.
  * Estados: PENDING, UNREGISTERED (sin registrar), REJECTED, BLOCKED / LOCKED, RETIRED.
  */
-export function describeDeviceStatus(status: string, reason: string | null): DeviceStatusInfo {
+export function describeDeviceStatus(status: string, reason: string | null, opts: { guardifyInBuild?: boolean } = {}): DeviceStatusInfo {
   const motivo = reason ? `\n\nMotivo: ${reason}` : '';
-  switch (String(status).toUpperCase()) {
+  const st = String(status).toUpperCase();
+  // El servidor exige un equipo registrado, pero esta build no trae Guardify: reintentar o «abrir con internet» no lo arregla nunca.
+  if (opts.guardifyInBuild === false && (st === 'UNREGISTERED' || st === 'PENDING')) {
+    return {
+      title: 'Esta versión no puede registrar el equipo',
+      body: 'El servidor exige que el equipo esté registrado y aprobado, pero esta versión de la aplicación no tiene el registro de equipos activado. Instala la versión que te indique tu administrador o comunícate con soporte.',
+      canRetry: false,
+    };
+  }
+  switch (st) {
     case 'PENDING':
       return { title: 'Esperando aprobación', body: 'Tu equipo está pendiente de aprobación por un administrador. Cuando lo aprueben podrás ingresar.', canRetry: true };
     case 'UNREGISTERED':

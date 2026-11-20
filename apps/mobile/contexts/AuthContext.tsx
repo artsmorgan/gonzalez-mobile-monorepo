@@ -15,7 +15,7 @@ import {
 import { clearAuthStorage, persistLegacySession } from '@/hooks/authTokenStorage';
 import { isSecureStorageError } from '@/hooks/secureStorageRouter';
 import { isPendingWorkKey } from '@/hooks/cleanupGuard';
-import { getGuardifyIdentityReady } from '@/hooks/guardifyClient';
+import { getGuardifyIdentityReady, guardifyInBuild } from '@/hooks/guardifyClient';
 import { handleDeviceNotApprovedResponse, parseDeviceNotApprovedMessage, reportDeviceNotApproved, describeDeviceStatus } from '@/hooks/deviceNotApproved';
 import {
   deleteEmployeeProfilePhoto,
@@ -193,7 +193,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         const deviceBlock = parseDeviceNotApprovedMessage(responseData?.message);
         if (deviceBlock) {
           reportDeviceNotApproved(deviceBlock);
-          return { success: false, error: describeDeviceStatus(deviceBlock.status, deviceBlock.reason).title };
+          return { success: false, error: describeDeviceStatus(deviceBlock.status, deviceBlock.reason, { guardifyInBuild: guardifyInBuild() }).title };
         }
         return {
           success: false,

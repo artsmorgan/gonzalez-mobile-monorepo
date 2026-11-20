@@ -136,6 +136,11 @@ function getConfig(): GuardifyConfig {
   return config;
 }
 
+/** ¿Esta build trae Guardify encendido (interruptor y URL)? Sin él, la app no puede registrar el equipo aunque el servidor lo exija. */
+export function guardifyInBuild(): boolean {
+  return getConfig().enabled;
+}
+
 /** Variante del catálogo de APK: `full` usa el mismo APK que `prod`. */
 function guardifyVariant(): string {
   const v = resolveRuntimeAppVariant();
