@@ -89,6 +89,15 @@ de las filas** (`^[a-z][a-z0-9_]*$`): `f.<columna>` o `f.<columna>.<operador>`. 
 Lo que **no** se expone a propósito: el token de refresco (`ingresos_usuario`), la firma del empleado
 (`tiempo_almuerzo`) y el dispositivo y las coordenadas (`login_marca`).
 
+## Rol base de las personas (para Guardify)
+
+`GET /api/guardify/people/roles?cedulas=<c1>,<c2>,…` (hasta 200, misma llave que los reportes) → `{ people: [{ cedula, found, superAdmin, base, byDivision: [{ divisionId, division, role }] }] }`.
+
+- `role` sale de la categoría de empleado de cada plaza, con el mismo mapeo que `/api/check-permissions` y el menú: `ADM` → `ADMINISTRATIVO`; `SUP`/`COO` → `SUPERVISOR`; el resto → `OPERATIVO`.
+- `base` es el de mayor alcance entre sus divisiones (Guardify asigna un rol por app); `null` si no tiene plaza con categoría.
+- `superAdmin`: figura en `n_employees_superadmin`. Empleados de baja (`estado = BA`) se devuelven como `found: false`.
+- Guardify lo usa para **sugerir** el rol al dar acceso (MonitoreApp es la base; Guardify puede sobrescribirlo). No devuelve nombres ni otros datos personales.
+
 ## Agregar un reporte
 
 1. `utils/guardifyReports/modules/<modulo>.ts`: reutiliza la función `queryXxxRows` del reporte (la misma de su Excel)
