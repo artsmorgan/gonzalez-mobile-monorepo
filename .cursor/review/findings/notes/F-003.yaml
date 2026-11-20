@@ -1,0 +1,18 @@
+id: F-003
+module_id: notes
+severity: high
+status: fixed
+file: apps/mobile/screens/MarcarIngresoSalidaScreen.tsx
+lines: "1285-1288"
+category: offline
+title: Marcar entrada borra imágenes locales de notas pendientes
+description: |
+  notesFilesSync usa getFile(localFileName) para buildNotesImagenesJsonForUpload. deleteAllFiles() en
+  hydrateAfterEntrada borra esos archivos en Paths.document antes del sync de notas.
+reproduction: |
+  1. Crear nota offline con imágenes (notes_images_meta).
+  2. Marcar entrada online antes de sync.
+  3. Archivos locales eliminados; upload posterior falla u omite adjuntos.
+impact: Notas sincronizadas sin fotos; archivos irrecuperables.
+suggested_fix: |
+  Preservar archivos referenciados por notes_actions pendientes; sync antes de deleteAllFiles.

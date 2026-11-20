@@ -1,0 +1,19 @@
+id: F-001
+module_id: opening-closing-position
+severity: critical
+status: fixed
+file: apps/mobile/screens/MarcarIngresoSalidaScreen.tsx
+lines: "1280-1288,1467-1502"
+category: offline
+title: Marcar entrada borra cola y cache de apertura/cierre de puesto
+description: |
+  Opening/closing usa evaluations_actions (type opening_closing_position) y evaluations_cache con
+  imagenes_meta locales. cleanAsyncStorage en hydrateAfterEntrada no incluye estas keys en excepciones
+  y las elimina al marcar entrada online.
+reproduction: |
+  1. Registrar apertura/cierre offline con fotos (evaluations_actions + evaluations_cache).
+  2. Marcar entrada online antes de sync.
+  3. AsyncStorage pierde cola y cache del módulo.
+impact: Pérdida de registros e imágenes de apertura/cierre pendientes de sincronizar.
+suggested_fix: |
+  Preservar evaluations_actions/evaluations_cache en cleanAsyncStorage o sync obligatorio pre-entrada.

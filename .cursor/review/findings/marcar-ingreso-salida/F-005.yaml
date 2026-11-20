@@ -1,0 +1,19 @@
+id: F-005
+module_id: marcar-ingreso-salida
+severity: high
+status: fixed
+file: apps/mobile/App.tsx
+lines: "734-774"
+category: offline
+title: Caché legacy eliminada aunque migración falle
+description: |
+  migrateLegacyAttendanceCachesForSync elimina marca_cache / absent_reason_cache fuera del
+  bloque try exitoso — siempre tras catch. Si JSON corrupto o marcaId inválido, la migración
+  falla pero la key legacy se borra sin entrada en attendance_actions.
+reproduction: |
+  1. Dispositivo con marca_cache corrupto o marcaId inválido.
+  2. Sync dispara migración; catch registra error.
+  3. AsyncStorage.removeItem('marca_cache') igual se ejecuta → salida offline perdida.
+impact: Pérdida de datos offline legacy sin posibilidad de recuperación.
+suggested_fix: |
+  Eliminar keys legacy solo tras writeAttendanceActions exitoso.

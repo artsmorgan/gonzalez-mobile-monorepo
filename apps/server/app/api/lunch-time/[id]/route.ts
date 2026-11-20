@@ -1,75 +1,87 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
 import { toZonedTime } from "date-fns-tz";
-
-const prisma = new PrismaClient();
+import { prisma } from "../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import { reportError } from "../../../../utils/reportError";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, message } = await verifyAccessTokenByApi(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const resolvedParams = await context.params;
 
         const id = parseInt(resolvedParams.id);
 
-        const empleado = await prisma.c_empleado.findUnique({ where: { id } });
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
 
-        if (!empleado) return NextResponse.json({ message: "Empleado no encontrado" }, { status: 404 });
-
-        const empleado_plaza = await prisma.c_empleado_plaza.findFirst({
-            where: {
-                empleado_id: empleado.id
-            }
-        });
-
-        if (!empleado_plaza || !empleado_plaza.horario_id) return NextResponse.json({ message: "Empleado no encontrado" }, { status: 404 });
-
-        const horario = await prisma.c_horario.findUnique({
-            where: {
-                id: empleado_plaza.horario_id
-            }
-        });
-
-        if (!horario) return NextResponse.json({ message: "Horario no encontrado" }, { status: 404 });
-
-        // Solamente los que corresponden al dia de hoy
-        const startOfDay = toZonedTime(new Date(), "America/Costa_Rica");
-        startOfDay.setHours(0, 0, 0, 0);
-
-        const endOfDay = toZonedTime(new Date(), "America/Costa_Rica");
-        endOfDay.setHours(23, 59, 59, 999);
-
-        // Obtener siempre la última marca agregada
-        const marcaDia = await prisma.c_marca_dia.findFirst({ where: { empleadoFijo_id: id }, orderBy: { id: "desc" } });
         if (!marcaDia) {
-            return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 200 });
+            await reportError(req, "api/lunch-time/[id]", "GET", 404, "Marca no encontrada");
+            return NextResponse.json({ message: "Marca no encontrada" }, { status: 404 });
         }
 
-        if (!marcaDia.hora_entrada_digitada) {
-            return NextResponse.json({ status: false, message: "No se ha marcado la entrada del dia" }, { status: 200 });
+        if (!marcaDia.empleadoFijo_id) {
+            await reportError(req, "api/lunch-time/[id]", "GET", 404, "Empleado no encontrado");
+            return NextResponse.json(
+                { status: false, message: "Empleado no encontrado" },
+                { status: 404 }
+            );
         }
 
-        const horas = await prisma.c_empleado_almuerzo.findMany({
+        const now = toZonedTime(new Date(), "America/Costa_Rica");
+        const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
+        const currentDate = new Date(now.toISOString().split("T")[0]);
+        const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
+
+        const proximo = await prisma.c_marca_dia.findFirst({
             where: {
-                empleadoId: empleado.id
-            }
+                empleadoFijo_id: marcaDia.empleadoFijo_id,
+                OR: [
+                    { fecha: { gt: now } },
+                    { fecha: { equals: currentDate }, hora_inicio: { gte: currentTime } },
+                ],
+            },
+            orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
         });
 
-        for (const hora of horas) {
-            hora.pausas = JSON.parse(hora.pausas);
+        let last_marca = null;
+        if (proximo) {
+            const proximoDateTime = new Date(`${proximo.fecha}T${proximo.hora_inicio}`);
+            if (proximoDateTime <= nowPlus15) {
+                last_marca = proximo;
+            }
         }
 
-        return NextResponse.json({ status: true, minutos: horario.minutos_almuerzo ? horario.minutos_almuerzo : 0, horas: horas, marcaDiaId: marcaDia.id }, { status: 200 });
+        if (!last_marca) {
+            last_marca = await prisma.c_marca_dia.findFirst({
+                where: {
+                    empleadoFijo_id: marcaDia.empleadoFijo_id,
+                    OR: [
+                        { fecha: { lt: now } },
+                        { fecha: { equals: currentDate }, hora_inicio: { lt: currentTime } },
+                    ],
+                },
+                orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }],
+            });
+        }
+
+        if (!last_marca) {
+            await reportError(req, "api/lunch-time/[id]", "GET", 404, "No se encontró la última marca");
+            return NextResponse.json({ message: "No se encontró la última marca" }, { status: 404 });
+        }
+
+        const horario = await prisma.c_horario.findUnique({ where: { id: marcaDia.horario_id ?? 0 } });
+
+        if (!horario) {
+            await reportError(req, "api/lunch-time/[id]", "GET", 404, "Horario no encontrado");
+            return NextResponse.json({ message: "Horario no encontrado" }, { status: 404 });
+        }
+
+        return NextResponse.json({ status: true, minutos: horario.minutos_almuerzo ? horario.minutos_almuerzo : 0, tiene_almuerzo: horario.tiene_almuerzo != null ? horario.tiene_almuerzo : false }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/lunch-time/[id]", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

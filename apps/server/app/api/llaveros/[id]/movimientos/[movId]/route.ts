@@ -1,0 +1,280 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { NextRequest, NextResponse } from "next/server";
+import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../../utils/prismaClient";
+import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../../../../utils/reportError";
+
+function parseDateOnly(value: any): Date | null {
+    if (!value) return null;
+    const s = String(value);
+    const d = s.includes("T") ? new Date(s) : new Date(`${s}T00:00:00`);
+    if (isNaN(d.getTime())) return null;
+    return d;
+}
+
+function parseTimeOnly(value: any): Date | null {
+    if (!value) return null;
+    const s = String(value);
+    const d = s.includes("T") ? new Date(s) : new Date(`1970-01-01T${s}`);
+    if (isNaN(d.getTime())) return null;
+    return d;
+}
+
+async function getMarcaDiaOrFail(req: NextRequest, marcaId: number) {
+    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: marcaId } });
+    if (!marcaDia) return { ok: false as const, marcaDia: null, message: "Marca no encontrada" };
+    if (!marcaDia.empleadoFijo_id) return { ok: false as const, marcaDia: null, message: "Empleado no encontrado" };
+
+    const lastMarca = await prisma.c_marca_dia.findFirst({
+        where: { empleadoFijo_id: marcaDia.empleadoFijo_id },
+        orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }],
+    });
+    if (!lastMarca) return { ok: false as const, marcaDia: null, message: "No se encontró la última marca" };
+    return { ok: true as const, marcaDia, message: "" };
+}
+
+async function validateOwnership(req: NextRequest, llaveroId: number, movId: number, marcaId: number) {
+    const marcaRes = await getMarcaDiaOrFail(req, marcaId);
+    if (!marcaRes.ok) return { ok: false as const, marcaDia: null, llavero: null, mov: null, message: marcaRes.message };
+    const marcaDia = marcaRes.marcaDia!;
+
+    const llavero = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_llavero", operation: "findUnique", where: { id: llaveroId } }
+    });
+    if (!llavero) return { ok: false as const, marcaDia: null, llavero: null, mov: null, message: "Llavero no encontrado" };
+    if (llavero.cliente_id !== marcaDia.cliente_id) {
+        return { ok: false as const, marcaDia: null, llavero: null, mov: null, message: "No autorizado" };
+    }
+
+    const mov = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_movimiento_llavero", operation: "findUnique", where: { id: movId } }
+    });
+    if (!mov || mov.llavero_id !== llaveroId) {
+        return { ok: false as const, marcaDia: null, llavero: null, mov: null, message: "Movimiento no encontrado" };
+    }
+
+    return { ok: true as const, marcaDia, llavero, mov, message: "" };
+}
+
+export async function PUT(req: NextRequest, context: { params: Promise<{ id: string; movId: string }> }) {
+    try {
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+        if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
+
+        const resolvedParams = await context.params;
+        const llaveroId = parseInt(resolvedParams.id);
+        const movId = parseInt(resolvedParams.movId);
+        if (!llaveroId || !movId) {
+            await reportError(req, "api/llaveros/[id]/movimientos/[movId]", "PUT", 400, "ID no especificado");
+            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
+        }
+
+        const body = await req.json();
+        const {
+            marca_id,
+            nombre_persona_recibe,
+            nombre_persona_entrega,
+            departamento,
+            telefono,
+            fecha,
+            hora,
+            firma_entrega,
+            firma_recibe,
+            firma_responsable,
+        } = body ?? {};
+
+        if (!marca_id) {
+            await reportError(req, "api/llaveros/[id]/movimientos/[movId]", "PUT", 400, "Marca no especificada");
+            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
+        }
+
+        const own = await validateOwnership(req, llaveroId, movId, parseInt(String(marca_id)));
+        if (!own.ok) {
+            await reportError(req, "api/llaveros/[id]/movimientos/[movId]", "PUT", 404, own.message);
+            return NextResponse.json({ status: false, message: own.message }, { status: 404 });
+        }
+
+        const fechaDate = fecha ? parseDateOnly(fecha) : null;
+        const horaDate = hora ? parseTimeOnly(hora) : null;
+        if ((fecha && !fechaDate) || (hora && !horaDate)) {
+            await reportError(req, "api/llaveros/[id]/movimientos/[movId]", "PUT", 400, "Fecha u hora inválida");
+            return NextResponse.json({ status: false, message: "Fecha u hora inválida" }, { status: 400 });
+        }
+
+        const horaRaw = hora !== undefined ? String(hora ?? "").trim() : null;
+        const horaNormalized = '1970-01-01T' + horaRaw + '.000Z';
+
+    console.log('horaNormalized', horaNormalized);
+
+        // Registrar cambios (solo campos actualizados, excluyendo firmas)
+        const eq = (a: any, b: any) => {
+            if (a === b) return true;
+            if (a == null && b == null) return true;
+            const da = a instanceof Date ? a : (typeof a === "string" && /^\d{4}-\d{2}-\d{2}T/.test(a) ? new Date(a) : null);
+            const db = b instanceof Date ? b : (typeof b === "string" && /^\d{4}-\d{2}-\d{2}T/.test(b) ? new Date(b) : null);
+            if (da && db) return da.getTime() === db.getTime();
+            return false;
+        };
+
+        const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
+        const updateData: any = {
+            nombre_persona_recibe: typeof nombre_persona_recibe === "string" ? nombre_persona_recibe : own.mov!.nombre_persona_recibe,
+            nombre_persona_entrega: typeof nombre_persona_entrega === "string" ? nombre_persona_entrega : own.mov!.nombre_persona_entrega,
+            departamento: typeof departamento === "string" ? departamento : own.mov!.departamento,
+            telefono: typeof telefono === "string" ? telefono : own.mov!.telefono,
+            fecha: fechaDate ?? own.mov!.fecha,
+            // si viene hora en el body, guardamos solo HH:mm:ss como string; si no, dejamos la anterior
+            hora: horaNormalized !== null ? horaNormalized : own.mov!.hora,
+            firma_entrega:
+                firma_entrega !== undefined
+                    ? (firma_entrega != null && String(firma_entrega).trim().length > 0
+                        ? String(firma_entrega).trim()
+                        : null)
+                    : own.mov!.firma_entrega,
+            firma_recibe:
+                firma_recibe !== undefined
+                    ? (firma_recibe != null && String(firma_recibe).trim().length > 0
+                        ? String(firma_recibe).trim()
+                        : null)
+                    : own.mov!.firma_recibe,
+            firma_responsable: typeof firma_responsable === "string" ? firma_responsable : own.mov!.firma_responsable,
+        };
+
+        // Comparar cambios (incluir firmas)
+        for (const [k, v] of Object.entries(updateData)) {
+            const before = (own.mov as any)[k];
+            const after = v;
+            if (!eq(before, after)) {
+                cambiosArr.push({
+                    prop: k,
+                    before: before instanceof Date ? before.toISOString() : before,
+                    after: after instanceof Date ? after.toISOString() : after,
+                });
+            }
+        }
+
+        // Convertir fechas a ISO strings para la API dinámica
+        const updateDataForApi: any = {};
+        for (const [k, v] of Object.entries(updateData)) {
+            if (v instanceof Date) {
+                updateDataForApi[k] = v.toISOString();
+            } else {
+                updateDataForApi[k] = v;
+            }
+        }
+
+        await callDynamicPrisma({
+            req,
+            data: {
+                action: "UPDATE",
+                table: "e_movimiento_llavero",
+                where: { id: movId },
+                data: updateDataForApi
+            }
+        });
+
+        // Registrar cambios si hay alguno
+        if (cambiosArr.length > 0) {
+            const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
+            const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
+            await callDynamicPrisma({
+                req,
+                data: {
+                    action: "POST",
+                    table: "c_cambios_apps_modules",
+                    data: {
+                        nombre_tabla: "e_movimiento_llavero",
+                        registro_id: movId,
+                        cambios: JSON.stringify(cambiosArr),
+                        created_at: createdAt.toISOString(),
+                        created_by: createdBy,
+                    }
+                }
+            });
+        }
+
+        return NextResponse.json({ status: true, message: "Movimiento actualizado correctamente" }, { status: 200 });
+    } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.error("Error in PUT /api/llaveros/[id]/movimientos/[movId]:", errorMessage);
+        await reportError(req, "api/llaveros/[id]/movimientos/[movId]", "PUT", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
+    }
+}
+
+export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string; movId: string }> }) {
+    try {
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+        if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
+
+        const resolvedParams = await context.params;
+        const llaveroId = parseInt(resolvedParams.id);
+        const movId = parseInt(resolvedParams.movId);
+        if (!llaveroId || !movId) {
+            await reportError(req, "api/llaveros/[id]/movimientos/[movId]", "DELETE", 400, "ID no especificado");
+            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
+        }
+
+        const marcaIdStr = req.nextUrl.searchParams.get("m");
+        if (!marcaIdStr) {
+            await reportError(req, "api/llaveros/[id]/movimientos/[movId]", "DELETE", 400, "Marca no especificada");
+            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
+        }
+
+        const own = await validateOwnership(req, llaveroId, movId, parseInt(marcaIdStr));
+        if (!own.ok) {
+            await reportError(req, "api/llaveros/[id]/movimientos/[movId]", "DELETE", 404, own.message);
+            return NextResponse.json({ status: false, message: own.message }, { status: 404 });
+        }
+
+        // Registrar cambio de eliminación antes de eliminar
+        const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
+        const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
+        const fechaMov = own.mov!.fecha instanceof Date ? own.mov!.fecha.toISOString() : own.mov!.fecha;
+        const horaMov = own.mov!.hora instanceof Date ? own.mov!.hora.toISOString() : own.mov!.hora;
+        await callDynamicPrisma({
+            req,
+            data: {
+                action: "POST",
+                table: "c_cambios_apps_modules",
+                data: {
+                    nombre_tabla: "e_movimiento_llavero",
+                    registro_id: movId,
+                    cambios: JSON.stringify([{
+                        prop: "__deleted__",
+                        before: {
+                            id: own.mov!.id,
+                            llavero_id: own.mov!.llavero_id,
+                            nombre_persona_recibe: own.mov!.nombre_persona_recibe,
+                            nombre_persona_entrega: own.mov!.nombre_persona_entrega,
+                            departamento: own.mov!.departamento,
+                            telefono: own.mov!.telefono,
+                            fecha: fechaMov,
+                            hora: horaMov,
+                        },
+                        after: null,
+                    }]),
+                    created_at: createdAt.toISOString(),
+                    created_by: createdBy,
+                }
+            }
+        });
+
+        await callDynamicPrisma({
+            req,
+            data: { action: "DELETE", table: "e_movimiento_llavero", where: { id: movId } }
+        });
+        return NextResponse.json({ status: true, message: "Movimiento eliminado correctamente" }, { status: 200 });
+    } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.error("Error in DELETE /api/llaveros/[id]/movimientos/[movId]:", errorMessage);
+        await reportError(req, "api/llaveros/[id]/movimientos/[movId]", "DELETE", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
+    }
+}
+
+

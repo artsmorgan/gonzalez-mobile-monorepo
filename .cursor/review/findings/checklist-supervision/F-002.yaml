@@ -1,0 +1,16 @@
+id: F-002
+module_id: checklist-supervision
+severity: medium
+status: fixed
+file: apps/mobile/hooks/checklistSupervisionEvaluationFiles.ts
+lines: "25-32"
+category: offline
+title: Fotos locales omitidas silenciosamente al sync
+description: |
+  getFile failure → console.warn; sync envía checklist sin esas fotos.
+reproduction: |
+  1. Checklist offline con foto inexistente en disco.
+  2. Sync online.
+impact: Fotos perdidas en servidor.
+suggested_fix: |
+  Abortar sync de acción si archivo local falta.

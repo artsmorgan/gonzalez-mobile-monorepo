@@ -1,31 +1,43 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { authorizeSelfOrAdmin, denialBody } from "../../../../../utils/objectAccess";
+import { isSuperAdminEmpleado } from "../../../../../utils/isSuperAdminEmpleado";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
-
-const prisma = new PrismaClient();
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
+import { reportError } from "../../../../../utils/reportError";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
+        // Issue #181: solo la propia persona o un administrador.
+        const access = await authorizeSelfOrAdmin({ callerId: payload.id, targetId: id, isAdmin: () => isSuperAdminEmpleado(req, Number(payload.id)) });
+        if (!access.allowed) { return NextResponse.json(denialBody(access), { status: access.status }); }
 
         const searchParams = req.nextUrl.searchParams;
         const endTime = searchParams.get("endTime");
 
         if (!endTime) {
-            return NextResponse.json({ status: false, message: "Tiempo de finalización no especificado" }, { status: 200 });
+            await reportError(req, "api/attendance/[id]/early-leaving", "GET", 400, "Tiempo de finalización no especificado");
+            return NextResponse.json({ status: false, message: "Tiempo de finalización no especificado" }, { status: 400 });
         }
 
         const marcaDia = await prisma.c_marca_dia.findFirst({ where: { empleadoFijo_id: id }, orderBy: { id: "desc" } });
         if (!marcaDia) {
-            return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 200 });
+            await reportError(req, "api/attendance/[id]/early-leaving", "GET", 404, "No se encontró la marca del dia");
+            return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 404 });
         }
 
         if (!marcaDia.hora_fin || !marcaDia.hora_inicio) {
-            return NextResponse.json({ status: false, message: "Hora de finalización no establecida" }, { status: 200 });
+            await reportError(req, "api/attendance/[id]/early-leaving", "GET", 400, "Hora de finalización no establecida");
+            return NextResponse.json({ status: false, message: "Hora de finalización no establecida" }, { status: 400 });
         }
 
         if (!marcaDia.fecha) {
+            await reportError(req, "api/attendance/[id]/early-leaving", "GET", 400, "Fecha no establecida");
             return NextResponse.json({ status: false, message: "Fecha no establecida" }, { status: 200 });
         }
 
@@ -40,13 +52,15 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         //  endingTime_converted no puede ser menor a endDate con 15 minutos menos
         endDate.setMinutes(endDate.getMinutes() - 15);
         if (endingTime_converted.getTime() < endDate.getTime()) {
-            return NextResponse.json({ status: false, message: "Tiempo de finalización es menor a la hora de finalización con 15 minutos menos" }, { status: 200 });
+            await reportError(req, "api/attendance/[id]/early-leaving", "GET", 500, "Tiempo de finalización es menor a la hora de finalización con 15 minutos menos");
+            return NextResponse.json({ status: false, message: "Tiempo de finalización es menor a la hora de finalización con 15 minutos menos" }, { status: 500 });
         }
 
         return NextResponse.json({ status: true, message: "Tiempo de finalización es menor a la hora de finalización" }, { status: 200 });
 
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/attendance/[id]/early-leaving", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

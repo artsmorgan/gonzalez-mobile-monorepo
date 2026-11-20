@@ -1,0 +1,157 @@
+import { queryMutuosAcuerdosRows } from "../../reports-functions/mutuosAcuerdosReport";
+import { findByIds } from "../enrich";
+import type { OutRow } from "../listing";
+import { fmtDt } from "../mappers";
+import { addDays } from "../params";
+import { buildNombre } from "../names";
+import { matchesScope } from "../scope";
+import type { GuardifyReportModule } from "../types";
+import { mutuosAcuerdosForm } from "./mutuosAcuerdosForm";
+
+const MAX_TEXT = 500;
+
+/** ¿Parece una imagen incrustada (data URI o base64 largo)? */
+function esImagen(s: string): boolean {
+    if (/^data:[a-z]+\/[^;,]+[;,]/i.test(s) || /^(iVBORw0KGgo|\/9j\/|R0lGOD|UklGR|PHN2Zy)/.test(s)) return true;
+    const head = s.slice(0, 200);
+    return s.length > 1000 && /^[A-Za-z0-9+/=_-]+$/.test(head) && /[A-Z]/.test(head) && /[a-z]/.test(head) && /\d/.test(head);
+}
+
+/** Texto libre recortado a 500 caracteres; descarta lo que parezca una imagen/base64. */
+function text(v: unknown, max = MAX_TEXT): string | null {
+    const s = String(v ?? "").trim();
+    if (!s) return null;
+    if (esImagen(s)) return null;
+    return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+/** Nombre de un nodo/valor ligado a un id (la consulta devuelve el id como texto si no lo encuentra). */
+function nodo(nombre: unknown, id: unknown): string | null {
+    if (!(Number(id) > 0)) return null;
+    const t = text(nombre, 200);
+    return t === String(id).trim() ? null : t;
+}
+
+/** Datos de la última modificación de un registro (ver `modificacionesPorRegistro`). */
+export type Modificacion = { cuando: string | null; quien: string | null };
+
+/**
+ * Última modificación de cada mutuo acuerdo: la entrada más reciente de su historial de cambios (`c_cambios_apps_modules`, `nombre_tabla` =
+ * `e_mutuos_acuerdos`) que no sea el alta (`__created__`). La tabla no tiene `updated_at`. Si nunca se editó, no hay entrada (null).
+ * Una consulta por bloque de 1000 ids (sin traer el contenido de `cambios`, que puede llevar firmas) + un lote de empleados
+ * («código — nombre», como `creado_por`). Si el historial no se puede leer, el reporte sigue con las columnas en null.
+ */
+export async function modificacionesPorRegistro(db: any, tabla: string, ids: unknown[]): Promise<Map<number, Modificacion>> {
+    const out = new Map<number, Modificacion>();
+    const unicos = [...new Set(ids.map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+    if (!unicos.length) return out;
+    try {
+        const pedidos = new Set(unicos);
+        const ultimo = new Map<number, { id: number; by: number; at: unknown }>();
+        for (let i = 0; i < unicos.length; i += 1000) {
+            const filas: any[] = await db.c_cambios_apps_modules.findMany({
+                where: { nombre_tabla: tabla, registro_id: { in: unicos.slice(i, i + 1000) }, NOT: { cambios: { contains: "__created__" } } },
+                select: { id: true, registro_id: true, created_by: true, created_at: true },
+                orderBy: { id: "desc" },
+            });
+            for (const f of filas) {
+                const rid = Number(f.registro_id);
+                const prev = ultimo.get(rid);
+                if (pedidos.has(rid) && (!prev || Number(f.id) > prev.id)) ultimo.set(rid, { id: Number(f.id), by: Number(f.created_by), at: f.created_at });
+            }
+        }
+        const emps = await findByIds<{ codigo?: string | null; nombre?: string | null; primer_apellido?: string | null; segundo_apellido?: string | null }>(db, "c_empleado", [...ultimo.values()].map((u) => u.by), { codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true });
+        for (const [rid, u] of ultimo) {
+            const e = emps.get(u.by);
+            const nombre = e ? buildNombre(e) : "";
+            const codigo = text(e?.codigo, 50);
+            out.set(rid, { cuando: fmtDt(u.at as any), quien: e ? (codigo ? (nombre ? `${codigo} — ${nombre}` : codigo) : nombre || null) : null });
+        }
+    } catch (e) {
+        console.warn("[guardifyReports] historial de cambios no disponible; modificado y modificado_por quedan vacíos", (e as Error)?.message);
+        return new Map();
+    }
+    return out;
+}
+
+/** «Sí»/«No» solo si hay un valor; el reporte original deja vacío lo que no se respondió. */
+function siNo(v: unknown): string | null {
+    const s = String(v ?? "").trim();
+    return s === "Sí" || s === "No" ? s : null;
+}
+
+/** Estado con la primera letra en mayúscula («Aprobado», «Pendiente», «Rechazado»): el filtro por igualdad es exacto. Vacío → «Pendiente». */
+function estadoVisible(v: unknown): string {
+    const s = String(v ?? "").trim().toLowerCase();
+    return s ? `${s.charAt(0).toUpperCase()}${s.slice(1, 50)}` : "Pendiente";
+}
+
+/**
+ * Fila de `queryMutuosAcuerdosRows` → fila plana. Se omiten a propósito todas las firmas
+ * (`firma_ejecutivo_cuenta_manual`, `firma_ejecutivo_cuenta_digital`, `firma_responsable`, `firma_ausente_manual`,
+ * `firma_reemplaza_manual`) y `file_name`; solo se indica si el ejecutivo tiene firma digital registrada.
+ * `modificacion`: último cambio del historial del mutuo acuerdo (se carga por lote en `load`); null si nunca se editó.
+ */
+export function mapMutuoAcuerdoRow(r: any, modificacion?: Modificacion | null): OutRow {
+    return {
+        id: Number(r.id),
+        creado: fmtDt(r.created_at),
+        empresa: nodo(r.empresa_nombre, r.empresa_id),
+        cliente: nodo(r.cliente_nombre, r.cliente_id),
+        division: nodo(r.division_nombre, r.division_id),
+        contrato: nodo(r.contrato_nombre, r.contrato_id),
+        sucursal: nodo(r.corpo_nombre, r.corpo_id),
+        puesto: nodo(r.puesto_nombre, r.puesto_id),
+        plaza_ausente: nodo(r.plaza_ausente_txt, r.plazaAusente_id),
+        plaza_reemplaza: nodo(r.plaza_reemplaza_txt, r.plazaReemplaza_id),
+        ejecutivo: nodo(r.ejecutivo_nombre, r.ejecutivo_cuenta),
+        oficial_ausente: text(r.empleado_ausente_txt, 200),
+        oficial_reemplaza: text(r.empleado_reemplaza_txt, 200),
+        marca_ausente: text(r.marca_ausente_txt, 200),
+        marca_reemplaza: text(r.marca_reemplaza_txt, 200),
+        ausente_acepta: siNo(r.ausente_acepta_txt),
+        fecha_acepta_ausente: fmtDt(r.ausente_acepta_at),
+        reemplaza_acepta: siNo(r.reemplaza_acepta_txt),
+        fecha_acepta_reemplaza: fmtDt(r.reemplaza_acepta_at),
+        motivo: text(r.motivo),
+        estado: estadoVisible(r.estado),
+        cambio_guardia: r.cambio_guardia_id == null ? null : Number(r.cambio_guardia_id),
+        firma_digital: siNo(r.firma_digital_ejecutivo_txt),
+        creado_por: nodo(r.created_by_txt, r.created_by),
+        modificado: modificacion?.cuando ?? null,
+        modificado_por: modificacion?.quien ?? null,
+    };
+}
+
+/**
+ * Mutuos acuerdos (`e_mutuos_acuerdos`). El periodo (`from`/`to`) se aplica a `creado` (`created_at`, la fecha de registro del mutuo
+ * acuerdo: «Fecha inicio/fin» del Excel «Mutuos acuerdos»). Para los filtros: «Persona ausente/reemplaza» son `oficial_ausente` /
+ * `oficial_reemplaza` («código — nombre»), «Ejecutivo de cuenta» es `ejecutivo` (el del propio acuerdo) y «Usuario inserta» es
+ * `creado_por` («código — nombre»). Cada fila trae sus ids de empresa/cliente/división/contrato/corpo/puesto
+ * (los registros antiguos pueden traerlos en 0: con un alcance pedido esas filas no se muestran).
+ */
+export const mutuosAcuerdos: GuardifyReportModule = {
+    id: "mutuos_acuerdos",
+    supportsScope: true,
+    searchKeys: ["oficial_ausente", "oficial_reemplaza", "ejecutivo", "motivo", "puesto", "sucursal", "contrato", "creado_por", "modificado_por"],
+    filterKeys: ["empresa", "cliente", "division", "contrato", "sucursal", "puesto", "estado", "ausente_acepta", "reemplaza_acepta", "oficial_ausente", "oficial_reemplaza", "ejecutivo", "creado_por", "modificado_por"],
+    sortKeys: ["creado", "empresa", "cliente", "division", "contrato", "sucursal", "puesto", "ejecutivo", "oficial_ausente", "oficial_reemplaza", "estado", "creado_por", "modificado", "modificado_por"],
+    defaultSort: "creado",
+    form: mutuosAcuerdosForm,
+    async load(db, p) {
+        const rows = await queryMutuosAcuerdosRows(db, { fechaReporteDesde: `${p.from} 00:00:00`, fechaReporteHasta: `${addDays(p.to, -1)} 23:59:59` }, "created_at");
+        const scope = p.scope;
+        const visibles = rows
+            .filter((r: any) => {
+                const d = fmtDt(r.created_at)?.slice(0, 10);
+                return !!d && d >= p.from && d < p.to;
+            })
+            .filter(
+                (r: any) =>
+                    !scope ||
+                    matchesScope({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.corpo_id, puesto: r.puesto_id }, scope),
+            );
+        const modificaciones = await modificacionesPorRegistro(db, "e_mutuos_acuerdos", visibles.map((r: any) => r.id));
+        return visibles.map((r: any) => mapMutuoAcuerdoRow(r, modificaciones.get(Number(r.id)) ?? null));
+    },
+};

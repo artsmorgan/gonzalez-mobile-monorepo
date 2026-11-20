@@ -1,0 +1,16 @@
+id: F-002
+module_id: voice-notes
+severity: medium
+status: fixed
+file: apps/mobile/App.tsx
+lines: "7862-7868"
+category: offline
+title: Audio local missing skip sin dequeue
+description: |
+  continue deja acción en cola indefinidamente.
+reproduction: |
+  1. audio_local_file borrado.
+  2. Sync loop.
+impact: Cola atascada.
+suggested_fix: |
+  Dead-letter o alerta al usuario.

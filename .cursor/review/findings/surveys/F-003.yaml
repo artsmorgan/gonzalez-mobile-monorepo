@@ -1,0 +1,15 @@
+id: F-003
+module_id: surveys
+severity: low
+status: fixed
+file: apps/mobile/App.tsx
+lines: "7064-7148"
+category: offline
+title: Tipo de acción desconocido bloquea cola
+description: |
+  Head con type no manejado detiene while loop.
+reproduction: |
+  1. Entrada corrupta en cola.
+impact: Toda la cola surveys_actions atascada.
+suggested_fix: |
+  Dead-letter o skip tipo desconocido.

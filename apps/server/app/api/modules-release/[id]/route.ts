@@ -1,0 +1,93 @@
+import { NextRequest, NextResponse } from "next/server";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { isSuperAdminEmpleado } from "../../../../utils/isSuperAdminEmpleado";
+import { reportError } from "../../../../utils/reportError";
+
+const parseIntStrict = (value: unknown): number | null => {
+  const n = parseInt(String(value), 10);
+  return Number.isNaN(n) ? null : n;
+};
+
+export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  try {
+    const { valid, expired, message, payload } = await verifyAccessTokenByApi(req);
+    if (!valid) {
+      return NextResponse.json({ status: false, expired, message }, { status: expired ? 401 : 403 });
+    }
+
+    const empleadoId = payload?.id != null ? Number(payload.id) : 0;
+    if (!Number.isFinite(empleadoId) || empleadoId <= 0) {
+      await reportError(req, "api/modules-release/[id]", "PUT", 403, "Usuario no autorizado");
+      return NextResponse.json({ status: false, message: "Usuario no autorizado" }, { status: 403 });
+    }
+    const superAdmin = await isSuperAdminEmpleado(req, empleadoId);
+    if (!superAdmin) {
+      await reportError(req, "api/modules-release/[id]", "PUT", 403, "Se requiere rol SUPER_ADMIN para modificar visibilidad de módulos");
+      return NextResponse.json(
+        { status: false, message: "Se requiere rol SUPER_ADMIN para modificar visibilidad de módulos" },
+        { status: 403 }
+      );
+    }
+
+    const { id } = await context.params;
+    const idNum = parseIntStrict(id);
+    if (!idNum || idNum <= 0) {
+      await reportError(req, "api/modules-release/[id]", "PUT", 400, "ID inválido");
+      return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+    }
+
+    const body = await req.json().catch(() => ({}));
+    if (typeof body?.is_visible !== "boolean") {
+      await reportError(req, "api/modules-release/[id]", "PUT", 400, "Debes enviar is_visible como booleano");
+      return NextResponse.json(
+        { status: false, message: "Debes enviar is_visible como booleano" },
+        { status: 400 }
+      );
+    }
+
+    const existing = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "n_app_module_visibility",
+        operation: "findUnique",
+        where: { id: idNum },
+      },
+    });
+
+    if (!existing) {
+      await reportError(req, "api/modules-release/[id]", "PUT", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+    }
+
+    const updated = await callDynamicPrisma({
+      req,
+      data: {
+        action: "UPDATE",
+        table: "n_app_module_visibility",
+        operation: "update",
+        where: { id: idNum },
+        data: { is_visible: body.is_visible },
+      },
+    });
+
+    return NextResponse.json(
+      {
+        status: true,
+        message: "Visibilidad actualizada correctamente",
+        data: {
+          id: updated?.id ?? idNum,
+          module_name: updated?.module_name ?? existing?.module_name ?? null,
+          real_name: updated?.real_name ?? existing?.real_name ?? null,
+          is_visible: Boolean(updated?.is_visible ?? body.is_visible),
+        },
+      },
+      { status: 200 }
+    );
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/modules-release/[id]", "PUT", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
+  }
+}

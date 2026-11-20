@@ -1,0 +1,17 @@
+id: F-002
+module_id: permit-request
+severity: medium
+status: fixed
+file: apps/mobile/screens/PermitRequestScreenV2.tsx
+lines: "781-801"
+category: validation
+title: Adjuntos omitidos silenciosamente al crear solicitud
+description: |
+  En executeCreate, si getFile falla se lanza error, pero si stripBase64Payload devuelve vacío el archivo
+  se salta con continue sin avisar al usuario.
+reproduction: |
+  1. Adjuntar documento cuyo localFileName/base64 quede vacío tras stripBase64Payload.
+  2. Crear solicitud.
+  3. filesPayload omite ese archivo; POST continúa y muestra éxito.
+impact: Solicitud creada sin evidencia adjunta que el usuario cree haber incluido.
+suggested_fix: Fallar la creación o alertar si algún adjunto seleccionado no entra en filesPayload.

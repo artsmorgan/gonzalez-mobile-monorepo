@@ -1,0 +1,17 @@
+id: F-002
+module_id: lunch-time
+severity: high
+status: fixed
+file: apps/mobile/screens/LunchTimeScreen.tsx
+lines: "324-376"
+category: offline
+title: restoreCurrentState borra temp_state cuando timer pausado
+description: |
+  Si temp_state.running === false, removeItem temp_state elimina progreso de almuerzo pausado.
+reproduction: |
+  1. Iniciar y pausar almuerzo.
+  2. App background → foreground.
+  3. temp_state ausente.
+impact: Pérdida de estado de almuerzo en curso.
+suggested_fix: |
+  Conservar temp_state cuando hay startTime/remainingSeconds en pausa.
