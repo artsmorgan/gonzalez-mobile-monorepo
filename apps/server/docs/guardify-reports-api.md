@@ -95,7 +95,7 @@ Lo que **no** se expone a propósito: el token de refresco (`ingresos_usuario`),
 
 - `role` sale de la categoría de empleado de cada plaza, con el mismo mapeo que `/api/check-permissions` y el menú: `ADM` → `ADMINISTRATIVO`; `SUP`/`COO` → `SUPERVISOR`; el resto → `OPERATIVO`.
 - `base` es el de mayor alcance entre sus divisiones (Guardify asigna un rol por app); `null` si no tiene plaza con categoría.
-- `superAdmin`: figura en `n_employees_superadmin`. Empleados de baja (`estado = BA`) se devuelven como `found: false`.
+- `superAdmin`: figura en `n_employees_superadmin` y la persona está activa. Los empleados de baja (`estado = BA`) y las cédulas desconocidas se devuelven como `found: false`, `superAdmin: false`, `base: null`, aunque sigan en esa tabla.
 - Guardify lo usa para **sugerir** el rol al dar acceso (MonitoreApp es la base; Guardify puede sobrescribirlo). No devuelve nombres ni otros datos personales.
 
 ## Agregar un reporte
