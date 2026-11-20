@@ -8,6 +8,7 @@ import {
   getCurrentDeviceBlock,
   type DeviceBlock,
 } from '@/hooks/deviceNotApproved';
+import { guardifyInBuild } from '@/hooks/guardifyClient';
 
 type Props = {
   /** Cierra la sesión local (la API ya no acepta este equipo). */
@@ -30,7 +31,7 @@ export default function DeviceStatusModal({ logout }: Props) {
   }, []);
 
   if (!block) return null;
-  const info = describeDeviceStatus(block.status, block.reason);
+  const info = describeDeviceStatus(block.status, block.reason, { guardifyInBuild: guardifyInBuild() });
 
   return (
     <Modal visible animationType="fade" onRequestClose={() => undefined}>

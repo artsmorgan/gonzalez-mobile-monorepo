@@ -46,4 +46,17 @@ describe("equipo no aprobado en la app (issue #146)", () => {
         assert.match(describeDeviceStatus("REJECTED", "No es de la empresa").body, /No es de la empresa/);
         assert.equal(describeDeviceStatus("raro", null).title, "Equipo bloqueado"); // estado desconocido: se trata como bloqueado
     });
+    it("si la build no trae Guardify y el servidor exige registro, lo dice claro y no ofrece reintentar", () => {
+        for (const s of ["UNREGISTERED", "PENDING"]) {
+            const i = describeDeviceStatus(s, null, { guardifyInBuild: false });
+            assert.equal(i.title, "Esta versión no puede registrar el equipo");
+            assert.equal(i.canRetry, false);
+            assert.match(i.body, /no tiene el registro de equipos activado/);
+        }
+        // Con Guardify en la build (o sin saberlo) se mantiene el mensaje de siempre.
+        assert.equal(describeDeviceStatus("UNREGISTERED", null, { guardifyInBuild: true }).title, "Equipo no registrado");
+        assert.equal(describeDeviceStatus("UNREGISTERED", null).title, "Equipo no registrado");
+        // Bloqueado o retirado no cambian aunque la build no traiga Guardify.
+        assert.equal(describeDeviceStatus("BLOCKED", null, { guardifyInBuild: false }).title, "Equipo bloqueado");
+    });
 });
