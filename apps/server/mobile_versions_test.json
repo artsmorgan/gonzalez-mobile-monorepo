@@ -232,6 +232,10 @@
       {
         "title": "Reportes de actividades",
         "description": "El reporte de actividades incluye las columnas «Horario diurno», «Horario mixto» y «Horario nocturno» (Sí o No). Los reportes de mutuos acuerdos, permisos, control de asistencia y acciones personales muestran el tipo de turno con su nombre y las fechas de los mutuos como DD-MM-AAAA."
+      },
+      {
+        "title": "Búsqueda de la marca más estable",
+        "description": "Si la búsqueda de tu turno tarda, la aplicación espera el tiempo necesario en lugar de cortarla a los 20 segundos, a los 20 segundos cambia el texto «Cargando datos de asistencia...» por «La búsqueda está tardando demasiado, espere por favor...» y no vuelve a buscar mientras no termine; la actualización automática de 30 segundos empieza solo cuando la marca ya está en pantalla. Si el servicio no responde a tiempo, se muestra el último turno guardado en el teléfono con un aviso, y cuando no hay ninguno, un mensaje claro con una ventana de ayuda, el código para soporte y el botón para compartirlo. El servidor consulta los días a Planillas a la vez y con un plazo propio por consulta. La marca se muestra de inmediato al obtenerla; los avisos y el botón de marcar aparecen cuando terminan las validaciones de ubicación y hora, y la espera de 30 segundos empieza recién en ese momento. Si una validación falla, la marca se queda en pantalla con su mensaje en lugar de desaparecer, y si no hay hora guardada en el teléfono se usa la hora actual para poder mostrarla. El aviso «Tardía» ya no aparece sin motivo: solo se muestra cuando de verdad pasó la hora de inicio del turno (más la gracia) y todavía no se ha marcado la entrada."
       }
     ]
   }

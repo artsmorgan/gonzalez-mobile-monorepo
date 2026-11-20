@@ -20,6 +20,9 @@ import dotenv from "dotenv";
 dotenv.config();
 import axios from "axios";
 
+/** Plazo de cada consulta de marcas a Planillas: una llamada lenta ya no detiene sin límite la búsqueda de la marca. */
+const PLANILLAS_MARCAS_TIMEOUT_MS = 15_000;
+
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -53,7 +56,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const empleado = await prisma.c_empleado.findUnique({ where: { id } });
         if (!empleado) {
             await reportError(req, "api/attendance/user/[id]", "GET", 404, "Empleado no encontrado");
-            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
+            return NextResponse.json({ status: false, code: "EMPLEADO_NO_ENCONTRADO", message: "Empleado no encontrado" }, { status: 404 });
         }
 
         let now = toZonedTime(new Date(), "America/Costa_Rica");
@@ -118,13 +121,28 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 params: {
                     empleado_codigo: empleado.codigo,
                     fecha: fecha.toISOString().split("T")[0],
-                }
+                },
+                // Sin plazo propio una sola llamada lenta a Planillas detenía toda la búsqueda.
+                timeout: PLANILLAS_MARCAS_TIMEOUT_MS,
             });
             const marcas = planillasResponse?.data?.data?.marcas;
             const result = Array.isArray(marcas) ? marcas : [];
             planillasMarcasCache.set(cacheKey, result);
             return result;
         };
+
+        /**
+         * Trae a la vez los días indicados y los deja en la caché: el recorrido día por día que sigue ya no espera a Planillas en cada vuelta.
+         * Un día que falle no se guarda, así que el recorrido lo vuelve a pedir y falla igual que antes (no cambia el resultado).
+         */
+        const precargarDias = async (offsets: number[], sentido: 1 | -1) => {
+            await Promise.allSettled(
+                offsets.map((dayOffset) =>
+                    fetchPlanillasMarcasForDate(new Date(currentDate.getTime() + sentido * dayOffset * 24 * 60 * 60 * 1000)),
+                ),
+            );
+        };
+        const DIAS_BUSQUEDA = Array.from({ length: 14 }, (_, i) => i);
 
         const loadMarcasDiaForEmployee = async (
             planillasMarcas: any[],
@@ -196,6 +214,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
          */
         const buscarSiguienteTurno = async () => {
             try {
+                await precargarDias(DIAS_BUSQUEDA, 1);
                 const candidatas: any[] = [];
                 for (let dayOffset = 0; dayOffset < 14; dayOffset++) {
                     const dateCursor = new Date(currentDate.getTime() + dayOffset * 24 * 60 * 60 * 1000);
@@ -252,6 +271,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         // 1) Marca futura más cercana desde el momento de la consulta (hasta 14 días).
         let nextFutureMarca: any = null;
         let nextFutureDateTime: Date | null = null;
+        await precargarDias(DIAS_BUSQUEDA, 1);
         for (let dayOffset = 0; dayOffset < 14; dayOffset++) {
             const dateCursor = new Date(currentDate.getTime() + dayOffset * 24 * 60 * 60 * 1000);
             const planillasMarcas = await fetchPlanillasMarcasForDate(dateCursor);
@@ -282,6 +302,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         // 2) Si no hay futura en ventana, última marca anterior al momento de la consulta.
         if (!marcaDia) {
+            await precargarDias(DIAS_BUSQUEDA, -1);
             for (let dayOffset = 0; dayOffset < 14; dayOffset++) {
                 const dateCursor = new Date(currentDate.getTime() - dayOffset * 24 * 60 * 60 * 1000);
                 const planillasMarcas = await fetchPlanillasMarcasForDate(dateCursor);
@@ -302,7 +323,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         if (!marcaDia) {
             await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró la marca del dia");
-            return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 404 });
+            return NextResponse.json({ status: false, code: "SIN_MARCA", message: "No se encontró la marca del dia" }, { status: 404 });
         }
 
         marcaDia = await resolverConflictoMarcaDia(marcaDia);
@@ -329,61 +350,61 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         if (!marcaDia.empresa_id) {
             await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró la empresa");
-            return NextResponse.json({ status: false, message: "No se encontró la empresa" }, { status: 404 });
+            return NextResponse.json({ status: false, code: "ESTRUCTURA_INCOMPLETA", campo: "empresa", message: "No se encontró la empresa" }, { status: 404 });
         }
 
         if (!marcaDia.cliente_id) {
             await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró el cliente");
-            return NextResponse.json({ status: false, message: "No se encontró el cliente" }, { status: 404 });
+            return NextResponse.json({ status: false, code: "ESTRUCTURA_INCOMPLETA", campo: "cliente", message: "No se encontró el cliente" }, { status: 404 });
         }
 
         if (!marcaDia.contrato_id) {
             await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró el contrato");
-            return NextResponse.json({ status: false, message: "No se encontró el contrato" }, { status: 404 });
+            return NextResponse.json({ status: false, code: "ESTRUCTURA_INCOMPLETA", campo: "contrato", message: "No se encontró el contrato" }, { status: 404 });
         }
 
         if (!marcaDia.corpo_id) {
             await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró la sucursal");
-            return NextResponse.json({ status: false, message: "No se encontró la sucursal" }, { status: 404 });
+            return NextResponse.json({ status: false, code: "ESTRUCTURA_INCOMPLETA", campo: "sucursal", message: "No se encontró la sucursal" }, { status: 404 });
         }
 
         if (!marcaDia.puesto_id) {
             await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró el puesto");
-            return NextResponse.json({ status: false, message: "No se encontró el puesto" }, { status: 404 });
+            return NextResponse.json({ status: false, code: "ESTRUCTURA_INCOMPLETA", campo: "puesto", message: "No se encontró el puesto" }, { status: 404 });
         }
 
         if (!marcaDia.plaza_id) {
             await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró la plaza");
-            return NextResponse.json({ status: false, message: "No se encontró la plaza" }, { status: 404 });
+            return NextResponse.json({ status: false, code: "ESTRUCTURA_INCOMPLETA", campo: "plaza", message: "No se encontró la plaza" }, { status: 404 });
         }
 
         if (!marcaDia.horario_id) {
             await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró el horario");
-            return NextResponse.json({ status: false, message: "No se encontró el horario" }, { status: 404 });
+            return NextResponse.json({ status: false, code: "ESTRUCTURA_INCOMPLETA", campo: "horario", message: "No se encontró el horario" }, { status: 404 });
         }
 
         const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: marcaDia.empresa_id } });
         if (!empresa) {
             await reportError(req, "api/attendance/user/[id]", "GET", 404, "Empresa no encontrada");
-            return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 404 });
+            return NextResponse.json({ status: false, code: "ESTRUCTURA_INCOMPLETA", campo: "empresa", message: "Empresa no encontrada" }, { status: 404 });
         }
 
         const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: marcaDia.cliente_id } });
         if (!cliente) {
             await reportError(req, "api/attendance/user/[id]", "GET", 404, "Cliente no encontrado");
-            return NextResponse.json({ status: false, message: "Cliente no encontrado" }, { status: 404 });
+            return NextResponse.json({ status: false, code: "ESTRUCTURA_INCOMPLETA", campo: "cliente", message: "Cliente no encontrado" }, { status: 404 });
         }
 
         const contrato = await prisma.e_estructura_contrato.findUnique({ where: { id: marcaDia.contrato_id } });
         if (!contrato) {
             await reportError(req, "api/attendance/user/[id]", "GET", 404, "Contrato no encontrado");
-            return NextResponse.json({ status: false, message: "Contrato no encontrado" }, { status: 404 });
+            return NextResponse.json({ status: false, code: "ESTRUCTURA_INCOMPLETA", campo: "contrato", message: "Contrato no encontrado" }, { status: 404 });
         }
 
         const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marcaDia.corpo_id } });
         if (!corpo) {
             await reportError(req, "api/attendance/user/[id]", "GET", 404, "Corpo no encontrado");
-            return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 404 });
+            return NextResponse.json({ status: false, code: "ESTRUCTURA_INCOMPLETA", campo: "sucursal", message: "Corpo no encontrado" }, { status: 404 });
         }
 
         let puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marcaDia.puesto_id ?? 0 } });
@@ -512,7 +533,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             const empleadoReemplaza = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoReemplaza_id } });
             if (!empleadoReemplaza) {
                 await reportError(req, "api/attendance/user/[id]", "GET", 404, "Empleado no encontrado");
-                return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
+                return NextResponse.json({ status: false, code: "EMPLEADO_NO_ENCONTRADO", message: "Empleado no encontrado" }, { status: 404 });
             }
             const nombreCompleto = [empleadoReemplaza.nombre, empleadoReemplaza.primer_apellido, empleadoReemplaza.segundo_apellido]
                 .filter(Boolean)

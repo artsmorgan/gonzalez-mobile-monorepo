@@ -229,7 +229,7 @@ module.exports = ({ config }) => {
           process.env.NEXT_PUBLIC_API_SERVER ||
           // test https://api-gonzalez-mobile-monorepo-production.up.railway.app
           // prod https://gonzalez-mobile-server-production.up.railway.app
-          "https://api-gonzalez-mobile-monorepo-production.up.railway.app",
+          "https://greensboro-optimum-bend-prefix.trycloudflare.com",
         /** Debe coincidir con `MOBILE_ACCESS_TOKEN` del servidor (query en `/api/main-structure`). */
         MOBILE_ACCESS_TOKEN:
           process.env.EXPO_PUBLIC_MOBILE_ACCESS_TOKEN ||
@@ -239,7 +239,7 @@ module.exports = ({ config }) => {
          * Guardify (registro de equipos, órdenes y catálogo de APK) está BLOQUEADO por defecto: aunque haya URL, la app no lo usa mientras este interruptor
          * no sea "true". El código se conserva; para reactivarlo: `EXPO_PUBLIC_GUARDIFY_ENABLED=true` y `EXPO_PUBLIC_GUARDIFY_URL`, y recompilar.
          */
-        GUARDIFY_ENABLED: process.env.EXPO_PUBLIC_GUARDIFY_ENABLED || process.env.GUARDIFY_ENABLED || "true",
+        GUARDIFY_ENABLED: process.env.EXPO_PUBLIC_GUARDIFY_ENABLED || process.env.GUARDIFY_ENABLED || "false",
         /** Sin valor por defecto: una URL de túnel temporal no debe quedar embebida en ninguna build. Se define en el perfil de EAS (ver docs/guardify/compilar-apk-pruebas.md). */
         GUARDIFY_URL: process.env.EXPO_PUBLIC_GUARDIFY_URL || process.env.GUARDIFY_URL || "https://guardifyconsole-production.up.railway.app",
         /** Cada cuántos segundos manda el equipo su latido (batería y ubicación con permiso). Vacío = 300 (5 min); mínimo 30. */

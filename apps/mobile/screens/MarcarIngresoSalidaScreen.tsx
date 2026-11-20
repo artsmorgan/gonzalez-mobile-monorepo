@@ -9,7 +9,7 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, TouchableOpacity, ScrollView, Modal, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Share, StyleSheet, TouchableOpacity, ScrollView, Modal, TextInput, View } from 'react-native';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
@@ -36,6 +36,24 @@ import {
   validateMarcaLocation,
 } from '@/hooks/attendanceLocalMarcaValidation';
 import PuestoLocationBlock from '../components/PuestoLocationBlock';
+import {
+  attendanceLoadErrorMessage,
+  attendanceLoadErrorSupportText,
+  classifyAttendanceLoadError,
+  isConnectionLoadError,
+  type AttendanceLoadErrorInfo,
+  type AttendanceLoadStage,
+} from '../hooks/attendanceLoadError';
+import { getAppVersionString } from '../hooks/appVersionHeader';
+import { esTardiaAhora } from '../hooks/marcaAvisos';
+import {
+  ATTENDANCE_LOADING_MESSAGE,
+  ATTENDANCE_POLL_DELAY_MS,
+  ATTENDANCE_SEARCH_DEADLINE_MS,
+  ATTENDANCE_SEARCH_SLOW_MESSAGE,
+  ATTENDANCE_SEARCH_SLOW_NOTICE_MS,
+  shouldRunAttendancePolling,
+} from '../hooks/attendancePolling';
 import {
   getMonitoringPreviousMinutesFromStorage,
   setMonitoringPreviousMinutesStorage,
@@ -384,7 +402,8 @@ export default function MarcarIngresoSalidaScreen() {
     puestoLng: number;
   } | null>(null);
   /** El mapa de "fuera de rango" solo se abre cuando el usuario pulsa el botón, nunca automáticamente. */
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Espera de 30 s para la siguiente actualización de la marca (un solo disparo: se vuelve a armar cuando la marca reaparece en pantalla). */
+  const intervalRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigation = useNavigation<MarcarIngresoSalidaScreenNavigationProp>();
   const [horaAccion, setHoraAccion] = useState<number | null>(null);
   const [isMarksModalVisible, setIsMarksModalVisible] = useState(false);
@@ -395,6 +414,35 @@ export default function MarcarIngresoSalidaScreen() {
   const resumeAfterPlanillasRevalidationRef = useRef(false);
   const fetchAttendanceInFlightRef = useRef(false);
   const [showPlanillasRevalidationModal, setShowPlanillasRevalidationModal] = useState(false);
+  /** Por qué no se pudo cargar el turno, con textos para la persona (ver `hooks/attendanceLoadError.ts`). */
+  const [loadErrorInfo, setLoadErrorInfo] = useState<AttendanceLoadErrorInfo | null>(null);
+  const [isLoadErrorModalVisible, setIsLoadErrorModalVisible] = useState(false);
+  /** Códigos de error cuya ventana ya se abrió sola: cada situación se explica una vez y no se repite en cada reintento automático. */
+  const shownLoadErrorCodesRef = useRef<Set<string>>(new Set());
+  /**
+   * Hay una búsqueda de la marca en curso. Se enciende al empezar a buscar (antes de la hora del servidor, el token y la petición) y se apaga al terminar,
+   * con éxito o con error. La actualización automática y los chequeos periódicos esperan a que esté apagado.
+   */
+  const [isSearchingMarca, setIsSearchingMarca] = useState(false);
+  const isSearchingMarcaRef = useRef(false);
+  /** La marca de esta búsqueda ya se puso en pantalla: un fallo posterior no debe ocultarla (solo se muestra su mensaje debajo). */
+  const marcaMostradaRef = useRef(false);
+  /**
+   * La marca ya se ve en pantalla pero siguen las validaciones posteriores (ubicación, hora, reglas locales). Mientras dura, los avisos y los botones de
+   * marcar quedan ocultos; al terminar se habilitan o se muestran los mensajes que correspondan y recién entonces empieza la espera de 30 segundos.
+   */
+  const [isValidatingMarca, setIsValidatingMarca] = useState(false);
+  /** La búsqueda lleva más de 10 segundos: se avisa en pantalla que está tardando. */
+  const [isSearchSlow, setIsSearchSlow] = useState(false);
+  /** Se muestra el último turno guardado en el teléfono porque el servicio no respondió a tiempo. */
+  const [usingSavedMarcaNotice, setUsingSavedMarcaNotice] = useState(false);
+  const searchSlowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (searchSlowTimerRef.current) clearTimeout(searchSlowTimerRef.current);
+    },
+    [],
+  );
   /** Aviso informativo entrada (cerrable), mismo patrón que ChecklistSupervisionScreen. */
   const [isEntradaMarcaHintVisible, setIsEntradaMarcaHintVisible] = useState(true);
   const [monitoringPreviousMinutes, setMonitoringPreviousMinutes] = useState<number>(15);
@@ -504,37 +552,38 @@ export default function MarcarIngresoSalidaScreen() {
     }
   }, [isAuthenticated, employee, isProcessingMark, isLoadingData, attendanceData]);
 
-  // Polling cada 30 segundos:
-  // - se detiene cuando inicia carga (isLoadingData=true)
-  // - se reactiva cuando ya hay marca en pantalla (attendanceData disponible)
+  // Actualización automática de la marca: los 30 segundos empiezan ÚNICAMENTE cuando la marca ya está en pantalla.
+  // - no corre mientras se busca la marca (isSearchingMarca, desde el primer paso de la búsqueda) ni mientras se carga o se marca;
+  // - es un temporizador de un solo disparo: al terminar cada búsqueda (con éxito o con error) el efecto se vuelve a evaluar y, si la marca está en pantalla,
+  //   arma otra espera de 30 s desde cero. Así tampoco se queda sin actualizarse si una búsqueda termina sin cambiar la marca.
   useEffect(() => {
-    if (isAuthenticated && employee && !isProcessingMark && !isLoadingData && !!attendanceData) {
-      // Limpiar cualquier intervalo previo
+    const clearPollingTimer = () => {
       if (intervalRef.current) {
-        clearInterval(intervalRef.current);
+        clearTimeout(intervalRef.current);
         intervalRef.current = null;
       }
+    };
+    clearPollingTimer();
 
-      // Intervalo cada 30 segundos
-      intervalRef.current = setInterval(() => {
-        fetchAttendanceStatus();
-      }, 30000);
-
-      // Cleanup
-      return () => {
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
-        }
-      };
+    if (
+      !shouldRunAttendancePolling({
+        isAuthenticated,
+        hasEmployee: !!employee,
+        isProcessingMark,
+        isLoadingData,
+        isSearchingMarca,
+        hasAttendanceData: !!attendanceData,
+      })
+    ) {
+      return;
     }
 
-    // Si se está procesando una marca, limpiar intervalo
-    if ((isProcessingMark || isLoadingData || !attendanceData) && intervalRef.current) {
-      clearInterval(intervalRef.current);
+    intervalRef.current = setTimeout(() => {
       intervalRef.current = null;
-    }
-  }, [isAuthenticated, employee, isProcessingMark, isLoadingData, attendanceData]);
+      void fetchAttendanceStatus();
+    }, ATTENDANCE_POLL_DELAY_MS);
+    return clearPollingTimer;
+  }, [isAuthenticated, employee, isProcessingMark, isLoadingData, isSearchingMarca, attendanceData]);
 
   useEffect(() => {
     if (attendanceData) return;
@@ -896,7 +945,7 @@ export default function MarcarIngresoSalidaScreen() {
     let cancelled = false;
 
     const tick = async () => {
-      if (cancelled || isProcessingMark || isLoadingData) return;
+      if (cancelled || isProcessingMark || isLoadingData || isSearchingMarcaRef.current) return;
       const online = await evaluateInternetConnection();
       if (online) return;
 
@@ -940,7 +989,7 @@ export default function MarcarIngresoSalidaScreen() {
     let cancelled = false;
 
     const tick = async () => {
-      if (cancelled || isProcessingMark || isLoadingData) return;
+      if (cancelled || isProcessingMark || isLoadingData || isSearchingMarcaRef.current) return;
       const nowMs = await getHoraAccion();
       setHoraAccion(nowMs);
       await refreshMarkLocationEligibility(
@@ -998,10 +1047,26 @@ export default function MarcarIngresoSalidaScreen() {
     }
 
     fetchAttendanceInFlightRef.current = true;
+    // Empieza la búsqueda: la espera de 30 s se cancela y no vuelve a armarse hasta que termine (ver el efecto de la actualización automática).
+    isSearchingMarcaRef.current = true;
+    marcaMostradaRef.current = false;
+    setIsValidatingMarca(false);
+    setIsSearchingMarca(true);
+    // Si la búsqueda pasa de 10 segundos se avisa en pantalla (el aviso se quita al terminar).
+    setIsSearchSlow(false);
+    if (searchSlowTimerRef.current) clearTimeout(searchSlowTimerRef.current);
+    searchSlowTimerRef.current = setTimeout(() => setIsSearchSlow(true), ATTENDANCE_SEARCH_SLOW_NOTICE_MS);
+    setLoadErrorInfo(null);
+    setUsingSavedMarcaNotice(false);
+
+    // En qué punto se está para poder explicar bien un fallo (ver el `catch`).
+    let loadStage: AttendanceLoadStage = 'preparacion';
+    let loadHttpStatus: number | null = null;
+    let loadServerCode: string | null = null;
 
     try {
       if (intervalRef.current) {
-        clearInterval(intervalRef.current);
+        clearTimeout(intervalRef.current);
         intervalRef.current = null;
       }
 
@@ -1095,6 +1160,8 @@ export default function MarcarIngresoSalidaScreen() {
 
       const response = await authedFetch({
         url: attendanceUserUrl,
+        // La búsqueda de la marca puede tardar: se le da el plazo máximo en vez de cortarla a los 20 s.
+        timeoutMs: ATTENDANCE_SEARCH_DEADLINE_MS,
         init: {
           method: 'GET',
           headers: {
@@ -1108,10 +1175,16 @@ export default function MarcarIngresoSalidaScreen() {
       if (!response) return;
 
       if (!response.ok) {
+        loadStage = 'respuesta_http';
+        loadHttpStatus = response.status;
+        const errorBody = await response.json().catch(() => null);
+        loadServerCode = typeof errorBody?.code === 'string' ? errorBody.code : null;
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
+      loadStage = 'respuesta_json';
       data = await response.json();
+      loadStage = data?.status ? 'procesar_exito' : 'procesar_bloqueada';
 
       // Siguiente turno laboral: se guarda (o se limpia si ya no hay) para consultarlo sin conexión. Un servidor sin este dato no lo borra.
       if (data && Object.prototype.hasOwnProperty.call(data, 'next_shift')) {
@@ -1130,12 +1203,15 @@ export default function MarcarIngresoSalidaScreen() {
         await persistMonitoringMinutesFromResponse(data);
         await applyNomenclatorsFromAttendanceMarca(marca_send);
 
-        const server_time = await AsyncStorage.getItem('server_time');
-        if (!server_time) {
-          throw new Error('Server time not found');
+        // Hora del servidor guardada; si falta o no se puede leer, se usa la hora de acción ya calculada: la marca se muestra igual.
+        let serverTimeMs = NaN;
+        try {
+          const server_time = await AsyncStorage.getItem('server_time');
+          if (server_time) serverTimeMs = parseInt(JSON.parse(server_time).server_time, 10);
+        } catch {
+          /* se usa la hora de acción */
         }
-        const server_time_obj = JSON.parse(server_time);
-        marca_send.current_time = parseInt(server_time_obj.server_time, 10);
+        marca_send.current_time = Number.isFinite(serverTimeMs) ? serverTimeMs : horaAccionValue || Date.now();
 
         const cache = await AsyncStorage.getItem('current_marca');
         if (cache) {
@@ -1224,11 +1300,54 @@ export default function MarcarIngresoSalidaScreen() {
         }
       }
     } catch (error) {
-      console.error('Error fetching attendance status:', error);
-      setErrorMessage('Error al cargar los datos. Por favor, intenta nuevamente.');
+      // La marca ya se obtuvo y se ve en pantalla: se queda visible y el fallo posterior se muestra como mensaje debajo de ella.
+      if (marcaMostradaRef.current) {
+        const parcial = classifyAttendanceLoadError({ stage: 'marca_mostrada', error });
+        console.error('Fallo después de mostrar la marca:', error, { etapa: loadStage, codigo: parcial.code });
+        setLoadErrorInfo(null);
+        setErrorMessage(attendanceLoadErrorMessage(parcial));
+        return;
+      }
+      // Lo técnico va solo al registro; la persona ve un mensaje claro según lo que pasó y puede abrir una ventana con qué hacer.
+      const info = classifyAttendanceLoadError({ stage: loadStage, error, httpStatus: loadHttpStatus, serverCode: loadServerCode });
+      console.error('Error fetching attendance status:', error, { etapa: loadStage, estadoHttp: loadHttpStatus, codigoServidor: loadServerCode, codigo: info.code });
+      setLoadErrorInfo(info);
+      setErrorMessage(attendanceLoadErrorMessage(info));
+      // Si el servicio no respondió (sin red o plazo agotado) pero el teléfono tiene el último turno guardado, se muestra en lugar de dejar la pantalla vacía.
+      // El siguiente turno ya sale del almacenamiento. Al volver a consultar con éxito se reemplaza por lo que diga el servicio.
+      if (isConnectionLoadError(info)) {
+        try {
+          const savedMarca = await AsyncStorage.getItem('current_marca');
+          if (savedMarca && savedMarca.trim() !== '') {
+            const marcaGuardada = JSON.parse(savedMarca);
+            const { nowMs } = await revalidateLocalMarcaOffline(marcaGuardada, marcaGuardada.id != null ? Number(marcaGuardada.id) : null);
+            await refreshMarkLocationEligibility(marcaGuardada, nowMs);
+            setErrorMessage(null);
+            setLoadErrorInfo(null);
+            setUsingSavedMarcaNotice(true);
+            return;
+          }
+        } catch (fallbackError) {
+          console.error('No se pudo mostrar el turno guardado:', fallbackError);
+        }
+      }
+      setUsingSavedMarcaNotice(false);
+      if (!shownLoadErrorCodesRef.current.has(info.code)) {
+        shownLoadErrorCodesRef.current.add(info.code);
+        setIsLoadErrorModalVisible(true);
+      }
     } finally {
       setIsLoadingData(false);
       fetchAttendanceInFlightRef.current = false;
+      // Terminó la búsqueda (con la marca en pantalla o con un mensaje): recién ahora puede empezar la espera de 30 s.
+      isSearchingMarcaRef.current = false;
+      setIsValidatingMarca(false);
+      setIsSearchingMarca(false);
+      if (searchSlowTimerRef.current) {
+        clearTimeout(searchSlowTimerRef.current);
+        searchSlowTimerRef.current = null;
+      }
+      setIsSearchSlow(false);
     }
   };
 
@@ -1293,10 +1412,19 @@ export default function MarcarIngresoSalidaScreen() {
         ? serverFlags.is_salida_anticipada
         : resolveMarcaIsSalidaAnticipada(marca);
 
-    const marcaWithFlags = await persistCurrentMarcaWithFlags(
-      { ...marca, current_time: marca.current_time ?? data.current_time },
-      { is_late, is_salida_anticipada }
-    );
+    // Guardar la marca en el teléfono es secundario: si falla (por ejemplo, almacenamiento lleno) la marca se muestra igual.
+    let marcaWithFlags: Record<string, unknown>;
+    try {
+      marcaWithFlags = (await persistCurrentMarcaWithFlags(
+        { ...marca, current_time: marca.current_time ?? data.current_time },
+        { is_late, is_salida_anticipada }
+      )) as Record<string, unknown>;
+    } catch (persistError) {
+      console.error('No se pudo guardar la marca en el teléfono:', persistError);
+      marcaWithFlags = { ...marca, current_time: marca.current_time ?? data.current_time, is_late, is_salida_anticipada };
+    }
+    const currentTimeMs = new Date(data.current_time).getTime();
+    const currentTimeSafe = Number.isFinite(currentTimeMs) ? currentTimeMs : now;
 
     const attendance_save = {
       estado: estado,
@@ -1304,11 +1432,17 @@ export default function MarcarIngresoSalidaScreen() {
       is_salida_anticipada,
       change_available: change_available,
       next_time: next_time.toISOString(),
-      current_time: toZonedTime(new Date(data.current_time), "America/Costa_Rica").toISOString(),
+      current_time: toZonedTime(new Date(currentTimeSafe), "America/Costa_Rica").toISOString(),
       monitoring_post_minutes: postMinutes,
       marca: marcaWithFlags as AttendanceSuccessResponse['marca'],
     } as AttendanceSuccessResponse;
     setAttendanceData(attendance_save);
+    // Desde aquí la marca está en pantalla: cualquier fallo posterior se muestra como mensaje sin ocultarla.
+    marcaMostradaRef.current = true;
+    if (isSearchingMarcaRef.current) {
+      setIsLoadingData(false);
+      setIsValidatingMarca(true);
+    }
   }
 
   const handleToggleAttendance = () => {
@@ -1674,7 +1808,7 @@ export default function MarcarIngresoSalidaScreen() {
     setIsProcessingMark(true);
     setProcessingType(type === 'salida' ? 'salida' : 'entrada');
     if (intervalRef.current) {
-      clearInterval(intervalRef.current);
+      clearTimeout(intervalRef.current);
       intervalRef.current = null;
     }
 
@@ -1883,6 +2017,7 @@ export default function MarcarIngresoSalidaScreen() {
 
     const response = await authedFetch({
       url: `${apiUrl}/api/lunch-time/${marcaId}`,
+      timeoutMs: ATTENDANCE_SEARCH_DEADLINE_MS,
       init: {
         method: 'GET',
         headers: {
@@ -1912,6 +2047,7 @@ const getActivities = async (marcaId: number) => {
     }
     const response = await authedFetch({
       url: `${apiUrl}/api/activities/marca/${marcaId}`,
+      timeoutMs: ATTENDANCE_SEARCH_DEADLINE_MS,
       init: {
         method: 'GET',
         headers: {
@@ -2671,6 +2807,17 @@ const getActivities = async (marcaId: number) => {
 
   const marcaView = attendanceData?.marca;
   const isIngresado = attendanceData?.estado === 'Ingresado';
+  /** «Tardía» solo si de verdad ya pasó la hora de inicio (más la gracia): no se fía de una bandera guardada que pudo quedar desactualizada. */
+  const tardiaVisible = marcaView
+    ? esTardiaAhora({
+        ingresada: marcaView.hora_entrada_digitada != null,
+        tieneHorario: tieneHorarioCompleto(marcaView.hora_inicio, marcaView.hora_fin),
+        diaLibre: resolveMarcaIsDiaLibre(marcaView as Record<string, unknown>),
+        inicioMs: marcaView.hora_inicio ? buildMarcaNaiveMs(marcaView.fecha, marcaView.hora_inicio) : null,
+        horaAccionMs: horaAccion != null ? Number(horaAccion) : null,
+        postMinutes: Number((attendanceData as { monitoring_post_minutes?: number } | null)?.monitoring_post_minutes ?? 0) || 0,
+      })
+    : false;
   /**
    * Fecha y hora programadas de la siguiente acción (entrada o salida). Si la marca no tiene hora de inicio o de fin no hay hora real que mostrar
    * (la que calcula el sistema es solo un respaldo): se muestra únicamente la fecha. Las horas marcadas por la persona sí se muestran completas.
@@ -2715,6 +2862,15 @@ const getActivities = async (marcaId: number) => {
             </ThemedView>
           ) : null}
 
+          {/* Aviso: se muestra el último turno guardado porque el servicio no respondió a tiempo */}
+          {usingSavedMarcaNotice && !isSearchingMarca ? (
+            <ThemedView style={[styles.messageBox, styles.messageBoxInfo]} accessibilityLiveRegion="polite">
+              <ThemedText style={[styles.messageText, styles.messageTextInfo]}>
+                El servicio está tardando en responder. Mostramos el último turno guardado en tu teléfono; se actualizará solo cuando el servicio responda.
+              </ThemedText>
+            </ThemedView>
+          ) : null}
+
           {/* 2. Fecha y hora actual (mismo estilo que Empleado y Puesto) */}
           <ThemedView style={styles.identityCard}>
             <ThemedView style={[styles.identityRow, styles.identityRowLast]}>
@@ -2753,7 +2909,7 @@ const getActivities = async (marcaId: number) => {
             <ThemedView style={styles.loadingContainer}>
               <ActivityIndicator size="large" color="#007AFF" />
               <ThemedText style={styles.loadingDataText}>
-                Cargando datos de asistencia...
+                {isSearchSlow ? ATTENDANCE_SEARCH_SLOW_MESSAGE : ATTENDANCE_LOADING_MESSAGE}
               </ThemedText>
             </ThemedView>
           ) : isSubmittingAbsentReason ? (
@@ -2869,10 +3025,16 @@ const getActivities = async (marcaId: number) => {
                 ) : null}
               </ThemedView>
 
+              {/* 7 y 8. Mensajes y botón de marcar: ocultos mientras se hacen las validaciones posteriores a obtener la marca */}
+              {isValidatingMarca ? (
+                <ThemedView style={[styles.messageBox, styles.messageBoxInfo]} accessibilityLiveRegion="polite">
+                  <ActivityIndicator size="small" color="#4B5563" />
+                  <ThemedText style={[styles.messageText, styles.messageTextInfo]}>Verificando tu ubicación y la hora...</ThemedText>
+                </ThemedView>
+              ) : (
+                <>
               {/* 7. Mensajes: avisos, errores y botones de funciones extra (debajo del estado) */}
-              {(resolveMarcaIsLate(marcaView as Record<string, unknown>) || attendanceData.is_late) &&
-                tieneHorarioCompleto(marcaView.hora_inicio, marcaView.hora_fin) &&
-                marcaView.hora_entrada_digitada == null && (
+              {tardiaVisible && (
                 <ThemedView style={[styles.messageBox, styles.messageBoxError]}>
                   <Ionicons name="alert-circle-outline" size={18} color="#B42318" />
                   <ThemedText style={[styles.messageText, styles.messageTextError]}>
@@ -3026,6 +3188,9 @@ const getActivities = async (marcaId: number) => {
                 </TouchableOpacity>
               </ThemedView>
 
+                </>
+              )}
+
               {/* 9. Ubicación del puesto (siempre disponible): mapa con la ubicación actual, coordenadas y Waze */}
               <PuestoLocationBlock ubicacion={marcaView.puesto?.ubicacion} puestoNombre={marcaView.puesto?.nombre} />
             </ThemedView>
@@ -3042,6 +3207,12 @@ const getActivities = async (marcaId: number) => {
                 <Ionicons name="refresh" size={18} color="#FFFFFF" />
                 <ThemedText style={styles.retryButtonText}>Reintentar</ThemedText>
               </TouchableOpacity>
+              {loadErrorInfo ? (
+                <TouchableOpacity style={[styles.secondaryButton, styles.locationRetryButton]} onPress={() => setIsLoadErrorModalVisible(true)} activeOpacity={0.85}>
+                  <Ionicons name="help-circle-outline" size={18} color="#007AFF" />
+                  <ThemedText style={styles.secondaryButtonText}>¿Qué puedo hacer?</ThemedText>
+                </TouchableOpacity>
+              ) : null}
             </ThemedView>
           ) : null}
 
@@ -3217,6 +3388,48 @@ const getActivities = async (marcaId: number) => {
                 )
               ) : null}
             </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
+
+      {/* Ventana de ayuda cuando no se puede cargar el turno: qué pasó y qué hacer, en lenguaje sencillo */}
+      <Modal visible={isLoadErrorModalVisible && loadErrorInfo != null} transparent animationType="fade" onRequestClose={() => setIsLoadErrorModalVisible(false)}>
+        <View style={styles.marksModalOverlay}>
+          <ThemedView style={styles.loadErrorWindow}>
+            <View style={styles.loadErrorHeader}>
+              <Ionicons name="alert-circle" size={28} color="#B42318" />
+              <ThemedText style={styles.loadErrorTitle}>{loadErrorInfo?.titulo}</ThemedText>
+            </View>
+            <ThemedText style={styles.loadErrorLabel}>Qué pasó</ThemedText>
+            <ThemedText style={styles.loadErrorText}>{loadErrorInfo?.mensaje}</ThemedText>
+            <ThemedText style={styles.loadErrorLabel}>Qué puedes hacer</ThemedText>
+            <ThemedText style={styles.loadErrorText}>{loadErrorInfo?.queHacer}</ThemedText>
+            <ThemedText style={styles.loadErrorCode}>Código para soporte: {loadErrorInfo?.code}</ThemedText>
+            <TouchableOpacity
+              style={[styles.retryButton, styles.locationRetryButton]}
+              onPress={() => {
+                setIsLoadErrorModalVisible(false);
+                void fetchAttendanceStatus();
+              }}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="refresh" size={18} color="#FFFFFF" />
+              <ThemedText style={styles.retryButtonText}>Reintentar</ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.secondaryButton, styles.locationRetryButton]}
+              onPress={() => {
+                if (!loadErrorInfo) return;
+                void Share.share({ message: attendanceLoadErrorSupportText(loadErrorInfo, { version: getAppVersionString(), fecha: formatDateTimeLine(Number(horaAccion)) }) }).catch(() => undefined);
+              }}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="share-outline" size={18} color="#007AFF" />
+              <ThemedText style={styles.secondaryButtonText}>Compartir con soporte</ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.loadErrorClose} onPress={() => setIsLoadErrorModalVisible(false)} activeOpacity={0.85}>
+              <ThemedText style={styles.loadErrorCloseText}>Cerrar</ThemedText>
+            </TouchableOpacity>
           </ThemedView>
         </View>
       </Modal>
@@ -3425,6 +3638,14 @@ const styles = StyleSheet.create({
     width: '100%',
     gap: 10,
   },
+  loadErrorWindow: { width: '100%', maxWidth: 420, alignSelf: 'center', backgroundColor: '#FFFFFF', borderRadius: 12, padding: 18, gap: 8, borderWidth: 1, borderColor: '#E0E0E0' },
+  loadErrorHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4, backgroundColor: 'transparent' },
+  loadErrorTitle: { flex: 1, fontSize: 18, fontWeight: '800', color: '#111827' },
+  loadErrorLabel: { fontSize: 12, fontWeight: '700', color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 6 },
+  loadErrorText: { fontSize: 15, lineHeight: 21, color: '#1F2937' },
+  loadErrorCode: { fontSize: 12, color: '#6B7280', marginTop: 8, marginBottom: 6 },
+  loadErrorClose: { alignItems: 'center', paddingVertical: 10 },
+  loadErrorCloseText: { color: '#6B7280', fontSize: 15, fontWeight: '600' },
   /** «Reintentar» de la ubicación: ocupa todo el ancho, igual que la caja del mensaje. */
   locationRetryButton: {
     width: '100%',
