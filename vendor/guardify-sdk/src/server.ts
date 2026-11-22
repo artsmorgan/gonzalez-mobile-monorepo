@@ -7,6 +7,11 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 
 export type Claims = { sub: string; tid: string; app: string; dev: string; sid: string; role: string | null; grants: string[]; org: string[]; exp: number };
 
+/** Permisos vigentes de una persona (`GET /api/v1/access/grants`). `governed: false` = Guardify no la tiene en la app: rige la regla de la app. */
+export type UserAccess =
+  | { governed: false; externalId: string; status?: string }
+  | { governed: true; externalId: string; status: string; role: string; grants: string[]; conditions: Record<string, Record<string, string[]>> };
+
 export type VerifierOptions = {
   baseUrl: string;
   appKey: string;
@@ -55,5 +60,12 @@ export function createVerifier(o: VerifierOptions) {
 
   const can = (c: Claims, permission: string) => c.grants.includes(permission);
 
-  return { verify, can, refreshRevocations, isRevoked: (sid: string) => revoked.has(sid), isDeviceRevoked: (id: string) => revokedDevices.has(id), minAppVersion: () => minAppVersion };
+  /** Qué puede hacer hoy una persona (por su id en la app), calculado en el momento por Guardify. Conviene guardarlo en caché unos segundos. */
+  async function accessOf(externalId: string): Promise<UserAccess> {
+    const r = await f(`${o.baseUrl}/api/v1/access/grants?externalId=${encodeURIComponent(externalId)}`, { headers: { authorization: basic } });
+    if (!r.ok) throw new Error(`grants ${r.status}`);
+    return (await r.json()) as UserAccess;
+  }
+
+  return { verify, can, accessOf, refreshRevocations, isRevoked: (sid: string) => revoked.has(sid), isDeviceRevoked: (id: string) => revokedDevices.has(id), minAppVersion: () => minAppVersion };
 }

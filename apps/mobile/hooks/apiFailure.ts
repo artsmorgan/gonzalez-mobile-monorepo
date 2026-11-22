@@ -3,7 +3,8 @@
  *
  * Antes cualquier 401/403 cerraba la sesión y un error de red devolvía `null` sin decir por qué. Ahora se separan:
  *  - `session_expired`     401: el token venció → se cierra la sesión.
- *  - `permission_denied`   403 con `code: "permission_denied"`: falta permiso en esa operación → NO se cierra la sesión.
+ *  - `permission_denied`   403 con `code: "permission_denied"` o mensaje `permission_denied|<permiso>` (permisos de Guardify en el servidor,
+ *                          fase 3 de roles): falta permiso en esa operación → NO se cierra la sesión.
  *  - `device_not_approved` 403 `device_not_approved|ESTADO|motivo`: equipo bloqueado/pendiente → pantalla de estado, NO se cierra la sesión.
  *  - `session_revoked`     403 `session_revoked|motivo` (o `code: "session_revoked"`): un administrador cerró esa sesión → se cierra con su mensaje.
  *  - `forbidden`           cualquier otro 403 (token inválido) → se cierra la sesión, como siempre.
@@ -39,7 +40,7 @@ export function classifyHttpFailure(status: number, payload: unknown): ApiFailur
 
   if (status === 401) return 'session_expired';
   if (status === 403) {
-    if (code === 'permission_denied') return 'permission_denied';
+    if (code === 'permission_denied' || /^permission_denied\|/.test(message)) return 'permission_denied';
     if (code === 'session_revoked' || parseSessionRevokedMessage(message)) return 'session_revoked';
     if (/^device_not_approved\|/.test(message)) return 'device_not_approved';
     return 'forbidden';

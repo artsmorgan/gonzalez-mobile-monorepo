@@ -10,6 +10,7 @@ import {
     parseSessionRevokedMessage as parseSessionRevokedOnApp,
     type ApiFailureKind,
 } from "../../mobile/hooks/apiFailure";
+import { buildPermissionDeniedMessage } from "./guardifyPermissions";
 import {
     RevocationCache,
     buildDeviceNotApprovedMessage,
@@ -30,6 +31,8 @@ describe("separar las causas de un fallo de la API (issue #174, H07)", () => {
     });
     it("403 con código de permiso es falta de permiso, y NO cierra la sesión", () => {
         assert.equal(classifyHttpFailure(403, { status: false, code: "permission_denied", message: "x" }), "permission_denied");
+        // permisos de Guardify en el servidor (fase 3): la ruta responde con el mensaje `permission_denied|<permiso>`, sin `code`
+        assert.equal(classifyHttpFailure(403, { status: false, expired: false, message: buildPermissionDeniedMessage("bitacora.registro-de-personas") }), "permission_denied");
         assert.equal(shouldCloseSession("permission_denied"), false);
     });
     it("403 de equipo no aprobado se distingue de un token inválido y NO cierra la sesión", () => {

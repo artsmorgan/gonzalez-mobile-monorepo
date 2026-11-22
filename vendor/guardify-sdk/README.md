@@ -55,6 +55,17 @@ const { latest, minAppVersion } = await guardify.latestApk("prod");
 
 El texto y el contacto de soporte los define la empresa en Guardify y llegan en `policy.support` (`pending`, `rejected`, `blocked`, `phone`, `email`).
 
+### Qué pantallas ve la persona
+El rol de la persona trae sus permisos (`modulo.accion`) y, para algunos, condiciones sobre datos que solo conoce la app (los declara el
+manifiesto en `context`; la empresa las ajusta en la consola, en la configuración de la app). La app informa sus datos y el SDK decide:
+
+```ts
+const ctx = { marca: tieneMarca ? "vigente" : null, division: divisionDelPuesto };
+if (guardify.allows("bitacora.registro-de-personas", ctx)) mostrarPantalla();
+```
+
+Un dato exigido que la app no informa no cumple la condición. Los cambios llegan con la siguiente renovación (`renew`).
+
 ## Uso (servidor de la app)
 
 ```ts
@@ -66,7 +77,10 @@ setInterval(() => guardify.refreshRevocations().catch(() => undefined), 30_000);
 const claims = await guardify.verify(token);   // lanza "session_revoked" o "device_not_approved"
 ```
 
+Permisos en el servidor (fase 3): `await guardify.accessOf(cedula)` → `{ governed, role, grants, conditions }`. Con `governed: true` el servidor
+usa `grants` para decidir (por ejemplo, quién puede actuar sobre registros de otras personas); con `false`, su regla de siempre.
+
 `refreshRevocations()` trae las sesiones revocadas y los equipos que dejaron de estar activos (un equipo que vuelve a `ACTIVE` se quita solo). Si Guardify no responde, conserva la última lista y no abre por defecto.
 
 ## Contratos de Guardify que usa
-`POST /api/v1/devices/register` · `GET /api/v1/devices/self` · `POST /api/v1/devices/self/heartbeat` · `GET /api/v1/devices/self/commands` · `POST /api/v1/access/verify` · `GET /api/v1/apks/latest` · `GET /api/v1/revocations` (servidor, con credencial de aplicación).
+`POST /api/v1/devices/register` · `GET /api/v1/devices/self` · `POST /api/v1/devices/self/heartbeat` · `GET /api/v1/devices/self/commands` · `POST /api/v1/access/verify` · `GET /api/v1/apks/latest` · `GET /api/v1/revocations` y `GET /api/v1/access/grants` (servidor, con credencial de aplicación).

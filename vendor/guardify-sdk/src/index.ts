@@ -35,6 +35,22 @@ export type Policy = {
   /** Texto y contacto de soporte que la empresa quiere mostrar en las pantallas de pendiente, rechazado y bloqueado (Ajustes → Dispositivos). */
   support?: { pending?: string; rejected?: string; blocked?: string; phone?: string; email?: string };
 };
+/** Condición de cada permiso (`modulo.accion` → dato → valores permitidos). La decide Guardify; la app la evalúa con sus datos del momento. */
+export type Conditions = Record<string, Record<string, string[]>>;
+/** Datos del momento que la app informa para evaluar las condiciones (ej. `{ division: "Seguridad", marca: "vigente" }`). */
+export type ScreenContext = Record<string, string | null | undefined>;
+
+const normCtx = (v: string) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+
+/** ¿Se cumplen las condiciones? Cada dato exigido debe tener uno de los valores; un dato que la app no informa no cumple. */
+export function conditionsMet(when: Record<string, string[]> | undefined, ctx: ScreenContext): boolean {
+  if (!when) return true;
+  return Object.entries(when).every(([k, allowed]) => {
+    const v = ctx[k];
+    return v != null && v !== "" && allowed.some((a) => normCtx(a) === normCtx(String(v)));
+  });
+}
+
 export type DeviceStatus = "PENDING" | "ACTIVE" | "BLOCKED" | "RETIRED" | "REJECTED";
 
 export type SdkState =
@@ -59,7 +75,7 @@ type Persisted = {
   status?: DeviceStatus;
   statusReason?: string | null;
   policy?: Policy;
-  session?: { id: string; refreshToken: string; accessToken: string; expMs: number; grants: string[]; role: string | null; externalUserId: string; units: string[] | null; mustChangePassword?: boolean };
+  session?: { id: string; refreshToken: string; accessToken: string; expMs: number; grants: string[]; role: string | null; externalUserId: string; units: string[] | null; mustChangePassword?: boolean; conditions?: Conditions };
   /** Ancla de tiempo: hora del servidor y reloj monótono en el último contacto exitoso (OFF-04). */
   sync?: { serverMs: number; mono: number };
 };
@@ -206,7 +222,7 @@ export class GuardifyDevice {
   async login(externalUserId: string) {
     const r = await this.call<any>("POST", "/api/v1/access/verify", { externalUserId });
     await this.storeSession(r, externalUserId);
-    return r as { permissions: string[]; role: { name: string }; units: string[] | null; sessionId: string; accessToken: string; policy: Policy };
+    return r as { permissions: string[]; conditions: Conditions; role: { name: string }; units: string[] | null; sessionId: string; accessToken: string; policy: Policy };
   }
 
   /**
@@ -217,7 +233,7 @@ export class GuardifyDevice {
     const r = await this.call<any>("POST", "/api/v1/access/login", { externalUserId, secret });
     await this.storeSession(r, externalUserId);
     if (this.p.session) { this.p.session.mustChangePassword = !!r.mustChangePassword; await this.save(); }
-    return r as { permissions: string[]; role: { name: string }; units: string[] | null; sessionId: string; accessToken: string; policy: Policy; mustChangePassword: boolean; passwordChange: "sdk" | "console" | "ambos" | "ninguno" };
+    return r as { permissions: string[]; conditions: Conditions; role: { name: string }; units: string[] | null; sessionId: string; accessToken: string; policy: Policy; mustChangePassword: boolean; passwordChange: "sdk" | "console" | "ambos" | "ninguno" };
   }
 
   /** La persona cambia su propia contraseña de esta app. La empresa decide si se permite por SDK; si no, el error lo dice. */
@@ -271,7 +287,7 @@ export class GuardifyDevice {
 
   private async storeSession(r: any, externalUserId: string) {
     const payload = JSON.parse(Buffer_from(r.accessToken.split(".")[1]));
-    this.p.session = { id: r.sessionId, refreshToken: r.refreshToken, accessToken: r.accessToken, expMs: payload.exp * 1000, grants: r.permissions, role: r.role?.name ?? null, externalUserId, units: r.units ?? null };
+    this.p.session = { id: r.sessionId, refreshToken: r.refreshToken, accessToken: r.accessToken, expMs: payload.exp * 1000, grants: r.permissions, role: r.role?.name ?? null, externalUserId, units: r.units ?? null, conditions: r.conditions ?? {} };
     this.p.policy = r.policy;
     this.p.status = "ACTIVE";
     await this.save();
@@ -336,6 +352,17 @@ export class GuardifyDevice {
   }
 
   get grants() { return this.p.session?.grants ?? []; }
+  /** Condiciones de los permisos otorgados (división, marca…), tal como las fijó Guardify. */
+  get conditions(): Conditions { return this.p.session?.conditions ?? {}; }
+  /**
+   * ¿Puede ver esta pantalla con los datos de este momento? Exige el permiso y que se cumplan sus condiciones. Usa la sesión guardada
+   * aunque el permiso de uso haya vencido sin conexión (decidir si se puede operar es `canRun`); sin sesión, no.
+   */
+  allows(permission: string, ctx: ScreenContext = {}): boolean {
+    const s = this.p.session;
+    if (!s || !s.grants.includes(permission)) return false;
+    return conditionsMet(s.conditions?.[permission], ctx);
+  }
   /** Unidades del árbol que esta persona puede ver (las resuelve Guardify); null = toda la empresa. */
   get units() { return this.p.session?.units ?? null; }
   /** ¿Puede ver lo que pertenece a esta unidad? Filtra siempre con esto, nunca con reglas propias de la app. */

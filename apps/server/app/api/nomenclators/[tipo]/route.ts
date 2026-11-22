@@ -29,7 +29,7 @@ import {
     fetchSuperAdminsList,
     parseSuperAdminCreatePayload,
 } from "../../../../utils/nomenclatorsSuperAdmins";
-import { isSuperAdminEmpleado } from "../../../../utils/isSuperAdminEmpleado";
+import { isAdminFor } from "../../../../utils/isSuperAdminEmpleado";
 import { reportError } from "../../../../utils/reportError";
 
 async function requireCallerSuperAdmin(req: NextRequest, payload: any, method: string): Promise<NextResponse | null> {
@@ -38,8 +38,8 @@ async function requireCallerSuperAdmin(req: NextRequest, payload: any, method: s
         await reportError(req, "api/nomenclators/[tipo]", method, 403, "Usuario no autorizado");
         return NextResponse.json({ status: false, message: "Usuario no autorizado" }, { status: 403 });
     }
-    const ok = await isSuperAdminEmpleado(req, empleadoId);
-    if (!ok) {
+    const ok = await isAdminFor(req, empleadoId, "administracion.super-admins");
+    if (!ok, "administracion.super-admins") {
         await reportError(req, "api/nomenclators/[tipo]", method, 403, "Se requiere rol SUPER_ADMIN para administrar este nomenclador");
         return NextResponse.json(
             { status: false, message: "Se requiere rol SUPER_ADMIN para administrar este nomenclador" },

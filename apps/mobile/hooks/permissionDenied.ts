@@ -4,6 +4,9 @@
  */
 export const PERMISSION_DENIED_CODE = 'permission_denied';
 
+/** También `message = permission_denied|<permiso>`: así responden las rutas cuando Guardify niega el permiso (fase 3 de roles). */
 export function isPermissionDeniedPayload(body: unknown): boolean {
-  return !!body && typeof body === 'object' && (body as { code?: unknown }).code === PERMISSION_DENIED_CODE;
+  if (!body || typeof body !== 'object') return false;
+  const b = body as { code?: unknown; message?: unknown };
+  return b.code === PERMISSION_DENIED_CODE || /^permission_denied\|/.test(String(b.message ?? ''));
 }

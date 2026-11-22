@@ -1,6 +1,8 @@
 import { NextRequest } from "next/server";
 import axios from "axios";
 import { guardifyDeviceGate } from "./guardifyDevices";
+import { guardifyRouteGate } from "./guardifyPermissions";
+import { serverPermissionDeps } from "./guardifyPermissionDeps";
 
 type VerifyTokenResponse = {
     valid: boolean;
@@ -49,6 +51,10 @@ export async function verifyAccessTokenByApi(req: NextRequest): Promise<VerifyTo
     if (result.valid) {
         const denied = await guardifyDeviceGate({ payload: result.payload, route: req.nextUrl?.pathname, method: req.method, stage: "request", appVersion: req.headers.get("x-app-version") });
         if (denied) return { valid: false, expired: false, payload: null, message: denied };
+        // Permisos de Guardify (fase 3 de roles): las escrituras de cada pantalla exigen su permiso. En `off` (por defecto) no hace nada; en `on`
+        // corta con 403 `permission_denied|<permiso>`, que la app trata como falta de permiso SIN cerrar la sesión.
+        const forbidden = await guardifyRouteGate({ payload: result.payload, route: req.nextUrl?.pathname, method: req.method }, serverPermissionDeps);
+        if (forbidden) return { valid: false, expired: false, payload: null, message: forbidden };
     }
 
     return result;

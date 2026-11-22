@@ -1,6 +1,8 @@
 import { NextRequest } from "next/server";
 import { callDynamicPrisma } from "./callDynamicPrisma";
 import { prisma } from "./prismaClient";
+import { guardifyAdmin } from "./guardifyPermissions";
+import { serverPermissionDeps } from "./guardifyPermissionDeps";
 
 /** Verifica si el empleado figura en `n_employees_superadmin` por cédula. */
 export async function isSuperAdminEmpleado(req: NextRequest, empleadoId: number): Promise<boolean> {
@@ -24,4 +26,12 @@ export async function isSuperAdminEmpleado(req: NextRequest, empleadoId: number)
   });
 
   return Boolean(row);
+}
+
+/**
+ * ¿Puede administrar esto? Con `GUARDIFY_PERMISSIONS=on` lo decide el permiso de Guardify (fase 3 de roles); sin la variable, o si Guardify no
+ * tiene a la persona, sigue siendo «figura en `n_employees_superadmin`» (ver `utils/guardifyPermissions.ts`).
+ */
+export function isAdminFor(req: NextRequest, empleadoId: number, permission: string): Promise<boolean> {
+  return guardifyAdmin({ empleadoId, permission, legacy: () => isSuperAdminEmpleado(req, empleadoId), route: req.nextUrl?.pathname }, serverPermissionDeps);
 }

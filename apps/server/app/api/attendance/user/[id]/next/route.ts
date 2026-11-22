@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { depurarMarcasPorDia } from "../../../../../../utils/marcasDelDia";
 import { authorizeSelfOrAdmin, denialBody } from "../../../../../../utils/objectAccess";
-import { isSuperAdminEmpleado } from "../../../../../../utils/isSuperAdminEmpleado";
+import { isAdminFor } from "../../../../../../utils/isSuperAdminEmpleado";
+import { PERM_REGISTROS_DE_OTROS } from "../../../../../../utils/guardifyPermissions";
 import { toZonedTime } from "date-fns-tz";
 import axios from "axios";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
@@ -53,7 +54,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
     }
     // Issue #181: solo la propia persona o un administrador.
-    const access = await authorizeSelfOrAdmin({ callerId: payload.id, targetId: empleadoId, isAdmin: () => isSuperAdminEmpleado(req, Number(payload.id)) });
+    const access = await authorizeSelfOrAdmin({ callerId: payload.id, targetId: empleadoId, isAdmin: () => isAdminFor(req, Number(payload.id), PERM_REGISTROS_DE_OTROS) });
     if (!access.allowed) { return NextResponse.json(denialBody(access), { status: access.status }); }
 
     const planillasToken =
