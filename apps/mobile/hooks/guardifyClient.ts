@@ -26,6 +26,7 @@ import getHoraAccion from './getHoraAccion';
 import { readLastLocationFromStorage } from './updateLastLocation';
 import { parseLocationTimeMs } from './evidenceHeaders';
 import { getGuardifyIdentity, setGuardifyIdentity } from './guardifyIdentity';
+import type { GuardifyAccess } from './guardifyMenu';
 import {
   apkFileName,
   appendLivePoints,
@@ -78,6 +79,8 @@ export type GuardifySnapshot = {
   wipe: { reason: WipeReason; orderedAt: number; deadlineAt: number; pending: number } | null;
   /** Consentimiento de la persona para enviar la ubicación del equipo a Guardify; null = todavía no se le preguntó. */
   locationConsent: LocationConsent | null;
+  /** Rol, permisos y condiciones de la sesión de Guardify (fase 2: el menú los usa en vez de las reglas propias). null = sin sesión. */
+  access: GuardifyAccess | null;
 };
 
 export type GuardifyHandlers = {
@@ -108,6 +111,7 @@ let snapshot: GuardifySnapshot = {
   error: null,
   wipe: null,
   locationConsent: null,
+  access: null,
 };
 const listeners = new Set<() => void>();
 
@@ -153,6 +157,10 @@ function currentAppVersion(): string {
 
 function publishIdentity(): void {
   setGuardifyIdentity({ deviceId: client?.deviceId, sessionId: client?.session?.id });
+  const s = client?.session;
+  const access: GuardifyAccess | null = s ? { externalUserId: s.externalUserId, role: s.role, grants: s.grants ?? [], conditions: s.conditions ?? {} } : null;
+  // Solo se avisa si cambió algo: el menú se vuelve a dibujar con los permisos nuevos (p. ej. tras una renovación).
+  if (JSON.stringify(access) !== JSON.stringify(snapshot.access)) patch({ access });
 }
 
 function friendlyError(e: unknown): string {
