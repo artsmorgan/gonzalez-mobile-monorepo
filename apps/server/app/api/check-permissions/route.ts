@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizeSelfOrAdmin, denialBody } from "../../../utils/objectAccess";
-import { isSuperAdminEmpleado } from "../../../utils/isSuperAdminEmpleado";
+import { isAdminFor } from "../../../utils/isSuperAdminEmpleado";
+import { PERM_REGISTROS_DE_OTROS } from "../../../utils/guardifyPermissions";
 import { actions } from "../../../public/actions";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
@@ -21,7 +22,7 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ message: "Usuario no especificado" }, { status: 400 });
         }
         // Issue #181: solo la propia persona o un administrador.
-        const access = await authorizeSelfOrAdmin({ callerId: payload.id, targetId: id, isAdmin: () => isSuperAdminEmpleado(request, Number(payload.id)) });
+        const access = await authorizeSelfOrAdmin({ callerId: payload.id, targetId: id, isAdmin: () => isAdminFor(request, Number(payload.id), PERM_REGISTROS_DE_OTROS) });
         if (!access.allowed) { return NextResponse.json(denialBody(access), { status: access.status }); }
         const empleado = await prisma.c_empleado.findUnique({ where: { id: parseInt(id ?? "0") } });
         if (!empleado) {

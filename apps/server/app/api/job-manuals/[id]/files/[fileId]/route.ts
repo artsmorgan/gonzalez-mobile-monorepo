@@ -6,7 +6,8 @@ import { deleteDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
 import { prisma } from "../../../../../../utils/prismaClient";
 import { reportError } from "../../../../../../utils/reportError";
 import { auditUpdateFields } from "../../../../../../utils/auditFields";
-import { isSuperAdminEmpleado } from "../../../../../../utils/isSuperAdminEmpleado";
+import { isAdminFor } from "../../../../../../utils/isSuperAdminEmpleado";
+import { PERM_REGISTROS_DE_OTROS } from "../../../../../../utils/guardifyPermissions";
 import { autorizarGestionManual, cuerpoDenegado } from "../../../../../../utils/documentos/permisosEdicion";
 import { rolDeMarca } from "../../../../../../utils/documentos/rolDeMarca";
 
@@ -40,7 +41,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
             callerId: payload?.id,
             marca,
             roleNameOfMarca: (m) => rolDeMarca(req, m),
-            isAdmin: () => isSuperAdminEmpleado(req, Number(payload?.id)),
+            isAdmin: () => isAdminFor(req, Number(payload?.id), PERM_REGISTROS_DE_OTROS),
         });
         if (!decision.allowed) {
             await reportError(req, ENDPOINT, "DELETE", decision.status, decision.message);

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
-import { isSuperAdminEmpleado } from "../../../../utils/isSuperAdminEmpleado";
+import { isAdminFor } from "../../../../utils/isSuperAdminEmpleado";
 import { reportError } from "../../../../utils/reportError";
 
 const parseIntStrict = (value: unknown): number | null => {
@@ -21,8 +21,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       await reportError(req, "api/modules-release/[id]", "PUT", 403, "Usuario no autorizado");
       return NextResponse.json({ status: false, message: "Usuario no autorizado" }, { status: 403 });
     }
-    const superAdmin = await isSuperAdminEmpleado(req, empleadoId);
-    if (!superAdmin) {
+    const superAdmin = await isAdminFor(req, empleadoId, "administracion.visibilidad-de-modulos");
+    if (!superAdmin, "administracion.visibilidad-de-modulos") {
       await reportError(req, "api/modules-release/[id]", "PUT", 403, "Se requiere rol SUPER_ADMIN para modificar visibilidad de módulos");
       return NextResponse.json(
         { status: false, message: "Se requiere rol SUPER_ADMIN para modificar visibilidad de módulos" },

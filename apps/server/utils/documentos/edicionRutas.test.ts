@@ -25,7 +25,8 @@ describe("rutas de edición de documentos: el cableado que no se puede romper", 
         antes(edit, "autorizarGestionManual(", "uploadDynamicFiles(");
         antes(edit, "autorizarGestionManual(", "aplicarEdicionManual(");
         assert.match(edit, /roleNameOfMarca: \(m\) => rolDeMarca\(req, m\)/);
-        assert.match(edit, /isAdmin: \(\) => isSuperAdminEmpleado\(req, Number\(payload\?\.id\)\)/);
+        // súper admin, o con Guardify encendido el permiso «registros de otros» (fase 3 de roles, `utils/guardifyPermissions.ts`)
+        assert.match(edit, /isAdmin: \(\) => isAdminFor\(req, Number\(payload\?\.id\), PERM_REGISTROS_DE_OTROS\)/);
     });
     it("editar: el quiz modificado sin nueva versión se rechaza ANTES de subir archivos, y los archivos huérfanos se limpian si algo falla", () => {
         antes(edit, "quiz_requires_new_version", "uploadDynamicFiles(");

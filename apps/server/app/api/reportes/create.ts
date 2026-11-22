@@ -22,7 +22,8 @@ import {
 import { purgeOldMobileReports } from "../../../utils/purgeOldMobileReports";
 import { authorizeReportesOperation } from "../../../utils/reportesAccess";
 import { slimRefreshTokenRow } from "../../../utils/reportesUserLogin";
-import { isSuperAdminEmpleado } from "../../../utils/isSuperAdminEmpleado";
+import { isAdminFor } from "../../../utils/isSuperAdminEmpleado";
+import { PERM_REGISTROS_DE_OTROS } from "../../../utils/guardifyPermissions";
 import { DEFAULT_REPORT_MAX_ATTEMPTS } from "../../../utils/reportJobQueue";
 import { drainPendingReportJobs } from "../../../utils/runReportJobCycle";
 import { signalReportWorkerActivity } from "../../../utils/reportWorkerSchedule";
@@ -620,8 +621,8 @@ export async function executeReportesOperation(
         // Control de acceso por operación (issue #169): lo que no esté en la tabla de `utils/reportesAccess.ts` se deniega.
         const access = await authorizeReportesOperation(op, {
             empleadoId: auth.empleadoId,
-            isAdmin: () => isSuperAdminEmpleado(req, auth.empleadoId),
-        });
+            isAdmin: () => isAdminFor(req, auth.empleadoId, PERM_REGISTROS_DE_OTROS),
+        }, PERM_REGISTROS_DE_OTROS);
         if (!access.ok) {
             return { status: false, message: access.message, httpStatus: access.httpStatus };
         }

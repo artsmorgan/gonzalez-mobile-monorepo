@@ -6,7 +6,8 @@ import { uploadDynamicFiles, deleteDynamicFile } from "../../../../../utils/call
 import { prisma } from "../../../../../utils/prismaClient";
 import { reportError } from "../../../../../utils/reportError";
 import { auditUpdateFields } from "../../../../../utils/auditFields";
-import { isSuperAdminEmpleado } from "../../../../../utils/isSuperAdminEmpleado";
+import { isAdminFor } from "../../../../../utils/isSuperAdminEmpleado";
+import { PERM_REGISTROS_DE_OTROS } from "../../../../../utils/guardifyPermissions";
 import { fetchActivePlazaIdsForPuestos, sendNotificationByEmployee, sendNotificationByPlaza } from "../../../../../utils/sendNotification";
 import { dynDesdeRequest } from "../../../../../utils/documentos/dyn";
 import { aplicarEdicionManual, destinatariosDelDocumento, EdicionError, mensajeNuevaVersion, MENSAJE_QUIZ_REQUIERE_VERSION, quizCambio, validarEdicion } from "../../../../../utils/documentos/edicion";
@@ -48,7 +49,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             callerId: payload?.id,
             marca,
             roleNameOfMarca: (m) => rolDeMarca(req, m),
-            isAdmin: () => isSuperAdminEmpleado(req, Number(payload?.id)),
+            isAdmin: () => isAdminFor(req, Number(payload?.id), PERM_REGISTROS_DE_OTROS),
         });
         if (!decision.allowed) {
             await reportError(req, ENDPOINT, "PUT", decision.status, decision.message);

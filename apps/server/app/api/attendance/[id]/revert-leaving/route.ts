@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizeMarcaAccess, denialBody } from "../../../../../utils/objectAccess";
-import { isSuperAdminEmpleado } from "../../../../../utils/isSuperAdminEmpleado";
+import { isAdminFor } from "../../../../../utils/isSuperAdminEmpleado";
+import { PERM_REGISTROS_DE_OTROS } from "../../../../../utils/guardifyPermissions";
 import { prisma } from "../../../../../utils/prismaClient";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { reportError } from "../../../../../utils/reportError";
@@ -51,7 +52,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Marca del dia no encontrada" }, { status: 404 });
         }
         // Issue #181: la marca es de su titular o de quien lo reemplaza (o de un administrador).
-        const access = await authorizeMarcaAccess({ callerId: payload.id, marca: marcaDia, isAdmin: () => isSuperAdminEmpleado(req, Number(payload.id)) });
+        const access = await authorizeMarcaAccess({ callerId: payload.id, marca: marcaDia, isAdmin: () => isAdminFor(req, Number(payload.id), PERM_REGISTROS_DE_OTROS) });
         if (!access.allowed) { return NextResponse.json(denialBody(access), { status: access.status }); }
 
         if (!marcaDia.empleadoFijo_id) {

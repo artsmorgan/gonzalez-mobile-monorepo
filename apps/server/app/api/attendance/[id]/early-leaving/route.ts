@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorizeSelfOrAdmin, denialBody } from "../../../../../utils/objectAccess";
-import { isSuperAdminEmpleado } from "../../../../../utils/isSuperAdminEmpleado";
+import { isAdminFor } from "../../../../../utils/isSuperAdminEmpleado";
+import { PERM_REGISTROS_DE_OTROS } from "../../../../../utils/guardifyPermissions";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
@@ -14,7 +15,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
         // Issue #181: solo la propia persona o un administrador.
-        const access = await authorizeSelfOrAdmin({ callerId: payload.id, targetId: id, isAdmin: () => isSuperAdminEmpleado(req, Number(payload.id)) });
+        const access = await authorizeSelfOrAdmin({ callerId: payload.id, targetId: id, isAdmin: () => isAdminFor(req, Number(payload.id), PERM_REGISTROS_DE_OTROS) });
         if (!access.allowed) { return NextResponse.json(denialBody(access), { status: access.status }); }
 
         const searchParams = req.nextUrl.searchParams;
