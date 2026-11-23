@@ -66,6 +66,15 @@ if (guardify.allows("bitacora.registro-de-personas", ctx)) mostrarPantalla();
 
 Un dato exigido que la app no informa no cumple la condición. Los cambios llegan con la siguiente renovación (`renew`).
 
+### Servidor de la app
+La empresa puede elegir en Guardify el servidor con el que trabaja la app. Llega en la política; la app lo valida contra una lista fija de su build:
+
+```ts
+const ALLOWED = ["gonzalez-mobile-server-production.up.railway.app"]; // en el build, nunca desde la red
+const baseUrl = guardify.serverUrl({ allowedHosts: ALLOWED, fallback: BUILD_SERVER_URL });
+if (baseUrl !== ultimaUsada) { await cerrarSesionYBorrarDatosLocales(); guardarUltimaUsada(baseUrl); }
+```
+
 ## Uso (servidor de la app)
 
 ```ts

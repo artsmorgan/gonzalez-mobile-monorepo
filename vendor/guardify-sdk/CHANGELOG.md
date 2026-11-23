@@ -1,5 +1,8 @@
 # Cambios del SDK
 
+## 0.7.0 — 2026-11-23
+- URL del servidor de la app desde Guardify: la política trae `serverUrl` cuando la empresa la define en Apps → Configuración → «Servidor de la app». `serverUrl({ allowedHosts, fallback })` (o `pickServerUrl`) la devuelve solo si es https y su dominio está en la lista fija del build; si no, la del build. Si cambia respecto a la última usada, la app cierra su sesión y borra sus datos locales antes de usar la nueva.
+
 ## 0.6.0 — 2026-11-22
 - Servidor de la app: `createVerifier(...).accessOf(externalId)` consulta `GET /api/v1/access/grants` y trae el rol, los permisos y las condiciones vigentes de una persona (calculados en el momento). Con eso el servidor hace cumplir los mismos permisos que la app muestra en el menú. `governed: false` = Guardify no tiene a esa persona en la app.
 
