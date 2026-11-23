@@ -229,7 +229,7 @@ module.exports = ({ config }) => {
           process.env.NEXT_PUBLIC_API_SERVER ||
           // test https://api-gonzalez-mobile-monorepo-production.up.railway.app
           // prod https://gonzalez-mobile-server-production.up.railway.app
-          "https://greensboro-optimum-bend-prefix.trycloudflare.com",
+          "https://api-gonzalez-mobile-monorepo-production.up.railway.app",
         /** Debe coincidir con `MOBILE_ACCESS_TOKEN` del servidor (query en `/api/main-structure`). */
         MOBILE_ACCESS_TOKEN:
           process.env.EXPO_PUBLIC_MOBILE_ACCESS_TOKEN ||
@@ -241,9 +241,9 @@ module.exports = ({ config }) => {
          * no puede salir apuntando a Guardify ni a un cliente fijo. Para encenderlo: `EXPO_PUBLIC_GUARDIFY_ENABLED=true` y
          * `EXPO_PUBLIC_GUARDIFY_URL` en el perfil, y recompilar (ver docs/guardify/compilar-apk-pruebas.md).
          */
-        GUARDIFY_ENABLED: process.env.EXPO_PUBLIC_GUARDIFY_ENABLED || process.env.GUARDIFY_ENABLED || "",
+        GUARDIFY_ENABLED: process.env.EXPO_PUBLIC_GUARDIFY_ENABLED || process.env.GUARDIFY_ENABLED || "true",
         /** Sin valor por defecto: la URL de Guardify (staging o producción) se define en el perfil de EAS. */
-        GUARDIFY_URL: process.env.EXPO_PUBLIC_GUARDIFY_URL || process.env.GUARDIFY_URL || "",
+        GUARDIFY_URL: process.env.EXPO_PUBLIC_GUARDIFY_URL || process.env.GUARDIFY_URL || "https://guardifyconsole-production.up.railway.app",
         /** Cada cuántos segundos manda el equipo su latido (batería y ubicación con permiso). Vacío = 300 (5 min); mínimo 30. */
         GUARDIFY_HEARTBEAT_SECONDS: process.env.EXPO_PUBLIC_GUARDIFY_HEARTBEAT_SECONDS || process.env.GUARDIFY_HEARTBEAT_SECONDS || 60,
         GUARDIFY_APP_KEY: process.env.EXPO_PUBLIC_GUARDIFY_APP_KEY || process.env.GUARDIFY_APP_KEY || "monitoreapp",
@@ -251,7 +251,7 @@ module.exports = ({ config }) => {
          * Código de empresa embebido. Sin valor por defecto: la app es multicliente; si el perfil no lo trae, la persona lo escribe al registrar
          * el equipo (pantalla de registro de Guardify).
          */
-        GUARDIFY_COMPANY_CODE: process.env.EXPO_PUBLIC_GUARDIFY_COMPANY_CODE || process.env.GUARDIFY_COMPANY_CODE || "",
+        GUARDIFY_COMPANY_CODE: process.env.EXPO_PUBLIC_GUARDIFY_COMPANY_CODE || process.env.GUARDIFY_COMPANY_CODE || "corporacion-gonzalez",
         /** Variante con la que se evaluó esta configuración (la app usa la real, del paquete nativo: ver hooks/appVariant.ts). */
         APP_VARIANT: variant,
         /** Información de versión de la build según el entorno de construcción. */

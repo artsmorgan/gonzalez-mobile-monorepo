@@ -57,7 +57,7 @@ const AUTH_MARKERS: Array<{ name: string; re: RegExp }> = [
     { name: "verifyMobileAccessToken", re: /\bverifyMobileAccessToken\s*\(/ },
     { name: "verifyMainStructureAccess", re: /\bverifyMainStructureAccess\s*\(/ },
     // Llave de servidor a servidor de Guardify: la comprueba cada manejador con `verifyGuardifyApiKey` (lo exige routeAudit.test.ts).
-    { name: "guardify-key", re: /\bhandle(ActionDetail|ActionExecute|LookupEmpleado|Import|DbStatus|EnviarDocumento|TerminarAsignacion|VistaPreviaDocumento|PublicarDocumento|EvidenceVerification|GuardifyReport|GuardifyForms|GuardifyStructure)\b/ },
+    { name: "guardify-key", re: /\bhandle(ActionDetail|ActionExecute|LookupEmpleado|Import|DbStatus|EnviarDocumento|TerminarAsignacion|VistaPreviaDocumento|PublicarDocumento|EvidenceVerification|GuardifyReport|GuardifyForms|GuardifyStructure|GuardifyPeopleRoles)\b/ },
 ];
 
 /** La ruta reenvía la petición (con el token del usuario) a la API dinámica, que es quien lo verifica. */

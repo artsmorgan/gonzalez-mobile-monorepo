@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start:web": "next start",
+    "test": "node scripts/runTests.mjs",
     "start": "npx prisma db pull && npx prisma generate && node scripts/startWithWorker.mjs",
     "worker:reports": "tsx scripts/reportWorker.ts",
     "dev:worker": "tsx scripts/reportWorker.ts",

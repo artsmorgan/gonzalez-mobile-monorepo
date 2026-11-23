@@ -4,7 +4,7 @@ import { verifyGuardifyApiKey } from "./auth";
  * Rol base de cada persona en MonitoreApp, para que Guardify lo sugiera al darle acceso (decisión del 20 nov 2026: MonitoreApp es la base y
  * Guardify hace override). Es el MISMO cálculo que `/api/check-permissions` y el menú de la app: la categoría de empleado de cada plaza
  * (pg_categoria_empleado.codigo) da OPERATIVO / SUPERVISOR / ADMINISTRATIVO por división; además dice si es súper administrador
- * (`n_employees_superadmin`). Solo lectura, misma llave que los reportes. No devuelve nombres ni otros datos personales.
+ * (`n_employees_superadmin`; solo si la persona está activa). Solo lectura, misma llave que los reportes. No devuelve nombres ni otros datos personales.
  */
 export type BaseRole = "OPERATIVO" | "SUPERVISOR" | "ADMINISTRATIVO";
 export type PersonRoles = { cedula: string; found: boolean; superAdmin: boolean; base: BaseRole | null; byDivision: { divisionId: number; division: string; role: BaseRole }[] };
@@ -30,14 +30,21 @@ export function pickBaseRole(roles: BaseRole[]): BaseRole | null {
 
 /**
  * `n_employees_superadmin` no está en el esquema Prisma: se lee por la vía dinámica (como `isSuperAdminEmpleado`). Si esa vía no acepta
- * `in`, se consulta cédula por cédula.
+ * `in`, se consulta cédula por cédula, en lotes de `FALLBACK_BATCH` a la vez: hasta 200 consultas simultáneas a la vía dinámica en plena falla
+ * la cargarían más.
  */
+export const FALLBACK_BATCH = 10;
+
 async function superAdmins(db: any, cedulas: string[]): Promise<any[]> {
     try {
         return await db.n_employees_superadmin.findMany({ where: { employee_cedula: { in: cedulas } }, select: { employee_cedula: true } });
     } catch {
-        const rows = await Promise.all(cedulas.map((c) => db.n_employees_superadmin.findFirst({ where: { employee_cedula: c } })));
-        return rows.filter(Boolean);
+        const found: any[] = [];
+        for (let i = 0; i < cedulas.length; i += FALLBACK_BATCH) {
+            const rows = await Promise.all(cedulas.slice(i, i + FALLBACK_BATCH).map((c) => db.n_employees_superadmin.findFirst({ where: { employee_cedula: c } })));
+            found.push(...rows.filter(Boolean));
+        }
+        return found;
     }
 }
 
@@ -97,7 +104,8 @@ export async function handleGuardifyPeopleRoles(req: Request, deps: PeopleRolesD
                     if (!byDivision.some((b) => b.divisionId === divisionId && b.role === role)) byDivision.push({ divisionId, division: divName.get(divisionId)!, role });
                 }
             }
-            return { cedula, found: id !== undefined, superAdmin: superSet.has(cedula), base: pickBaseRole(byDivision.map((b) => b.role)), byDivision };
+            // Una persona de baja o desconocida sale `found: false` y no se reporta como súper administrador (aunque siga en la tabla).
+            return { cedula, found: id !== undefined, superAdmin: id !== undefined && superSet.has(cedula), base: pickBaseRole(byDivision.map((b) => b.role)), byDivision };
         });
         console.log(JSON.stringify({ level: "info", msg: "guardify_people_roles", asked: cedulas.length, found: people.filter((p) => p.found).length, user: auth.user }));
         return json({ people });

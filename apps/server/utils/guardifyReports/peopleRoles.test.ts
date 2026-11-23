@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { handleGuardifyPeopleRoles, parseCedulas, pickBaseRole, roleFromCategoria, MAX_CEDULAS } from "./peopleRoles";
+import { handleGuardifyPeopleRoles, parseCedulas, pickBaseRole, roleFromCategoria, FALLBACK_BATCH, MAX_CEDULAS } from "./peopleRoles";
 
 // Estructuras de la propia prueba (ids y cédulas sintéticas), sin registros de negocio.
 const KEY = "k".repeat(40);
@@ -21,7 +21,7 @@ const db = (superFail = false) => ({
     n_division: table([{ id: 1, nombre: "Seguridad" }, { id: 2, nombre: "Administrativos" }]),
     n_employees_superadmin: superFail
         ? { findMany: async () => { throw new Error("in no soportado"); }, findFirst: async ({ where }: any) => (where.employee_cedula === "100000002" ? { employee_cedula: "100000002" } : null) }
-        : table([{ employee_cedula: "100000002" }]),
+        : table([{ employee_cedula: "100000002" }, { employee_cedula: "100000003" }]),
 });
 const call = (qs: string, headers: Record<string, string> = { authorization: `Bearer ${KEY}` }, d = db()) =>
     handleGuardifyPeopleRoles(new Request(`http://x/api/guardify/people/roles?${qs}`, { headers }), { getDb: () => d, env });
@@ -52,7 +52,7 @@ describe("roles base para Guardify", () => {
         assert.deepEqual(people, [
             { cedula: "100000001", found: true, superAdmin: false, base: "SUPERVISOR", byDivision: [{ divisionId: 1, division: "Seguridad", role: "OPERATIVO" }, { divisionId: 2, division: "Administrativos", role: "SUPERVISOR" }] },
             { cedula: "100000002", found: true, superAdmin: true, base: "ADMINISTRATIVO", byDivision: [{ divisionId: 2, division: "Administrativos", role: "ADMINISTRATIVO" }] },
-            { cedula: "100000003", found: false, superAdmin: false, base: null, byDivision: [] }, // de baja: como si no existiera
+            { cedula: "100000003", found: false, superAdmin: false, base: null, byDivision: [] }, // de baja: como si no existiera (aunque figure como súper admin)
             { cedula: "100000004", found: true, superAdmin: false, base: null, byDivision: [] }, // sin plaza válida: sin rol base
             { cedula: "999", found: false, superAdmin: false, base: null, byDivision: [] },
         ]);
@@ -60,5 +60,25 @@ describe("roles base para Guardify", () => {
     it("si la vía dinámica no acepta `in`, consulta súper admins de a uno", async () => {
         const { people } = await (await call("cedulas=100000001,100000002", undefined, db(true))).json();
         assert.deepEqual(people.map((p: any) => p.superAdmin), [false, true]);
+    });
+    it("una persona de baja no se reporta como súper administrador aunque siga en la tabla", async () => {
+        const { people } = await (await call("cedulas=100000003")).json();
+        assert.deepEqual(people, [{ cedula: "100000003", found: false, superAdmin: false, base: null, byDivision: [] }]);
+    });
+    it("el respaldo consulta por lotes pequeños de cédulas, no todas a la vez", async () => {
+        let enCurso = 0;
+        let maximo = 0;
+        const d: any = db(true);
+        d.n_employees_superadmin.findFirst = async () => {
+            enCurso++;
+            maximo = Math.max(maximo, enCurso);
+            await new Promise((r) => setTimeout(r, 2));
+            enCurso--;
+            return null;
+        };
+        const cedulas = Array.from({ length: 45 }, (_, i) => String(200000000 + i));
+        const r = await call("cedulas=" + cedulas.join(","), undefined, d);
+        assert.equal(r.status, 200);
+        assert.ok(maximo > 1 && maximo <= FALLBACK_BATCH, "máximo simultáneo: " + maximo);
     });
 });

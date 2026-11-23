@@ -105,6 +105,8 @@ describe("ninguna ruta toca la base de datos sin verificar a quien llama (issue 
         "auth/login", "auth/refresh-token", "auth/logout",
         "password/forgot-password", "password/check-recovery-password-token", "password/recover-password/[token]",
         "server-time",
+        // Catálogo de versiones: se consulta desde el inicio de sesión, antes de tener sesión, y solo devuelve datos no sensibles (ver middleware.ts).
+        "mobile-versions",
         // Rutas internas del servidor que el repo ya decidió ignorar (se reenvían a la API dinámica, que exige MOBILE_ACCESS_TOKEN):
         "dynamic-prisma/auth/login", "dynamic-prisma/auth/logout", "dynamic-prisma/auth/refresh-token", "dynamic-prisma/reportes",
         // Sin código vivo (el cuerpo está comentado): ver el inventario.
