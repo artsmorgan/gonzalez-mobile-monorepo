@@ -34,7 +34,30 @@ export type Policy = {
   mode: OfflineMode; toleranceHours: number; allowedOffline: string[]; leaseSeconds: number;
   /** Texto y contacto de soporte que la empresa quiere mostrar en las pantallas de pendiente, rechazado y bloqueado (Ajustes → Dispositivos). */
   support?: { pending?: string; rejected?: string; blocked?: string; phone?: string; email?: string };
+  /** URL del servidor de la app que eligió la empresa en Guardify. Úsala con `serverUrl(...)`, que la valida contra los dominios del build. */
+  serverUrl?: string;
 };
+
+/** Dominios que la app acepta como servidor: `api.ejemplo.cr` (exacto) o `*.ejemplo.cr` (cualquier subdominio, no el dominio solo). */
+export type ServerUrlOptions = { allowedHosts: readonly string[]; fallback: string };
+
+/**
+ * El servidor con el que debe trabajar la app: la URL que manda Guardify si es https y su dominio está en `allowedHosts` (una lista fija del
+ * build, nunca algo que llegue por red); si no hay URL o no cumple, `fallback` (la del build). Así una consola mal configurada o comprometida
+ * no puede mandar a los equipos a un servidor ajeno.
+ */
+export function pickServerUrl(url: string | null | undefined, opts: ServerUrlOptions): string {
+  if (!url) return opts.fallback;
+  let u: URL;
+  try { u = new URL(url); } catch { return opts.fallback; }
+  if (u.protocol !== "https:" || u.username || u.password || u.search || u.hash) return opts.fallback;
+  const host = u.hostname.toLowerCase();
+  const ok = opts.allowedHosts.some((h) => {
+    const a = h.trim().toLowerCase();
+    return a.startsWith("*.") ? host.endsWith(a.slice(1)) && host.length > a.length - 1 : host === a;
+  });
+  return ok ? `${u.origin}${u.pathname.replace(/\/+$/, "")}` : opts.fallback;
+}
 /** Condición de cada permiso (`modulo.accion` → dato → valores permitidos). La decide Guardify; la app la evalúa con sus datos del momento. */
 export type Conditions = Record<string, Record<string, string[]>>;
 /** Datos del momento que la app informa para evaluar las condiciones (ej. `{ division: "Seguridad", marca: "vigente" }`). */
@@ -363,6 +386,11 @@ export class GuardifyDevice {
     if (!s || !s.grants.includes(permission)) return false;
     return conditionsMet(s.conditions?.[permission], ctx);
   }
+  /**
+   * El servidor de la app para este equipo (ver `pickServerUrl`). Guárdalo junto a la sesión: si cambia respecto al último que usaste, cierra la
+   * sesión de la app y borra sus datos locales antes de usar el nuevo (son de otro servidor).
+   */
+  serverUrl(opts: ServerUrlOptions): string { return pickServerUrl(this.p.policy?.serverUrl, opts); }
   /** Unidades del árbol que esta persona puede ver (las resuelve Guardify); null = toda la empresa. */
   get units() { return this.p.session?.units ?? null; }
   /** ¿Puede ver lo que pertenece a esta unidad? Filtra siempre con esto, nunca con reglas propias de la app. */
