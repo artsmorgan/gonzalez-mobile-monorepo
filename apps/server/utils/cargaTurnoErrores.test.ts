@@ -102,7 +102,7 @@ describe("errores al cargar el turno: el servidor y la pantalla", () => {
     it("la pantalla registra la etapa en que falló, muestra el mensaje claro y abre la ventana una vez por situación", () => {
         const p = leer(mobile, "screens/MarcarIngresoSalidaScreen.tsx");
         assert.match(p, /let loadStage: AttendanceLoadStage = 'preparacion';/);
-        assert.match(p, /loadStage = 'respuesta_http';[\s\S]*?loadServerCode = typeof errorBody\?\.code === 'string'/);
+        assert.match(p, /loadStage = 'respuesta_http';[\s\S]*?loadServerCode = isPermissionDeniedPayload\(errorBody\) \? 'permission_denied' : typeof errorBody\?\.code === 'string'/);
         assert.match(p, /loadStage = 'respuesta_json';\s*data = await response\.json\(\);\s*loadStage = data\?\.status \? 'procesar_exito' : 'procesar_bloqueada';/);
         assert.match(p, /classifyAttendanceLoadError\(\{ stage: loadStage, error, httpStatus: loadHttpStatus, serverCode: loadServerCode \}\)/);
         assert.match(p, /setErrorMessage\(attendanceLoadErrorMessage\(info\)\);/);

@@ -14,6 +14,7 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import HierarchyEmptyState from '@/components/HierarchyEmptyState';
 import PuestoSalidaPicker, { type PuestoSalidaOption } from '@/components/PuestoSalidaPicker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -1838,9 +1839,17 @@ export default function VehiclesScreen() {
             Ubicación del registro (empresa → puesto)
           </ThemedText>
           {structure.length === 0 ? (
-            <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+            <HierarchyEmptyState onUseMarca={handleFormHierarchyChange} currentValues={{
+              empresaId: formEmpresaId,
+              clienteId: formClienteId,
+              divisionId: formDivisionId,
+              contratoId: formContratoId,
+              sucursalId: formSucursalId,
+              puestoId: formPuestoId,
+            }} />
           ) : null}
           <HierarchyPickerFields
+            marcaFallback
             structure={structure}
             levels={['cliente', 'contrato', 'sucursal', 'puesto']}
             isLoading={false}
@@ -2574,7 +2583,7 @@ export default function VehiclesScreen() {
                 </ThemedView>
                 {structure.length === 0 ? (
                   <ThemedView style={styles.filterGroupSearch}>
-                    <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                    <HierarchyEmptyState group="filtro" />
                   </ThemedView>
                 ) : null}
                 <HierarchyPickerFields

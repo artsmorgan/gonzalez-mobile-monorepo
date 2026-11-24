@@ -2407,6 +2407,7 @@ export default function ActaEntregaProductosScreen() {
                 <>
                   <ThemedText style={styles.sectionTitle}>Jerarquía</ThemedText>
                   <HierarchyPickerFields
+                    emptyGroup="formulario"
                     structure={structure ?? []}
                     levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                     values={{

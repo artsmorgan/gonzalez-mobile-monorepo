@@ -13,6 +13,8 @@ import {
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import DateRangeFilter from '../components/DateRangeFilter';
+import { EMPTY_RANGE, creationYmd, inRange, normalizeToYmd, type DateRange } from '../hooks/filtrosFechas';
 import { Picker } from '@react-native-picker/picker';
 import SignatureScreen from 'react-native-signature-canvas';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
@@ -243,10 +245,10 @@ export default function MutuosAcuerdosScreen() {
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
   const [filterEstado, setFilterEstado] = useState<'all' | 'pendiente' | 'aprobado' | 'rechazado'>('all');
   const [filterNombreSolicitante, setFilterNombreSolicitante] = useState('');
-  const [filterFechaAusente, setFilterFechaAusente] = useState<string | null>(null);
-  const [filterFechaReemplaza, setFilterFechaReemplaza] = useState<string | null>(null);
-  const [showFilterFechaAusentePicker, setShowFilterFechaAusentePicker] = useState(false);
-  const [showFilterFechaReemplazaPicker, setShowFilterFechaReemplazaPicker] = useState(false);
+  /** Rangos de fecha del filtro (creación, primer turno y segundo turno): nacen VACÍOS y un rango vacío no oculta nada (ver hooks/filtrosFechas.ts). */
+  const [filterCreacion, setFilterCreacion] = useState<DateRange>(EMPTY_RANGE);
+  const [filterFechaAusente, setFilterFechaAusente] = useState<DateRange>(EMPTY_RANGE);
+  const [filterFechaReemplaza, setFilterFechaReemplaza] = useState<DateRange>(EMPTY_RANGE);
   const [filterMotivo, setFilterMotivo] = useState('');
 
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
@@ -349,18 +351,15 @@ export default function MutuosAcuerdosScreen() {
   const resetMutuosFilters = useCallback(() => {
     setFilterEstado('all');
     setFilterNombreSolicitante('');
-    setFilterFechaAusente(null);
-    setFilterFechaReemplaza(null);
-    setShowFilterFechaAusentePicker(false);
-    setShowFilterFechaReemplazaPicker(false);
+    setFilterCreacion(EMPTY_RANGE);
+    setFilterFechaAusente(EMPTY_RANGE);
+    setFilterFechaReemplaza(EMPTY_RANGE);
     setFilterMotivo('');
   }, []);
 
   const filteredRecords = useMemo(() => {
     const qNombre = String(filterNombreSolicitante || '').trim().toLowerCase();
     const qMotivo = String(filterMotivo || '').trim().toLowerCase();
-    const fechaAusenteYmd = filterFechaAusente ? normalizeDateToYMD(filterFechaAusente) : '';
-    const fechaReemplazaYmd = filterFechaReemplaza ? normalizeDateToYMD(filterFechaReemplaza) : '';
 
     return records.filter((r) => {
       if (r != null && (r as MutuoAcuerdo).isActive === false) return false;
@@ -378,14 +377,14 @@ export default function MutuosAcuerdosScreen() {
 
       const matchesMotivo = !qMotivo || String(r.motivo || '').toLowerCase().includes(qMotivo);
 
-      const recordFechaAusente = normalizeDateToYMD(String(r.fecha_ausente || r.marca_ausente?.fecha || ''));
-      const recordFechaReemplaza = normalizeDateToYMD(String(r.fecha_reemplaza || r.marca_reemplaza?.fecha || ''));
-      const matchesFechaAusente = !fechaAusenteYmd || recordFechaAusente === fechaAusenteYmd;
-      const matchesFechaReemplaza = !fechaReemplazaYmd || recordFechaReemplaza === fechaReemplazaYmd;
+      // Creación (día en Costa Rica), primer turno y segundo turno: cada fecha con su rango; un rango vacío no oculta nada.
+      const matchesCreacion = inRange(creationYmd((r as { created_at?: string }).created_at), filterCreacion);
+      const matchesFechaAusente = inRange(normalizeDateToYMD(String(r.fecha_ausente || r.marca_ausente?.fecha || '')), filterFechaAusente);
+      const matchesFechaReemplaza = inRange(normalizeDateToYMD(String(r.fecha_reemplaza || r.marca_reemplaza?.fecha || '')), filterFechaReemplaza);
 
-      return matchesEstado && matchesNombre && matchesMotivo && matchesFechaAusente && matchesFechaReemplaza;
+      return matchesEstado && matchesNombre && matchesMotivo && matchesCreacion && matchesFechaAusente && matchesFechaReemplaza;
     });
-  }, [records, filterEstado, filterNombreSolicitante, filterFechaAusente, filterFechaReemplaza, filterMotivo]);
+  }, [records, filterEstado, filterNombreSolicitante, filterCreacion, filterFechaAusente, filterFechaReemplaza, filterMotivo]);
 
   const getEmpleadoById = async (id: number) => {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
@@ -1415,76 +1414,9 @@ export default function MutuosAcuerdosScreen() {
                       />
                     </ThemedView>
 
-                    <ThemedView style={styles.filterGroupSearch}>
-                      <ThemedText style={styles.filterLabel}>Fecha primer turno:</ThemedText>
-                      <TouchableOpacity
-                        style={styles.dateButton}
-                        onPress={() => setShowFilterFechaAusentePicker(true)}
-                        activeOpacity={0.85}
-                      >
-                        <ThemedText style={styles.dateButtonText}>
-                          {filterFechaAusente ? formatDateFromIsoToDMY(filterFechaAusente) : 'Seleccionar fecha'}
-                        </ThemedText>
-                        <Ionicons name="calendar-outline" size={18} color="#007AFF" />
-                      </TouchableOpacity>
-                      {filterFechaAusente ? (
-                        <TouchableOpacity onPress={() => setFilterFechaAusente(null)} activeOpacity={0.85}>
-                          <ThemedText style={styles.filterClearText}>Quitar filtro de fecha ausente</ThemedText>
-                        </TouchableOpacity>
-                      ) : null}
-                      {showFilterFechaAusentePicker ? (
-                        <DateTimePicker
-                          value={filterFechaAusente ? localDateFromYmd(filterFechaAusente) : new Date()}
-                          mode="date"
-                          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                          onChange={(event: { type?: string }, d?: Date) => {
-                            if (Platform.OS === 'android') {
-                              setShowFilterFechaAusentePicker(false);
-                              if (event?.type === 'dismissed') return;
-                            } else {
-                              setShowFilterFechaAusentePicker(false);
-                            }
-                            if (d) setFilterFechaAusente(dateToYmd(d));
-                          }}
-                        />
-                      ) : null}
-                    </ThemedView>
-
-                    <ThemedView style={styles.filterGroupSearch}>
-                      <ThemedText style={styles.filterLabel}>Fecha del segundo turno:</ThemedText>
-                      <TouchableOpacity
-                        style={styles.dateButton}
-                        onPress={() => setShowFilterFechaReemplazaPicker(true)}
-                        activeOpacity={0.85}
-                      >
-                        <ThemedText style={styles.dateButtonText}>
-                          {filterFechaReemplaza ? formatDateFromIsoToDMY(filterFechaReemplaza) : 'Seleccionar fecha'}
-                        </ThemedText>
-                        <Ionicons name="calendar-outline" size={18} color="#007AFF" />
-                      </TouchableOpacity>
-                      {filterFechaReemplaza ? (
-                        <TouchableOpacity onPress={() => setFilterFechaReemplaza(null)} activeOpacity={0.85}>
-                          <ThemedText style={styles.filterClearText}>Quitar filtro de fecha del segundo turno</ThemedText>
-                        </TouchableOpacity>
-                      ) : null}
-                      {showFilterFechaReemplazaPicker ? (
-                        <DateTimePicker
-                          value={filterFechaReemplaza ? localDateFromYmd(filterFechaReemplaza) : new Date()}
-                          mode="date"
-                          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                          onChange={(event: { type?: string }, d?: Date) => {
-                            if (Platform.OS === 'android') {
-                              setShowFilterFechaReemplazaPicker(false);
-                              if (event?.type === 'dismissed') return;
-                            } else {
-                              setShowFilterFechaReemplazaPicker(false);
-                            }
-                            if (d) setFilterFechaReemplaza(dateToYmd(d));
-                          }}
-                        />
-                      ) : null}
-                    </ThemedView>
-
+                    <DateRangeFilter label="Fecha de creación" value={filterCreacion} onChange={setFilterCreacion} />
+                    <DateRangeFilter label="Fecha de inicio del primer turno" value={filterFechaAusente} onChange={setFilterFechaAusente} />
+                    <DateRangeFilter label="Fecha del segundo turno" value={filterFechaReemplaza} onChange={setFilterFechaReemplaza} />
                     <ThemedView style={styles.filterGroupSearch}>
                       <ThemedText style={styles.filterLabel}>Motivo:</ThemedText>
                       <TextInput

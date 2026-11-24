@@ -2631,6 +2631,7 @@ export default function InductionTourRecordScreen() {
               ) : (
                 <>
                   <HierarchyPickerFields
+                    marcaFallback
                     structure={structure}
                     levels={['cliente', 'contrato', 'sucursal', 'puesto', 'plaza']}
                     isLoading={isLoadingStructure}

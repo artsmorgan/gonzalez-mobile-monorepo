@@ -2335,6 +2335,7 @@ export default function TrainingsScreen() {
             <ThemedText style={styles.formTitle}>Nueva Capacitación</ThemedText>
 
             <HierarchyPickerFields
+              marcaFallback
               structure={structure}
               levels={['cliente', 'contrato', 'sucursal', 'puesto']}
               isLoading={false}

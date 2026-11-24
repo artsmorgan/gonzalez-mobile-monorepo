@@ -27,6 +27,7 @@ import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import HierarchyEmptyState from '@/components/HierarchyEmptyState';
 import { useAuth } from '../contexts/AuthContext';
 import { eventBus } from '../hooks/eventBus';
 import getHoraAccion from '../hooks/getHoraAccion';
@@ -1765,7 +1766,7 @@ export default function DocumentosEntregadosScreen() {
                           <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
                         </ThemedView>
                       ) : structure.length === 0 ? (
-                        <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                        <HierarchyEmptyState group="filtro" />
                       ) : (
                         <>
                           <ThemedText style={styles.filterHierarchyTitle}>Jerarquía (lista)</ThemedText>
@@ -1839,6 +1840,7 @@ export default function DocumentosEntregadosScreen() {
                   <ThemedText style={styles.sectionTitle}>Jerarquía (hasta puesto)</ThemedText>
 
                   <HierarchyPickerFields
+                    marcaFallback
                     structure={structure}
                     levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                     isLoading={isStructureLoading}

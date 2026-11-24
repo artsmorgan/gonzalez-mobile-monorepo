@@ -20,6 +20,7 @@ import SlideMenu from '@/components/SlideMenu';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import HierarchyEmptyState from '@/components/HierarchyEmptyState';
 import RecordAudioButton from '@/components/RecordAudioButton';
 import AudioPreviewModal from '@/components/AudioPreviewModal';
 import { FullscreenMediaModal, FullscreenVideoButton } from '@/components/FullscreenMediaViewer';
@@ -2771,9 +2772,10 @@ export default function IncidentsScreen() {
                 <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
               </ThemedView>
             ) : (mainStructure ?? []).length === 0 ? (
-              <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+              <HierarchyEmptyState />
             ) : (
               <HierarchyPickerFields
+                emptyGroup="formulario"
                 structure={mainStructure}
                 levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                 emptyPickerValue={0}
@@ -3167,7 +3169,7 @@ export default function IncidentsScreen() {
                           <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
                         </ThemedView>
                       ) : (mainStructure ?? []).length === 0 ? (
-                        <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                        <HierarchyEmptyState group="filtro" />
                       ) : (
                         <HierarchyPickerFields
                           structure={mainStructure}

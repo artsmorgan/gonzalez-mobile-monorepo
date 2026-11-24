@@ -2356,6 +2356,7 @@ export default function VoiceNotesScreen() {
             <ThemedView style={styles.formGroup}>
               <ThemedText style={styles.label}>Ubicación (empresa → sucursal) * — puesto opcional</ThemedText>
               <HierarchyPickerFields
+                marcaFallback
                 structure={structure}
                 levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                 isLoading={false}
@@ -2583,6 +2584,7 @@ export default function VoiceNotesScreen() {
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.label}>Ubicación (empresa → sucursal) * — puesto opcional</ThemedText>
                 <HierarchyPickerFields
+                  marcaFallback
                   structure={structure}
                   levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                   isLoading={false}

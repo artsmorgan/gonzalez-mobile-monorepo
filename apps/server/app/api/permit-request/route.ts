@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { permitVisibilityWhere } from "../../../utils/permitVisibilidad";
 import { prisma } from "../../../utils/prismaClient";
 import { sendNotificationByEmployee } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
@@ -86,16 +87,10 @@ export async function GET(req: NextRequest) {
     const empleado = await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } });
     const mySupervisorId = parseIntStrict(empleado?.supervisor_id);
 
-    const mode = String(req.nextUrl.searchParams.get("mode") ?? "").trim().toLowerCase();
-
-    // mode=mine: solo solicitudes propias del empleado autenticado.
-    // Sin mode (ejecutivo): propias + solicitudes donde ejecutivo_cuenta === supervisor_id.
-    const visibilityWhere: any =
-      mode === "mine"
-        ? { empleado_id: currentEmployeeId }
-        : mySupervisorId
-          ? { OR: [{ empleado_id: currentEmployeeId }, { ejecutivo_cuenta: mySupervisorId }] }
-          : { empleado_id: currentEmployeeId };
+    // Propias + las que esta persona debe aprobar o rechazar (es su ejecutivo de cuenta). Lo decide el dato, no un parámetro de la app ni el puesto
+    // que tenga hoy: antes la app pedía solo las propias (`mode=mine`) cuando el puesto de su marca actual no decía «ejecutivo» o no tenía marca, y un
+    // ejecutivo no veía las solicitudes que debía resolver. El parámetro `mode` de las versiones anteriores se ignora.
+    const visibilityWhere: any = permitVisibilityWhere({ currentEmployeeId, mySupervisorId });
 
     const where: any = { AND: [visibilityWhere, { isActive: true }] };
 

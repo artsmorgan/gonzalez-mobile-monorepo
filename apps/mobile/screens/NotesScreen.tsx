@@ -35,6 +35,7 @@ import { saveFile, getLocalFileDisplayUri, persistSignatureRef, hydrateSignature
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { buildNotesImagenesJsonForUpload, deleteNotesLocalFilesFromMeta, stripNoteImagesForActionPayload } from '@/hooks/notesFilesSync';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import HierarchyEmptyState from '@/components/HierarchyEmptyState';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 import { appVersionQuery } from '../hooks/appVersionHeader';
 
@@ -2318,9 +2319,17 @@ export default function NotesScreen() {
             <ThemedView style={styles.inputGroup}>
               <ThemedText style={styles.inputLabel}>Ubicación del registro (empresa → puesto)</ThemedText>
               {mainStructure.length === 0 ? (
-                <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                <HierarchyEmptyState onUseMarca={handleFormHierarchyChange} currentValues={{
+                    empresaId: formEmpresaId,
+                    clienteId: formClienteId,
+                    divisionId: formDivisionId,
+                    contratoId: formContratoId,
+                    sucursalId: formSucursalId,
+                    puestoId: formPuestoId,
+                  }} />
               ) : (
                 <HierarchyPickerFields
+                  marcaFallback
                   structure={mainStructure}
                   levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                   emptyPickerValue={0}
@@ -2647,9 +2656,17 @@ export default function NotesScreen() {
           <ThemedView style={styles.inputGroup}>
             <ThemedText style={styles.inputLabel}>Ubicación del registro (empresa → puesto)</ThemedText>
             {mainStructure.length === 0 ? (
-              <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+              <HierarchyEmptyState onUseMarca={handleFormHierarchyChange} currentValues={{
+                  empresaId: formEmpresaId,
+                  clienteId: formClienteId,
+                  divisionId: formDivisionId,
+                  contratoId: formContratoId,
+                  sucursalId: formSucursalId,
+                  puestoId: formPuestoId,
+                }} />
             ) : (
               <HierarchyPickerFields
+                marcaFallback
                 structure={mainStructure}
                 levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                 emptyPickerValue={0}
@@ -3044,7 +3061,7 @@ export default function NotesScreen() {
                 </ThemedView>
                 {mainStructure.length === 0 ? (
                   <ThemedView style={styles.filterGroupSearch}>
-                    <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                    <HierarchyEmptyState group="filtro" />
                   </ThemedView>
                 ) : (
                   <HierarchyPickerFields
@@ -3290,6 +3307,7 @@ export default function NotesScreen() {
               <ThemedView style={styles.inputGroup}>
                 <ThemedText style={styles.inputLabel}>Jerarquía:</ThemedText>
                 <HierarchyPickerFields
+                  marcaFallback
                   structure={mainStructure}
                   levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                   emptyPickerValue={0}

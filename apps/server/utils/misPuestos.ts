@@ -18,6 +18,19 @@ export function hoyEnCostaRicaComoFecha(now: Date = new Date()): Date {
 
 export type MarcaDePuesto = { puesto_id: number | null; fecha: Date | string };
 
+/** Campos de una marca para saber si es un turno laboral real. */
+export type MarcaTurno = { tipo_turno?: string | null; hora_inicio?: Date | string | null; hora_fin?: Date | string | null };
+
+/**
+ * ¿Es un turno laboral real? No lo es el día libre (tipo «L») ni la marca sin tipo de turno, sin hora de inicio o sin hora de fin: no hay un turno
+ * que cumplir en ellas, así que no cuentan para «Mis puestos» ni para su próxima fecha.
+ */
+export function esTurnoLaboralReal(m: MarcaTurno): boolean {
+    const tipo = String(m.tipo_turno ?? "").trim().toUpperCase();
+    if (tipo === "" || tipo === "L") return false;
+    return m.hora_inicio != null && m.hora_fin != null;
+}
+
 /** `puesto_id` → fecha (`AAAA-MM-DD`) de su marca más próxima. Ignora marcas sin puesto o con fecha inválida. */
 export function proximaFechaPorPuesto(marcas: MarcaDePuesto[]): Map<number, string> {
     const out = new Map<number, string>();

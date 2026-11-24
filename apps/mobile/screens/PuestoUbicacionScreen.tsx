@@ -11,13 +11,13 @@ import {
     KeyboardAvoidingView,
 } from 'react-native';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import HierarchyEmptyState from '@/components/HierarchyEmptyState';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
-import MisPuestosSection from '@/components/MisPuestosSection';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
@@ -904,13 +904,10 @@ export default function PuestoUbicacionScreen() {
                         <ThemedText style={styles.subtitle}>Actualizar coordenadas GPS del puesto</ThemedText>
                     </ThemedView>
 
-                    {/* Mis puestos: los puestos del empleado (por sus marcas de hoy en adelante), con mapa y Waze */}
-                    <MisPuestosSection refreshAccessToken={refreshAccessToken} logout={logout} />
-
                     <ThemedView style={styles.formCard}>
                         <ThemedText style={styles.formTitle}>Seleccionar Puesto</ThemedText>
                         {(structure ?? []).length === 0 && !isStructureLoading ? (
-                            <ThemedText style={styles.emptySectionText}>Sin estructura en caché.</ThemedText>
+                            <HierarchyEmptyState group="filtro" />
                         ) : (
                             <HierarchyPickerFields
                                 structure={structure}

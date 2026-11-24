@@ -78,6 +78,15 @@ export function classifyAttendanceLoadError(input: AttendanceLoadErrorInput): At
         queHacer: 'Cierra sesión y vuelve a entrar. Si continúa, avisa a tu administrador.',
       };
     }
+    // Falta de permiso (Guardify): no es una sesión vencida, no hay que cerrar sesión.
+    if (serverCode === 'permission_denied') {
+      return {
+        code: 'SIN-PERMISO',
+        titulo: 'No tienes permiso para ver esto',
+        mensaje: 'Tu rol no tiene permiso para esta información.',
+        queHacer: 'Si crees que es un error, avisa a tu administrador para que revise tu rol.',
+      };
+    }
     if (status === 401 || status === 403) {
       return {
         code: 'SESION',

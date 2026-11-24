@@ -12,6 +12,7 @@ import { getDeviceUid } from './installSecureStorage';
 import { getGuardifyIdentity } from './guardifyIdentity';
 import { getEmbeddedAppVersionInfo } from './appVariant';
 import { notifyIfUpdateRequired } from './updateRequired';
+import { deniedResponse, denialKey, notifyIfPermissionDenied, recentDenial } from './permissionDeniedNotice';
 import { headersFromStamp, takeStampFromBody } from './evidenceQueue';
 
 const g = globalThis as unknown as { fetch: typeof fetch; __evidenceFetchInstalled?: boolean };
@@ -68,6 +69,23 @@ export async function withEvidenceHeaders(input: unknown, init: RequestInit | un
   return { ...(init ?? {}), headers };
 }
 
+/** Valor de una cabecera de `init.headers` (objeto, arreglo o `Headers`), sin distinguir mayúsculas. */
+function headerValue(headers: unknown, name: string): string | null {
+  try {
+    if (!headers) return null;
+    const lower = name.toLowerCase();
+    if (typeof (headers as Headers).get === 'function') return (headers as Headers).get(name);
+    if (Array.isArray(headers)) {
+      const hit = (headers as [string, string][]).find(([k]) => String(k).toLowerCase() === lower);
+      return hit ? String(hit[1]) : null;
+    }
+    for (const [k, v] of Object.entries(headers as Record<string, unknown>)) if (k.toLowerCase() === lower) return String(v);
+  } catch {
+    /* sin cabecera */
+  }
+  return null;
+}
+
 export function installEvidenceFetch(): void {
   if (g.__evidenceFetchInstalled || typeof g.fetch !== 'function') return;
   g.__evidenceFetchInstalled = true;
@@ -80,9 +98,20 @@ export function installEvidenceFetch(): void {
     } catch {
       nextInit = init;
     }
+    // Una escritura que el servidor ya negó por falta de permiso no se vuelve a enviar durante un rato (la cola sin conexión la reintentaba en
+    // cada sincronización): se responde el mismo 403 sin salir a la red. La acción sigue en la cola y se reintenta cuando pasa ese tiempo.
+    const method = requestMethod(input, nextInit);
+    const url = requestUrl(input);
+    const idempotencyKey = headerValue(nextInit?.headers, 'Idempotency-Key');
+    const key = denialKey(method, url, nextInit?.body, idempotencyKey);
+    const blocked = recentDenial(key);
+    if (blocked) return deniedResponse(blocked.permission);
+
     const response = await original(input as RequestInfo, nextInit);
     // El servidor exige otra versión de la app (HTTP 426): se avisa a la app para que lo muestre. La respuesta sigue su camino.
     if (response.status === 426) void notifyIfUpdateRequired(response);
+    // El servidor niega el permiso (403 `permission_denied|<permiso>`): se avisa una vez y se recuerda la acción.
+    if (response.status === 403) void notifyIfPermissionDenied(response, { method, url, body: nextInit?.body, idempotencyKey });
     return response;
   };
 }

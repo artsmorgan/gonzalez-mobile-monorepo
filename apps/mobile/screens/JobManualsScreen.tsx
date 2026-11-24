@@ -57,6 +57,7 @@ import { downloadAuthedUrlToDevice } from '@/hooks/downloadReportFileToDevice';
 import getValidAccessTokenOrLogout from '../hooks/getValidAccessTokenOrLogout';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import HierarchyEmptyState from '@/components/HierarchyEmptyState';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 import { appVersionQuery } from '../hooks/appVersionHeader';
 
@@ -3414,7 +3415,7 @@ export default function JobManualsScreen() {
                         <ThemedText style={styles.loadingText}>Cargando estructura...</ThemedText>
                       </ThemedView>
                     ) : structure.length === 0 ? (
-                      <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                      <HierarchyEmptyState group="filtro" />
                     ) : (
                       <>
                         <ThemedText style={styles.filterLabel}>Jerarquía (lista)</ThemedText>
@@ -3865,6 +3866,7 @@ export default function JobManualsScreen() {
                         </ThemedText>
 
                         <HierarchyPickerFields
+                          marcaFallback
                           structure={structure}
                           levels={['cliente', 'contrato', 'sucursal']}
                           isLoading={isStructureLoading}
@@ -4568,6 +4570,7 @@ export default function JobManualsScreen() {
                         todos los puestos debajo.
                       </ThemedText>
                       <HierarchyPickerFields
+                        marcaFallback
                         structure={structure}
                         levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                         isLoading={isStructureLoading}

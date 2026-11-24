@@ -4620,6 +4620,7 @@ export default function CorporateVehiclesScreen() {
               <ThemedText style={styles.sectionTitle}>Jerarquía (hasta puesto)</ThemedText>
 
               <HierarchyPickerFields
+                marcaFallback
                 structure={structure}
                 levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                 isLoading={isStructureLoading}

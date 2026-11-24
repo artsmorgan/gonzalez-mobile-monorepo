@@ -2254,6 +2254,7 @@ export default function ApreciacionVulnerabilidadScreen() {
               ) : null}
 
               <HierarchyPickerFields
+                marcaFallback
                 structure={structure}
                 levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                 isLoading={isStructureLoading}

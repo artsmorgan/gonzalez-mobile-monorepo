@@ -46,6 +46,7 @@ import {
 } from '../hooks/attendanceLoadError';
 import { getAppVersionString } from '../hooks/appVersionHeader';
 import { esTardiaAhora } from '../hooks/marcaAvisos';
+import { isPermissionDeniedPayload } from '../hooks/permissionDenied';
 import {
   ATTENDANCE_LOADING_MESSAGE,
   ATTENDANCE_POLL_DELAY_MS,
@@ -1178,7 +1179,7 @@ export default function MarcarIngresoSalidaScreen() {
         loadStage = 'respuesta_http';
         loadHttpStatus = response.status;
         const errorBody = await response.json().catch(() => null);
-        loadServerCode = typeof errorBody?.code === 'string' ? errorBody.code : null;
+        loadServerCode = isPermissionDeniedPayload(errorBody) ? 'permission_denied' : typeof errorBody?.code === 'string' ? errorBody.code : null;
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 

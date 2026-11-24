@@ -172,7 +172,7 @@ describe("Mis puestos como módulo abierto para todos", () => {
     it("usa la misma ventana flotante con elección de aplicación de mapas que Ubicación del puesto", () => {
         const s = leer(mobile, "components/MisPuestosSection.tsx");
         assert.match(s, /<PuestoLocationBlock ubicacion=\{puesto\.ubicacion\}/);
-        assert.match(leer(mobile, "screens/PuestoUbicacionScreen.tsx"), /<MisPuestosSection /);
+        assert.equal(leer(mobile, "screens/PuestoUbicacionScreen.tsx").includes("<MisPuestosSection"), false, "Ubicación del puesto ya no repite la sección");
     });
 });
 

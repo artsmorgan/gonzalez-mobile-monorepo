@@ -90,6 +90,7 @@ import {
 import { createApreciacionVulnerabilidad, deleteApreciacionVulnerabilidad, deleteApreciacionVulnerabilidadImage, updateApreciacionVulnerabilidad, updateApreciacionVulnerabilidadFirmaSolicitante } from './hooks/apreciacionVulnerabilidadFunctions';
 import { eventBus } from './hooks/eventBus';
 import { APP_UPDATE_REQUIRED_EVENT, type AppUpdateRequiredPayload } from './hooks/updateRequired';
+import { PERMISSION_DENIED_EVENT, PERMISSION_DENIED_MESSAGE } from './hooks/permissionDeniedNotice';
 import { shouldCheckVersion } from './hooks/versionCheckThrottle';
 import { runQueueRetention } from './hooks/installQueueOwnership';
 import {
@@ -798,6 +799,17 @@ function AppContent() {
     eventBus.on(SESSION_REVOKED_EVENT, onSessionEndedByServer);
     return () => {
       eventBus.off(SESSION_REVOKED_EVENT, onSessionEndedByServer);
+    };
+  }, []);
+
+  /** Permisos de Guardify (fase 3 de roles): si el servidor niega una acción por falta de permiso se dice claro, sin cerrar la sesión. */
+  useEffect(() => {
+    const onPermissionDenied = () => {
+      Alert.alert('Sin permiso', PERMISSION_DENIED_MESSAGE);
+    };
+    eventBus.on(PERMISSION_DENIED_EVENT, onPermissionDenied);
+    return () => {
+      eventBus.off(PERMISSION_DENIED_EVENT, onPermissionDenied);
     };
   }, []);
 

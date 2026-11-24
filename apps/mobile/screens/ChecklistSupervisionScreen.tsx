@@ -18,6 +18,7 @@ import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import HierarchyEmptyState from '@/components/HierarchyEmptyState';
 import EmployeeSearchModal, { type EmployeeSearchHit } from '@/components/EmployeeSearchModal';
 import { Collapsible } from '@/components/Collapsible';
 import { useAuth } from '../contexts/AuthContext';
@@ -4738,7 +4739,7 @@ export default function ChecklistSupervisionScreen() {
                   {isStructureLoading ? (
                     <ThemedText style={styles.emptyText}>Cargando jerarquía…</ThemedText>
                   ) : structure.length === 0 ? (
-                    <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                    <HierarchyEmptyState group="filtro" />
                   ) : (
                     <HierarchyPickerFields
                       structure={structure}
@@ -4859,6 +4860,7 @@ export default function ChecklistSupervisionScreen() {
 
               {/* Jerarquía para formulario (incluye puesto) */}
               <HierarchyPickerFields
+                marcaFallback
                 structure={structure}
                 isLoading={isStructureLoading}
                 levels={['cliente', 'contrato', 'sucursal', 'puesto']}

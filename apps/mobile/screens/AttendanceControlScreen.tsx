@@ -2331,6 +2331,7 @@ export default function AttendanceControlScreen() {
             <ThemedView style={styles.formContainer}>
               {/* Jerarquía del formulario */}
               <HierarchyPickerFields
+                emptyGroup="formulario"
                 structure={structure}
                 levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                 isLoading={isStructureLoading}

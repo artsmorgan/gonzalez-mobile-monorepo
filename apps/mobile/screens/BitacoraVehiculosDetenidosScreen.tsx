@@ -32,6 +32,7 @@ import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import HierarchyEmptyState from '@/components/HierarchyEmptyState';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { RootStackParamList } from '../App';
@@ -3686,7 +3687,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
               {isFiltersExpanded && (
                 <ThemedView style={styles.filterContent}>
                   {structure.length === 0 && !isStructureLoading ? (
-                    <ThemedText style={styles.emptyText}>Sin estructura en caché. Sincronice la app.</ThemedText>
+                    <HierarchyEmptyState group="filtro" />
                   ) : (
                     <>
                       <ThemedText style={styles.filterHierarchyTitle}>Jerarquía (lista)</ThemedText>
@@ -3787,6 +3788,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
                     </ThemedText>
                   ) : (
                     <HierarchyPickerFields
+                      marcaFallback
                       structure={structure}
                       levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                       isLoading={isStructureLoading}

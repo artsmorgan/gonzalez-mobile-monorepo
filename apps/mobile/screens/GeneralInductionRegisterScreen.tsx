@@ -3656,6 +3656,7 @@ export default function GeneralInductionRegisterScreen() {
                 ) : (
                   <ThemedView style={styles.sectionBody}>
                     <HierarchyPickerFields
+                      marcaFallback
                       structure={structure}
                       levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                       isLoading={isStructureLoading || isDivisionOptionsLoading}

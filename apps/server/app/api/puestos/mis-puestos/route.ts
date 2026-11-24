@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { prisma } from "../../../../utils/prismaClient";
 import { reportError } from "../../../../utils/reportError";
-import { armarMisPuestos, hoyEnCostaRicaComoFecha, proximaFechaPorPuesto } from "../../../../utils/misPuestos";
+import { armarMisPuestos, esTurnoLaboralReal, hoyEnCostaRicaComoFecha, proximaFechaPorPuesto } from "../../../../utils/misPuestos";
 
 /**
  * «Mis puestos» (módulo Ubicación del puesto): los puestos del empleado que consulta (el del token) según `puesto_id` de sus marcas en `c_marca_dia`
- * donde es el fijo (`empleadoFijo_id`) o el reemplazo (`empleadoReemplaza_id`), solo con marcas de la fecha de hoy (Costa Rica) en adelante.
+ * donde es el fijo (`empleadoFijo_id`) o el reemplazo (`empleadoReemplaza_id`), solo con marcas de la fecha de hoy (Costa Rica) en adelante y solo
+ * con turnos laborales reales: no cuentan los días libres (tipo «L») ni las marcas sin tipo de turno, sin hora de inicio o sin hora de fin.
  * Cada puesto trae sus coordenadas (si las tiene) para mostrarlo en el mapa y llegar con Waze.
  */
 export async function GET(req: NextRequest) {
@@ -27,11 +28,15 @@ export async function GET(req: NextRequest) {
                 OR: [{ empleadoFijo_id: empleadoId }, { empleadoReemplaza_id: empleadoId }],
                 fecha: { gte: hoyEnCostaRicaComoFecha() },
                 puesto_id: { not: null },
+                tipo_turno: { not: null },
+                hora_inicio: { not: null },
+                hora_fin: { not: null },
             },
-            select: { puesto_id: true, fecha: true },
+            select: { puesto_id: true, fecha: true, tipo_turno: true, hora_inicio: true, hora_fin: true },
         });
 
-        const proximas = proximaFechaPorPuesto(marcas);
+        // La consulta ya descarta los nulos; aquí se descartan además los días libres («L») y los tipos de turno en blanco.
+        const proximas = proximaFechaPorPuesto(marcas.filter(esTurnoLaboralReal));
         const puestoIds = Array.from(proximas.keys());
         if (puestoIds.length === 0) {
             return NextResponse.json({ status: true, puestos: [] }, { status: 200 });

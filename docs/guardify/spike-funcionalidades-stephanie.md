@@ -82,16 +82,16 @@ Tres tipos, todos de **solo lectura** sobre datos que ya existen:
 
 | Flujo | Para qué sirve | Referencia |
 |---|---|---|
-| Revisión de equipo (actividades) | Se revisa cada artículo del puesto y se marca `Bueno` / `Malo` / `No está` con cantidad real | `apps/mobile/screens/ActivitiesScreen.tsx:50`, `apps/server/app/api/articulo-mantenimiento/route.ts:20` |
+| Revisión de equipo (actividades) | Se revisa cada artículo del puesto y se marca `Bueno` / `Malo` / `No está` con cantidad real | `apps/mobile/screens/ActivitiesScreen.tsx:52`, `apps/server/app/api/articulo-mantenimiento/route.ts:20` |
 | Mantenimiento de equipo | Sobre un artículo: acción **Reemplazar** (marca/modelo/serie nuevos) o **Reparar en taller** (fechas de salida y entrada), con movimientos | `apps/mobile/screens/MantenimientoEquipoScreen.tsx:3412`, `:3418`; `apps/server/app/prisma/schema.prisma:613` (`c_movimientos_articulo_mantenimiento`) |
 | Entrega de puestos | Lista plan, entrega y **último mantenimiento** de cada artículo del puesto | `apps/server/app/api/entrega-puestos/route.ts:96` (GET), `:584` plan, `:612` entrega |
 | Producto no conforme | Incidente de calidad con descripción y archivos; **no** enlaza con el inventario | `apps/server/app/prisma/schema.prisma:681` |
 | Acta de entrega de productos | Acta firmada (`tipo_entrega`, `detalle`, `observaciones`); **no tiene campo de faltantes** (solo texto libre) | `apps/server/app/prisma/schema.prisma:21` |
-| Solicitud de uniforme | Cola `uniform_request` → `createUniformRequest`; los planes/entregas de uniforme viven en tablas de Planillas | `apps/mobile/App.tsx:4706`, `apps/mobile/hooks/evaluationFunctions.ts:429`; `schema.prisma:1788`, `:1968`, `:3423`, `:4782` |
+| Solicitud de uniforme | Cola `uniform_request` → `createUniformRequest`; los planes/entregas de uniforme viven en tablas de Planillas | `apps/mobile/App.tsx:4732`, `apps/mobile/hooks/evaluationFunctions.ts:429`; `schema.prisma:1788`, `:1968`, `:3423`, `:4782` |
 
 ### 2.2 Valores de `estado` y `accion`, y regla de «último estado»
 
-- **`estado`**: la app solo ofrece `Bueno`, `Malo` y `No está` (`apps/mobile/screens/ActivitiesScreen.tsx:50`). La columna es texto libre de 55 caracteres (`schema.prisma:174`) y **el servidor no valida el conjunto**: acepta cualquier valor y usa
+- **`estado`**: la app solo ofrece `Bueno`, `Malo` y `No está` (`apps/mobile/screens/ActivitiesScreen.tsx:52`). La columna es texto libre de 55 caracteres (`schema.prisma:174`) y **el servidor no valida el conjunto**: acepta cualquier valor y usa
   `Bueno` por defecto (`apps/server/app/api/articulo-mantenimiento/route.ts:188`).
 - **`accion`**: texto libre; la app usa `Reemplazar` y `Reparar en taller` (`apps/mobile/screens/MantenimientoEquipoScreen.tsx:3412`, `:3418`, `:4633`); `Entrada`/`Salida` son de los movimientos.
 - **Regla de último estado** (`apps/server/app/api/articulo-mantenimiento/route.ts:185`): sin historial el último estado es `Bueno`; si el nuevo es `Bueno` solo se actualiza el último registro cuando ese no era `Bueno`;

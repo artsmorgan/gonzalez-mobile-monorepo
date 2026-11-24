@@ -19,6 +19,7 @@ import { ThemedView } from '@/components/ThemedView';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import HierarchyEmptyState from '@/components/HierarchyEmptyState';
 import EmployeeSearchModal, { type EmployeeSearchHit } from '@/components/EmployeeSearchModal'; 
 import { formatDateDMY } from '@/utils/formatDate';
 import SlideMenu from '@/components/SlideMenu';
@@ -2234,6 +2235,7 @@ export default function StaffEvaluationsScreen() {
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Estructura *</ThemedText>
           <HierarchyPickerFields
+            marcaFallback
             structure={structure}
             levels={['cliente', 'contrato', 'sucursal', 'puesto', 'plaza']}
             emptyPickerValue={0}
@@ -3014,7 +3016,7 @@ export default function StaffEvaluationsScreen() {
               <ThemedView style={styles.filterContent}>
                 <ThemedText style={[styles.filterLabel, { marginBottom: 6 }]}>Ubicación (sucursal)</ThemedText>
                 {structure.length === 0 ? (
-                  <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                  <HierarchyEmptyState group="filtro" />
                 ) : (
                   <HierarchyPickerFields
                     structure={structure}

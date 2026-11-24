@@ -11,6 +11,7 @@ import {
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 
+import HierarchyEmptyState from '@/components/HierarchyEmptyState';
 import HierarchySearchModal from '@/components/HierarchySearchModal';
 import {
   type HierarchySearchLevel,
@@ -67,6 +68,13 @@ export type HierarchyPickerFieldsProps = {
   renderAfterPlaza?: React.ReactNode;
   /** Contenido opcional entre el select de sucursal y el select de puesto (p. ej. un botón "Seleccionar todos"). */
   renderAfterSucursal?: React.ReactNode;
+  /**
+   * Solo formularios que ENVÍAN datos: si la jerarquía no está descargada, se usan los de la marca actual (avisándolo). Los filtros no lo activan:
+   * llenarlos ocultaría registros.
+   */
+  marcaFallback?: boolean;
+  /** Dónde está este selector, para mostrar un solo botón «Descargar jerarquía» por lugar. Por defecto: formulario si usa `marcaFallback`, si no filtro. */
+  emptyGroup?: 'filtro' | 'formulario';
 };
 
 /** Altura del select y del botón de búsqueda (sin incluir la etiqueta). */
@@ -120,6 +128,8 @@ export default function HierarchyPickerFields({
   fieldGroupStyle,
   renderAfterPlaza,
   renderAfterSucursal,
+  marcaFallback = false,
+  emptyGroup,
 }: HierarchyPickerFieldsProps) {
   const labels = { ...DEFAULT_LABELS, ...labelsProp };
   const Label = renderLabel ?? ((text: string) => <DefaultLabel text={text} />);
@@ -249,6 +259,11 @@ export default function HierarchyPickerFields({
     </View>
   );
   };
+
+  // Sin jerarquía descargada no hay nada que elegir: se explica y se ofrece ir al módulo «Jerarquía» (un selector bloqueado conserva su aspecto).
+  if (!isLoading && !disabled && empresas.length === 0) {
+    return <HierarchyEmptyState onUseMarca={marcaFallback ? onChange : undefined} currentValues={values} group={emptyGroup ?? (marcaFallback ? 'formulario' : 'filtro')} />;
+  }
 
   if (isLoading) {
     return (

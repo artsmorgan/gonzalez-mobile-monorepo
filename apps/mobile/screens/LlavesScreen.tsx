@@ -3490,6 +3490,7 @@ export default function LlavesScreen() {
                     <ThemedView style={{ marginBottom: 12 }}>
                       <ThemedText style={styles.sectionTitle}>Ubicación del registro</ThemedText>
                       <HierarchyPickerFields
+                        marcaFallback
                         structure={structure}
                         levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                         isLoading={isStructureLoading}
@@ -3668,6 +3669,7 @@ export default function LlavesScreen() {
                     <ThemedView style={{ marginBottom: 12 }}>
                       <ThemedText style={styles.sectionTitle}>Ubicación del registro</ThemedText>
                       <HierarchyPickerFields
+                        marcaFallback
                         structure={structure}
                         levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                         isLoading={isStructureLoading}

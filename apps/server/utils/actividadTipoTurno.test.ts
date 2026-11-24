@@ -12,7 +12,7 @@ import {
     tiposTurnoDeLaPeticion,
     tiposTurnoLabel,
 } from "./actividadTipoTurno";
-import { armarMisPuestos, hoyEnCostaRica, hoyEnCostaRicaComoFecha, proximaFechaPorPuesto } from "./misPuestos";
+import { armarMisPuestos, esTurnoLaboralReal, hoyEnCostaRica, hoyEnCostaRicaComoFecha, proximaFechaPorPuesto } from "./misPuestos";
 import { TIPOS_TURNO_OPCIONES, tiposTurnoDeActividad, toggleTipoTurno } from "../../mobile/hooks/actividadTiposTurno";
 import { misPuestoTitulo, parseMisPuestos } from "../../mobile/hooks/misPuestos";
 
@@ -155,12 +155,38 @@ describe("Mis puestos (módulo Ubicación del puesto)", () => {
         assert.equal(r[0].proxima_fecha, null);
     });
 
+    it("solo cuentan los turnos laborales reales: no los días libres ni las marcas sin tipo de turno, hora de inicio u hora de fin", () => {
+        const h = new Date("1970-01-01T08:00:00.000Z");
+        assert.equal(esTurnoLaboralReal({ tipo_turno: "D", hora_inicio: h, hora_fin: h }), true);
+        assert.equal(esTurnoLaboralReal({ tipo_turno: " n ", hora_inicio: h, hora_fin: h }), true);
+        assert.equal(esTurnoLaboralReal({ tipo_turno: "L", hora_inicio: h, hora_fin: h }), false, "día libre");
+        assert.equal(esTurnoLaboralReal({ tipo_turno: "l", hora_inicio: h, hora_fin: h }), false);
+        assert.equal(esTurnoLaboralReal({ tipo_turno: null, hora_inicio: h, hora_fin: h }), false);
+        assert.equal(esTurnoLaboralReal({ tipo_turno: "  ", hora_inicio: h, hora_fin: h }), false);
+        assert.equal(esTurnoLaboralReal({ tipo_turno: "D", hora_inicio: null, hora_fin: h }), false);
+        assert.equal(esTurnoLaboralReal({ tipo_turno: "D", hora_inicio: h, hora_fin: null }), false);
+        assert.equal(esTurnoLaboralReal({}), false);
+        // la próxima fecha de un puesto ignora el día libre más cercano
+        const marcas = [
+            { puesto_id: 7, fecha: "2026-11-25", tipo_turno: "L", hora_inicio: h, hora_fin: h },
+            { puesto_id: 7, fecha: "2026-11-26", tipo_turno: "D", hora_inicio: null, hora_fin: h },
+            { puesto_id: 7, fecha: "2026-11-27", tipo_turno: "D", hora_inicio: h, hora_fin: h },
+            { puesto_id: 9, fecha: "2026-11-25", tipo_turno: "L", hora_inicio: h, hora_fin: h },
+        ];
+        const proximas = proximaFechaPorPuesto(marcas.filter(esTurnoLaboralReal));
+        assert.equal(proximas.get(7), "2026-11-27");
+        assert.equal(proximas.has(9), false, "un puesto con solo días libres no aparece");
+    });
+
     it("la ruta busca por empleadoFijo_id o empleadoReemplaza_id del empleado del token y solo marcas de hoy en adelante", () => {
         const ruta = leer(server, "app/api/puestos/mis-puestos/route.ts");
         assert.match(ruta, /Number\(payload\?\.id\)/);
         assert.match(ruta, /OR: \[\{ empleadoFijo_id: empleadoId \}, \{ empleadoReemplaza_id: empleadoId \}\]/);
         assert.match(ruta, /fecha: \{ gte: hoyEnCostaRicaComoFecha\(\) \}/);
         assert.match(ruta, /puesto_id: \{ not: null \}/);
+        // solo turnos laborales reales: sin día libre y sin tipo de turno, hora de inicio u hora de fin nulos
+        assert.match(ruta, /tipo_turno: \{ not: null \},\s*hora_inicio: \{ not: null \},\s*hora_fin: \{ not: null \}/);
+        assert.match(ruta, /proximaFechaPorPuesto\(marcas\.filter\(esTurnoLaboralReal\)\)/);
         assert.match(ruta, /prisma\.c_marca_dia\.findMany/);
     });
 
@@ -169,8 +195,9 @@ describe("Mis puestos (módulo Ubicación del puesto)", () => {
         assert.equal(lista.length, 1);
         assert.equal(misPuestoTitulo(lista[0]), "ZN · Zona Norte");
         assert.deepEqual(parseMisPuestos(null), []);
+        // Ubicación del puesto ya no trae la sección: «Mis puestos» tiene su propio módulo
         const pantalla = leer(mobile, "screens/PuestoUbicacionScreen.tsx");
-        assert.match(pantalla, /<MisPuestosSection refreshAccessToken=\{refreshAccessToken\} logout=\{logout\} \/>/);
+        assert.equal(pantalla.includes("MisPuestosSection"), false);
         const seccion = leer(mobile, "components/MisPuestosSection.tsx");
         assert.match(seccion, /necesitas conexión a internet/);
         assert.match(seccion, /\/api\/puestos\/mis-puestos/);

@@ -622,7 +622,7 @@ export async function executeReportesOperation(
         const access = await authorizeReportesOperation(op, {
             empleadoId: auth.empleadoId,
             isAdmin: () => isAdminFor(req, auth.empleadoId, PERM_REGISTROS_DE_OTROS),
-        }, PERM_REGISTROS_DE_OTROS);
+        });
         if (!access.ok) {
             return { status: false, message: access.message, httpStatus: access.httpStatus };
         }

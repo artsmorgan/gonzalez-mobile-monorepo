@@ -30,6 +30,7 @@ import { persistSignatureRef, resolveStoredSignatureDisplayUri, localizeSignatur
 import DateTimePicker from '@react-native-community/datetimepicker';
 import SignatureScreen from 'react-native-signature-canvas';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import HierarchyEmptyState from '@/components/HierarchyEmptyState';
 import PuestoSalidaPicker, { type PuestoSalidaOption } from '@/components/PuestoSalidaPicker';
 import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
@@ -2734,9 +2735,17 @@ export default function VisitorsScreen() {
             Ubicación del registro (empresa → puesto)
           </ThemedText>
           {structure.length === 0 ? (
-            <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+            <HierarchyEmptyState onUseMarca={handleFormHierarchyChange} currentValues={{
+                empresaId: formEmpresaId,
+                clienteId: formClienteId,
+                divisionId: formDivisionId,
+                contratoId: formContratoId,
+                sucursalId: formSucursalId,
+                puestoId: formPuestoId,
+              }} />
           ) : (
             <HierarchyPickerFields
+              marcaFallback
               structure={structure}
               levels={['cliente', 'contrato', 'sucursal', 'puesto']}
               isLoading={false}
@@ -3560,7 +3569,7 @@ export default function VisitorsScreen() {
                   </ThemedView>
                   {structure.length === 0 ? (
                     <ThemedView style={styles.filterGroupSearch}>
-                      <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                      <HierarchyEmptyState group="filtro" />
                     </ThemedView>
                   ) : (
                     <HierarchyPickerFields

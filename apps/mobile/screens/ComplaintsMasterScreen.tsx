@@ -2613,6 +2613,7 @@ export default function ComplaintsMasterScreen() {
               <ThemedText style={styles.formHintText}>Cargando estructura…</ThemedText>
             ) : (
               <HierarchyPickerFields
+                marcaFallback
                 structure={structure}
                 levels={['cliente', 'contrato', 'sucursal', 'puesto', 'plaza']}
                 isLoading={isStructureLoading}

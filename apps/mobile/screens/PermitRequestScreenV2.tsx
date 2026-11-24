@@ -13,6 +13,8 @@ import {
   TouchableOpacity,
   View, RefreshControl } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import DateRangeFilter from '../components/DateRangeFilter';
+import { EMPTY_RANGE, creationYmd, inRange, normalizeToYmd, type DateRange } from '../hooks/filtrosFechas';
 import { Picker } from '@react-native-picker/picker';
 import SignatureScreen from 'react-native-signature-canvas';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
@@ -351,20 +353,16 @@ export default function PermitRequestScreenV2() {
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
   const [filterEstado, setFilterEstado] = useState<'all' | 'pendiente' | 'aprobado' | 'rechazado'>('all');
   const [filterNombreSolicitante, setFilterNombreSolicitante] = useState('');
-  /** YYYY-MM-DD o null; primitivos para que el listado filtrado se recalcule siempre. */
-  const [filterFechaDesde, setFilterFechaDesde] = useState<string | null>(null);
-  const [filterFechaHasta, setFilterFechaHasta] = useState<string | null>(null);
-  const [showFilterDesdePicker, setShowFilterDesdePicker] = useState(false);
-  const [showFilterHastaPicker, setShowFilterHastaPicker] = useState(false);
+  /** Rangos de fecha del filtro: nacen VACÍOS (un rango vacío no oculta nada; ver hooks/filtrosFechas.ts). */
+  const [filterCreacion, setFilterCreacion] = useState<DateRange>(EMPTY_RANGE);
+  const [filterInicioPermiso, setFilterInicioPermiso] = useState<DateRange>(EMPTY_RANGE);
   const [filterTipoListado, setFilterTipoListado] = useState<'all' | PermitType>('all');
 
   const resetPermitFilters = useCallback(() => {
     setFilterEstado('all');
     setFilterNombreSolicitante('');
-    setFilterFechaDesde(null);
-    setFilterFechaHasta(null);
-    setShowFilterDesdePicker(false);
-    setShowFilterHastaPicker(false);
+    setFilterCreacion(EMPTY_RANGE);
+    setFilterInicioPermiso(EMPTY_RANGE);
     setFilterTipoListado('all');
   }, []);
 
@@ -464,10 +462,10 @@ export default function PermitRequestScreenV2() {
       }
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
-      const mode = String(currentPuestoNombre || '').toLowerCase().includes('ejecutivo') ? '' : 'mine';
-      const query = mode ? `?mode=${encodeURIComponent(mode)}` : '';
+      // El servidor decide qué solicitudes trae: las propias y las que esta persona debe aprobar o rechazar (por ser su ejecutivo de cuenta).
+      // Antes la app pedía solo las propias según el nombre del puesto de la marca actual, y un ejecutivo sin marca no veía las suyas.
       const resp = await authedFetch({
-        url: `${apiUrl}/api/permit-request${query}`,
+        url: `${apiUrl}/api/permit-request`,
         init: { method: 'GET', headers: { 'Content-Type': 'application/json' } },
         refreshAccessToken,
         logout,
@@ -485,7 +483,7 @@ export default function PermitRequestScreenV2() {
       setIsLoading(false);
       isFetchingAllRef.current = false;
     }
-  }, [getConnectionStatus, refreshAccessToken, logout, loadRecordsFromCache, currentPuestoNombre]);
+  }, [getConnectionStatus, refreshAccessToken, logout, loadRecordsFromCache]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1216,8 +1214,6 @@ export default function PermitRequestScreenV2() {
   };
 
   const filteredRecords = useMemo(() => {
-    const desdeYmd = filterFechaDesde ? normalizeDateToYMD(filterFechaDesde) : '';
-    const hastaYmd = filterFechaHasta ? normalizeDateToYMD(filterFechaHasta) : '';
     const qNombre = filterNombreSolicitante.trim().toLowerCase();
 
     return records.filter((r) => {
@@ -1234,22 +1230,13 @@ export default function PermitRequestScreenV2() {
       const matchesTipo =
         filterTipoListado === 'all' || tipoRec === filterTipoListado.toLowerCase().trim();
 
-      const inicioYmd = permitRecordDateYmd(r.fecha_inicio);
-      const finYmd = permitRecordDateYmd(r.fecha_fin);
-      let matchesRangoFechas = true;
-      if (desdeYmd || hastaYmd) {
-        if (!inicioYmd || !finYmd) {
-          matchesRangoFechas = false;
-        } else {
-          const afterDesde = !desdeYmd || finYmd >= desdeYmd;
-          const beforeHasta = !hastaYmd || inicioYmd <= hastaYmd;
-          matchesRangoFechas = afterDesde && beforeHasta;
-        }
-      }
+      // Fecha de creación (día en Costa Rica) y fecha de inicio del permiso: cada una con su rango; un rango vacío no oculta nada.
+      const matchesCreacion = inRange(creationYmd(r.created_at), filterCreacion);
+      const matchesInicio = inRange(normalizeToYmd(r.fecha_inicio), filterInicioPermiso);
 
-      return matchesEstado && matchesNombre && matchesTipo && matchesRangoFechas;
+      return matchesEstado && matchesNombre && matchesTipo && matchesCreacion && matchesInicio;
     });
-  }, [records, filterEstado, filterNombreSolicitante, filterFechaDesde, filterFechaHasta, filterTipoListado]);
+  }, [records, filterEstado, filterNombreSolicitante, filterCreacion, filterInicioPermiso, filterTipoListado]);
 
   return (
     <ThemedView style={styles.container}>
@@ -1323,80 +1310,8 @@ export default function PermitRequestScreenV2() {
                         placeholderTextColor="#999"
                       />
                     </ThemedView>
-                    <ThemedView style={styles.filterGroupSearch}>
-                      <ThemedText style={styles.filterLabel}>Desde — período de la solicitud:</ThemedText>
-                      <TouchableOpacity
-                        style={styles.dateBtn}
-                        onPress={() => setShowFilterDesdePicker(true)}
-                        activeOpacity={0.85}
-                      >
-                        <ThemedText style={styles.filterDateBtnText}>
-                          {filterFechaDesde ? formatYmdStringAsDMY(filterFechaDesde) : 'Tocar para elegir fecha'}
-                        </ThemedText>
-                      </TouchableOpacity>
-                      {filterFechaDesde ? (
-                        <TouchableOpacity onPress={() => setFilterFechaDesde(null)} style={styles.filterClearLinkWrap}>
-                          <ThemedText style={styles.filterClearLink}>Quitar filtro de fecha</ThemedText>
-                        </TouchableOpacity>
-                      ) : null}
-                      {showFilterDesdePicker ? (
-                        <DateTimePicker
-                          value={filterFechaDesde ? localDateFromYmd(filterFechaDesde) : new Date()}
-                          mode="date"
-                          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                          onChange={(event: { type?: string }, d?: Date) => {
-                            if (Platform.OS === 'android') {
-                              setShowFilterDesdePicker(false);
-                              if (event?.type === 'dismissed') {
-                                return;
-                              }
-                            } else {
-                              setShowFilterDesdePicker(false);
-                            }
-                            if (d) {
-                              setFilterFechaDesde(formatDateYMD(d));
-                            }
-                          }}
-                        />
-                      ) : null}
-                    </ThemedView>
-                    <ThemedView style={styles.filterGroupSearch}>
-                      <ThemedText style={styles.filterLabel}>Hasta — período de la solicitud:</ThemedText>
-                      <TouchableOpacity
-                        style={styles.dateBtn}
-                        onPress={() => setShowFilterHastaPicker(true)}
-                        activeOpacity={0.85}
-                      >
-                        <ThemedText style={styles.filterDateBtnText}>
-                          {filterFechaHasta ? formatYmdStringAsDMY(filterFechaHasta) : 'Tocar para elegir fecha'}
-                        </ThemedText>
-                      </TouchableOpacity>
-                      {filterFechaHasta ? (
-                        <TouchableOpacity onPress={() => setFilterFechaHasta(null)} style={styles.filterClearLinkWrap}>
-                          <ThemedText style={styles.filterClearLink}>Quitar filtro de fecha</ThemedText>
-                        </TouchableOpacity>
-                      ) : null}
-                      {showFilterHastaPicker ? (
-                        <DateTimePicker
-                          value={filterFechaHasta ? localDateFromYmd(filterFechaHasta) : new Date()}
-                          mode="date"
-                          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                          onChange={(event: { type?: string }, d?: Date) => {
-                            if (Platform.OS === 'android') {
-                              setShowFilterHastaPicker(false);
-                              if (event?.type === 'dismissed') {
-                                return;
-                              }
-                            } else {
-                              setShowFilterHastaPicker(false);
-                            }
-                            if (d) {
-                              setFilterFechaHasta(formatDateYMD(d));
-                            }
-                          }}
-                        />
-                      ) : null}
-                    </ThemedView>
+                    <DateRangeFilter label="Fecha de creación" value={filterCreacion} onChange={setFilterCreacion} />
+                    <DateRangeFilter label="Fecha de inicio del permiso" value={filterInicioPermiso} onChange={setFilterInicioPermiso} />
                     <ThemedView style={styles.filterGroupSearch}>
                       <ThemedText style={styles.filterLabel}>Tipo de solicitud:</ThemedText>
                       <ThemedView style={styles.pickerContainer}>
@@ -1483,6 +1398,8 @@ export default function PermitRequestScreenV2() {
                         <Collapsible title="Ver adjuntos">
                           <ThemedView style={styles.attachmentsList}>
                             {r.archivos.map((file, idx) => {
+                              // Pueden verlos la persona del permiso y el ejecutivo asignado (antes solo el ejecutivo).
+                              const canViewFiles = Boolean(r.is_executive_for_record) || Boolean(r.is_own_record);
                               const mediaUrl = buildPermitRequestMediaUrl(r.id, file.name, file.type, accessToken);
                               const displayName = String(file.original_name || file.name || `Archivo ${idx + 1}`);
                               const normalizedType = String(file.type || '').toLowerCase();
@@ -1493,8 +1410,8 @@ export default function PermitRequestScreenV2() {
                                     {file.is_main ? '⭐ ' : ''}{displayName}
                                   </ThemedText>
                                   <ThemedText style={styles.attachmentMeta}>Tipo: {normalizedType || 'file'}</ThemedText>
-                                  {!Boolean(r.is_executive_for_record) ? (
-                                    <ThemedText style={styles.signatureHintMuted}>Disponible para el ejecutivo asignado.</ThemedText>
+                                  {!canViewFiles ? (
+                                    <ThemedText style={styles.signatureHintMuted}>Disponible para la persona del permiso y su ejecutivo asignado.</ThemedText>
                                   ) : normalizedType === 'image' ? (
                                     <ZoomableThumbnailImage uri={mediaUrl} style={styles.attachmentImage} resizeMode="contain" />
                                   ) : normalizedType === 'audio' ? (
@@ -1502,7 +1419,7 @@ export default function PermitRequestScreenV2() {
                                   ) : normalizedType === 'video' ? (
                                     <PermitVideoPlayer sourceUrl={mediaUrl} />
                                   ) : null}
-                                  {Boolean(r.is_executive_for_record) && isTextLike && (
+                                  {canViewFiles && isTextLike && (
                                     <TouchableOpacity
                                       style={[styles.actionBtn, styles.downloadBtn, { marginTop: 8 }]}
                                       onPress={() => openAttachment(r, file)}

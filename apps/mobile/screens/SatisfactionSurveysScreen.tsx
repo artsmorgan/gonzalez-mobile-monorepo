@@ -26,6 +26,7 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import HierarchyEmptyState from '@/components/HierarchyEmptyState';
 import SignatureScreen from "react-native-signature-canvas";
 import { persistSignatureRef, hydrateSignatureRef, deleteSignatureLocalRef, resolveStoredSignatureDisplayUri, saveBase64File } from '@/hooks/fileStorage';
 import getHoraAccion from '@/hooks/getHoraAccion';
@@ -3455,7 +3456,7 @@ export default function SatisfactionSurveysScreen() {
                           <ThemedText style={styles.loadingText}>Cargando estructura...</ThemedText>
                         </ThemedView>
                       ) : structure.length === 0 ? (
-                        <ThemedText style={styles.noMarcaMessage}>Sin estructura en caché.</ThemedText>
+                        <HierarchyEmptyState group="filtro" />
                       ) : (
                         <HierarchyPickerFields
                           structure={structure}
@@ -3851,9 +3852,17 @@ export default function SatisfactionSurveysScreen() {
                         <ThemedText style={styles.loadingText}>Cargando estructura...</ThemedText>
                       </ThemedView>
                     ) : structure.length === 0 ? (
-                      <ThemedText style={styles.noMarcaMessage}>Sin estructura en caché.</ThemedText>
+                      <HierarchyEmptyState onUseMarca={handleFormHierarchyChange} currentValues={{
+                          empresaId: formEmpresaId,
+                          clienteId: formClienteId,
+                          divisionId: formDivisionId,
+                          contratoId: formContratoId,
+                          sucursalId: formCorpoId,
+                          puestoId: formPuestoId,
+                        }} />
                     ) : (
                       <HierarchyPickerFields
+                        marcaFallback
                         structure={structure}
                         levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                         isLoading={isStructureLoading && structure.length === 0}

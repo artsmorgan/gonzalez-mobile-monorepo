@@ -50,6 +50,7 @@ import getHoraAccion from '@/hooks/getHoraAccion';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import authedFetch from '@/hooks/authedFetch';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import HierarchyEmptyState from '@/components/HierarchyEmptyState';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { getLocalFileDisplayUri, saveFile, persistSignatureRef, hydrateSignatureRef, deleteSignatureLocalRef, saveBase64File } from '@/hooks/fileStorage';
 import {
@@ -2364,7 +2365,7 @@ export default function OpeningClosingPositionScreen() {
       {isListFiltersExpanded ? (
         <ThemedView style={styles.filterContent}>
           {structure.length === 0 ? (
-            <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+            <HierarchyEmptyState group="filtro" />
           ) : (
             <HierarchyPickerFields
               structure={structure}
@@ -2927,11 +2928,17 @@ export default function OpeningClosingPositionScreen() {
 
                 <ThemedView style={styles.sectionBody}>
                   {structure.length === 0 ? (
-                    <ThemedText style={[styles.hintText, { opacity: 0.85, marginBottom: 8 }]}>
-                      Sin estructura en caché.
-                    </ThemedText>
+                    <HierarchyEmptyState onUseMarca={handleFormHierarchyChange} currentValues={{
+                      empresaId: selectedEmpresaId,
+                      clienteId: selectedClienteId,
+                      divisionId: selectedDivisionId,
+                      contratoId: selectedContratoId,
+                      sucursalId: selectedSucursalId,
+                      puestoId: selectedPuestoId,
+                    }} />
                   ) : null}
                   <HierarchyPickerFields
+                    marcaFallback
                     structure={structure}
                     levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                     isLoading={false}

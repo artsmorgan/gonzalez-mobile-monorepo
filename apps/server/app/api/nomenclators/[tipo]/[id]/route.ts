@@ -47,7 +47,7 @@ async function requireCallerSuperAdmin(req: NextRequest, payload: any, method: s
         return NextResponse.json({ status: false, message: "Usuario no autorizado" }, { status: 403 });
     }
     const ok = await isAdminFor(req, empleadoId, "administracion.super-admins");
-    if (!ok, "administracion.super-admins") {
+    if (!ok) {
         await reportError(req, "api/nomenclators/[tipo]/[id]", method, 403, "Se requiere rol SUPER_ADMIN para administrar este nomenclador");
         return NextResponse.json(
             { status: false, message: "Se requiere rol SUPER_ADMIN para administrar este nomenclador" },

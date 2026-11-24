@@ -4015,6 +4015,7 @@ export default function ActivitiesScreen() {
 
               <ThemedView style={styles.sectionCard}>
                 <HierarchyPickerFields
+                  marcaFallback
                   structure={structure}
                   levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                   isLoading={isStructureLoading}
@@ -4375,6 +4376,7 @@ export default function ActivitiesScreen() {
                         <>
                           <ThemedText style={styles.formLabel}>Jerarquía para puestos</ThemedText>
                           <HierarchyPickerFields
+                            marcaFallback
                             structure={structure}
                             levels={['cliente', 'contrato', 'sucursal']}
                             isLoading={isStructureLoading}
@@ -5039,6 +5041,7 @@ export default function ActivitiesScreen() {
                     <>
                       <ThemedText style={styles.formLabel}>Jerarquía para puestos</ThemedText>
                       <HierarchyPickerFields
+                        marcaFallback
                         structure={structure}
                         levels={['cliente', 'contrato', 'sucursal']}
                         isLoading={isStructureLoading}

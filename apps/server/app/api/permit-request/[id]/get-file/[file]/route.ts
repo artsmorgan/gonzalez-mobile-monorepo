@@ -3,6 +3,7 @@ import { verifyAccessTokenByApi } from '../../../../../../utils/verifyAccessToke
 import { callDynamicPrisma } from '../../../../../../utils/callDynamicPrisma';
 import { fetchDynamicFile } from '../../../../../../utils/callDynamicFilesApi';
 import { prisma } from '../../../../../../utils/prismaClient';
+import { ARCHIVO_PERMISO_DENEGADO, puedeVerArchivosDelPermiso } from "../../../../../../utils/permitArchivos";
 import { reportError } from '../../../../../../utils/reportError';
 
 export const runtime = 'nodejs';
@@ -96,13 +97,11 @@ export async function GET(
       where: { id: currentEmployeeId },
     });
     const myEjecutivoCuentaId = parseIntStrict(empleado?.supervisor_id);
-    const isExecutive =
-      Number(record.ejecutivo_cuenta) === currentEmployeeId ||
-      (myEjecutivoCuentaId != null && Number(record.ejecutivo_cuenta) === Number(myEjecutivoCuentaId));
+    const isExecutive = puedeVerArchivosDelPermiso({ record, currentEmployeeId, myEjecutivoCuentaId });
     if (!isExecutive) {
-      await reportError(req, 'api/permit-request/[id]/get-file/[file]', 'GET', 400, 'Solo el ejecutivo asignado puede descargar este archivo');
+      await reportError(req, 'api/permit-request/[id]/get-file/[file]', 'GET', 400, ARCHIVO_PERMISO_DENEGADO);
       return NextResponse.json(
-        { status: false, message: 'Solo el ejecutivo asignado puede descargar este archivo' },
+        { status: false, message: ARCHIVO_PERMISO_DENEGADO },
         { status: 400 }
       );
     }

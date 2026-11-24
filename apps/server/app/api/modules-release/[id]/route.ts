@@ -22,7 +22,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: false, message: "Usuario no autorizado" }, { status: 403 });
     }
     const superAdmin = await isAdminFor(req, empleadoId, "administracion.visibilidad-de-modulos");
-    if (!superAdmin, "administracion.visibilidad-de-modulos") {
+    if (!superAdmin) {
       await reportError(req, "api/modules-release/[id]", "PUT", 403, "Se requiere rol SUPER_ADMIN para modificar visibilidad de módulos");
       return NextResponse.json(
         { status: false, message: "Se requiere rol SUPER_ADMIN para modificar visibilidad de módulos" },

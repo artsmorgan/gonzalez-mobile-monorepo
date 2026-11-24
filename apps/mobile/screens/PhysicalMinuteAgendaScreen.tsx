@@ -29,6 +29,7 @@ import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/component
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import HierarchyEmptyState from '@/components/HierarchyEmptyState';
 import { useAuth } from '@/contexts/AuthContext';
 import Constants from 'expo-constants';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -2596,9 +2597,17 @@ export default function PhysicalMinuteAgendaScreen() {
             <ThemedText style={styles.formSectionTitle}>Jerarquía</ThemedText>
 
             {structure.length === 0 ? (
-              <ThemedText style={[styles.label, { opacity: 0.7, marginBottom: 8 }]}>Sin estructura en caché.</ThemedText>
+              <HierarchyEmptyState onUseMarca={handleFormHierarchyChange} currentValues={{
+                empresaId: selectedEmpresaId,
+                clienteId: selectedClienteId,
+                divisionId: selectedDivisionId,
+                contratoId: selectedContratoId,
+                sucursalId: selectedSucursalId,
+                puestoId: selectedPuestoId,
+              }} />
             ) : null}
             <HierarchyPickerFields
+              marcaFallback
               structure={structure}
               levels={['cliente', 'contrato', 'sucursal', 'puesto']}
               isLoading={false}
@@ -3064,9 +3073,7 @@ export default function PhysicalMinuteAgendaScreen() {
                 {isFiltersExpanded && (
                   <ThemedView style={styles.filterContent}>
                     {structure.length === 0 ? (
-                      <ThemedText style={[styles.filterLabel, { opacity: 0.7, marginBottom: 8 }]}>
-                        Sin estructura en caché.
-                      </ThemedText>
+                      <HierarchyEmptyState group="filtro" />
                     ) : null}
                     <HierarchyPickerFields
                       structure={structure}
