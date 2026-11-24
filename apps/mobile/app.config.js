@@ -21,95 +21,71 @@ function getGitCommitLast4() {
  * Debe coincidir con la entrada de `apps/server/mobile_versions_test.json` (lite) o `mobile_versions_prod.json` (prod).
  */
 const APP_VERSION_INFO_LITE = {
-  "version": "1.0.7",
-  "id": "2f2dbe94-6fa6-4e48-b7c8-fdcbc75ec977",
+  "version": "1.0.8",
+  "id": "369a0930-5c58-476b-a32a-05da2f8b441e",
   "name": "MonitoreApp",
-  "created_at": "2026-11-18T00:00:00Z",
-  "title": "Mis puestos, mapa flotante con elección de aplicación, permisos y mutuos acuerdos por turnos, y mensajes claros al marcar",
-  "description": "Se agrega el módulo Mis puestos y el mapa del puesto en una ventana flotante con Google Maps, Waze u otra aplicación; las solicitudes de permiso ya no piden plaza, los mutuos acuerdos permiten elegir los turnos, y Marcar maneja días libres, marcas incompletas y los mensajes de Planillas.",
+  "created_at": "2026-11-24T00:00:00Z",
+  "title": "Solicitudes de permiso y mutuos con nuevos filtros, jerarquía sin descargar y permisos de Guardify",
+  "description": "Las solicitudes de permiso muestran también las que debes aprobar o rechazar y sus adjuntos al dueño, los filtros de fecha de permisos y mutuos acuerdos nacen vacíos, la jerarquía sin descargar ofrece ir a su módulo y completar con la marca actual, Mis puestos solo cuenta turnos laborales reales y la app avisa cuando falta un permiso.",
   "notas": [
     {
-      "title": "Ubicación del puesto en una ventana flotante",
-      "description": "El mapa del puesto se abre en una ventana propia, con tu ubicación actual, para moverlo y acercarlo sin chocar con el desplazamiento de la pantalla. El botón «Cómo llegar» permite elegir con qué aplicación abrirlo: Google Maps, Waze u otra aplicación de mapas del teléfono."
-    },
-    {
-      "title": "Mis puestos",
-      "description": "Nuevo módulo «Mis puestos», disponible para todos los roles y tipos de usuario, con o sin marca. Muestra los puestos donde tienes turnos de hoy en adelante, cada uno con su mapa y la ruta para llegar."
-    },
-    {
-      "title": "Marcar ingreso y salida: días libres y marcas incompletas",
-      "description": "Si un día trae varias marcas, se toma la que tiene tipo de turno y horario; si ninguna los tiene, el día se muestra como libre (en el turno actual, el siguiente turno y los turnos futuros). Una marca sin hora de inicio o de fin muestra solo la fecha, sin horas inventadas y sin mensaje de tardía."
-    },
-    {
-      "title": "Mensajes de Planillas al marcar",
-      "description": "Si Planillas no permite marcar la entrada o la salida (por ejemplo, en un día libre o sin turno asignado), la aplicación muestra el mensaje que Planillas envía en lugar de un error genérico."
-    },
-    {
-      "title": "Banner con la versión instalada",
-      "description": "El banner superior de la versión de pruebas muestra el número de versión (por ejemplo, Versión de prueba - 1.0.7) en lugar de los caracteres del repositorio; el de producción muestra Versión y su número."
-    },
-    {
       "title": "Solicitud de permiso",
-      "description": "Ya no hace falta elegir una plaza: solo se indican las fechas. Al buscar los turnos se revalida la contraseña de Planillas si es necesario, el botón muestra una animación de carga y la lista incluye el código del puesto y descarta los turnos sin tipo ni horario."
+      "description": "El listado muestra tus solicitudes y también las que debes aprobar o rechazar por ser el ejecutivo de cuenta a cargo, aunque hoy no tengas una marca vigente ni trabajes en un puesto de ejecutivo. Los adjuntos (imagen, archivo, audio o video) ahora los puede ver quien pidió el permiso y no solo el ejecutivo. El filtro tiene dos rangos de fecha, uno para la fecha de creación y otro para la fecha de inicio del permiso, y los dos cargan vacíos: al abrir el módulo no se oculta ninguna solicitud."
     },
     {
       "title": "Mutuos acuerdos",
-      "description": "Ahora se elige qué turno de cada empleado se intercambia. Cada turno indica si es propio o de reemplazo, con una advertencia al elegir uno de reemplazo. No aparecen los turnos sin datos ni los propios que hoy cubre otra persona, y la lista muestra el código del puesto."
+      "description": "El filtro tiene tres rangos de fecha: la fecha de creación, la fecha de inicio del primer turno y la fecha del segundo turno. Los tres cargan vacíos, así que al abrir el módulo se ven todos tus mutuos acuerdos y los que debes aprobar o rechazar."
     },
     {
-      "title": "Notificaciones",
-      "description": "Una persona sin turno ya no recibe un error al abrir las notificaciones: se muestran las propias."
+      "title": "Mis puestos",
+      "description": "La próxima fecha de cada puesto solo toma en cuenta los turnos laborales reales: no cuentan los días libres ni las marcas sin tipo de turno, hora de inicio u hora de fin. Un puesto que solo tiene días libres ya no aparece."
     },
     {
-      "title": "Reportes de actividades",
-      "description": "El reporte de actividades incluye las columnas «Horario diurno», «Horario mixto» y «Horario nocturno» (Sí o No). Los reportes de mutuos acuerdos, permisos, control de asistencia y acciones personales muestran el tipo de turno con su nombre y las fechas de los mutuos como DD-MM-AAAA."
+      "title": "Ubicación del puesto",
+      "description": "Se quitó la sección «Mis puestos» de este módulo: ahora está solo en su propio módulo."
+    },
+    {
+      "title": "Jerarquía sin descargar",
+      "description": "Donde la app necesita elegir la jerarquía (menús de los módulos, filtros y formularios) y todavía no está descargada, muestra un botón «Descargar jerarquía» que, tras confirmar, te lleva al módulo Jerarquía. Aparece una sola vez en el filtro y una sola vez en el formulario. En los formularios que guardan datos, mientras no haya jerarquía se usan los de tu marca actual (puesto, plaza, sucursal, etc.) y la pantalla te lo avisa. Con la jerarquía descargada todo funciona como siempre."
+    },
+    {
+      "title": "Permisos y avisos de Guardify",
+      "description": "Si tu equipo usa Guardify, las pantallas del menú se muestran según tu rol y los permisos que Guardify te asignó, y el servidor también los exige al guardar. Si falta un permiso, la app lo dice con «No tienes permiso para realizar esta acción» sin cerrar tu sesión, y lo que quedó pendiente sin conexión no se reintenta sin parar. También se muestra el mensaje «Tu administrador está intentando comunicarse contigo» cuando el administrador lo envía. Una versión sin Guardify que no pueda registrar el equipo lo dice con claridad: «Esta versión no puede registrar el equipo»."
     }
   ]
 };
 
 const APP_VERSION_INFO_PROD = {
-  "version": "1.0.6",
-  "id": "c0fb0a43-8fcc-4d6c-a61e-ac5687c0c230",
+  "version": "1.0.7",
+  "id": "f48fb718-61f0-493e-94f3-8987eb3384de",
   "name": "MonitoreApp",
-  "created_at": "2026-11-18T00:00:00Z",
-  "title": "Mis puestos, mapa flotante con elección de aplicación, permisos y mutuos acuerdos por turnos, y mensajes claros al marcar",
-  "description": "Se agrega el módulo Mis puestos y el mapa del puesto en una ventana flotante con Google Maps, Waze u otra aplicación; las solicitudes de permiso ya no piden plaza, los mutuos acuerdos permiten elegir los turnos, y Marcar maneja días libres, marcas incompletas y los mensajes de Planillas.",
+  "created_at": "2026-11-24T00:00:00Z",
+  "title": "Solicitudes de permiso y mutuos con nuevos filtros, jerarquía sin descargar y permisos de Guardify",
+  "description": "Las solicitudes de permiso muestran también las que debes aprobar o rechazar y sus adjuntos al dueño, los filtros de fecha de permisos y mutuos acuerdos nacen vacíos, la jerarquía sin descargar ofrece ir a su módulo y completar con la marca actual, Mis puestos solo cuenta turnos laborales reales y la app avisa cuando falta un permiso.",
   "notas": [
     {
-      "title": "Ubicación del puesto en una ventana flotante",
-      "description": "El mapa del puesto se abre en una ventana propia, con tu ubicación actual, para moverlo y acercarlo sin chocar con el desplazamiento de la pantalla. El botón «Cómo llegar» permite elegir con qué aplicación abrirlo: Google Maps, Waze u otra aplicación de mapas del teléfono."
-    },
-    {
-      "title": "Mis puestos",
-      "description": "Nuevo módulo «Mis puestos», disponible para todos los roles y tipos de usuario, con o sin marca. Muestra los puestos donde tienes turnos de hoy en adelante, cada uno con su mapa y la ruta para llegar."
-    },
-    {
-      "title": "Marcar ingreso y salida: días libres y marcas incompletas",
-      "description": "Si un día trae varias marcas, se toma la que tiene tipo de turno y horario; si ninguna los tiene, el día se muestra como libre (en el turno actual, el siguiente turno y los turnos futuros). Una marca sin hora de inicio o de fin muestra solo la fecha, sin horas inventadas y sin mensaje de tardía."
-    },
-    {
-      "title": "Mensajes de Planillas al marcar",
-      "description": "Si Planillas no permite marcar la entrada o la salida (por ejemplo, en un día libre o sin turno asignado), la aplicación muestra el mensaje que Planillas envía en lugar de un error genérico."
-    },
-    {
-      "title": "Banner con la versión instalada",
-      "description": "El banner superior de la versión de pruebas muestra el número de versión (por ejemplo, Versión de prueba - 1.0.7) en lugar de los caracteres del repositorio; el de producción muestra Versión y su número."
-    },
-    {
       "title": "Solicitud de permiso",
-      "description": "Ya no hace falta elegir una plaza: solo se indican las fechas. Al buscar los turnos se revalida la contraseña de Planillas si es necesario, el botón muestra una animación de carga y la lista incluye el código del puesto y descarta los turnos sin tipo ni horario."
+      "description": "El listado muestra tus solicitudes y también las que debes aprobar o rechazar por ser el ejecutivo de cuenta a cargo, aunque hoy no tengas una marca vigente ni trabajes en un puesto de ejecutivo. Los adjuntos (imagen, archivo, audio o video) ahora los puede ver quien pidió el permiso y no solo el ejecutivo. El filtro tiene dos rangos de fecha, uno para la fecha de creación y otro para la fecha de inicio del permiso, y los dos cargan vacíos: al abrir el módulo no se oculta ninguna solicitud."
     },
     {
       "title": "Mutuos acuerdos",
-      "description": "Ahora se elige qué turno de cada empleado se intercambia. Cada turno indica si es propio o de reemplazo, con una advertencia al elegir uno de reemplazo. No aparecen los turnos sin datos ni los propios que hoy cubre otra persona, y la lista muestra el código del puesto."
+      "description": "El filtro tiene tres rangos de fecha: la fecha de creación, la fecha de inicio del primer turno y la fecha del segundo turno. Los tres cargan vacíos, así que al abrir el módulo se ven todos tus mutuos acuerdos y los que debes aprobar o rechazar."
     },
     {
-      "title": "Notificaciones",
-      "description": "Una persona sin turno ya no recibe un error al abrir las notificaciones: se muestran las propias."
+      "title": "Mis puestos",
+      "description": "La próxima fecha de cada puesto solo toma en cuenta los turnos laborales reales: no cuentan los días libres ni las marcas sin tipo de turno, hora de inicio u hora de fin. Un puesto que solo tiene días libres ya no aparece."
     },
     {
-      "title": "Reportes de actividades",
-      "description": "El reporte de actividades incluye las columnas «Horario diurno», «Horario mixto» y «Horario nocturno» (Sí o No). Los reportes de mutuos acuerdos, permisos, control de asistencia y acciones personales muestran el tipo de turno con su nombre y las fechas de los mutuos como DD-MM-AAAA."
+      "title": "Ubicación del puesto",
+      "description": "Se quitó la sección «Mis puestos» de este módulo: ahora está solo en su propio módulo."
+    },
+    {
+      "title": "Jerarquía sin descargar",
+      "description": "Donde la app necesita elegir la jerarquía (menús de los módulos, filtros y formularios) y todavía no está descargada, muestra un botón «Descargar jerarquía» que, tras confirmar, te lleva al módulo Jerarquía. Aparece una sola vez en el filtro y una sola vez en el formulario. En los formularios que guardan datos, mientras no haya jerarquía se usan los de tu marca actual (puesto, plaza, sucursal, etc.) y la pantalla te lo avisa. Con la jerarquía descargada todo funciona como siempre."
+    },
+    {
+      "title": "Permisos y avisos de Guardify",
+      "description": "Si tu equipo usa Guardify, las pantallas del menú se muestran según tu rol y los permisos que Guardify te asignó, y el servidor también los exige al guardar. Si falta un permiso, la app lo dice con «No tienes permiso para realizar esta acción» sin cerrar tu sesión, y lo que quedó pendiente sin conexión no se reintenta sin parar. También se muestra el mensaje «Tu administrador está intentando comunicarse contigo» cuando el administrador lo envía. Una versión sin Guardify que no pueda registrar el equipo lo dice con claridad: «Esta versión no puede registrar el equipo»."
     }
   ]
 };

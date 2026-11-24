@@ -238,5 +238,39 @@
         "description": "Si la búsqueda de tu turno tarda, la aplicación espera el tiempo necesario en lugar de cortarla a los 20 segundos, a los 20 segundos cambia el texto «Cargando datos de asistencia...» por «La búsqueda está tardando demasiado, espere por favor...» y no vuelve a buscar mientras no termine; la actualización automática de 30 segundos empieza solo cuando la marca ya está en pantalla. Si el servicio no responde a tiempo, se muestra el último turno guardado en el teléfono con un aviso, y cuando no hay ninguno, un mensaje claro con una ventana de ayuda, el código para soporte y el botón para compartirlo. El servidor consulta los días a Planillas a la vez y con un plazo propio por consulta. La marca se muestra de inmediato al obtenerla; los avisos y el botón de marcar aparecen cuando terminan las validaciones de ubicación y hora, y la espera de 30 segundos empieza recién en ese momento. Si una validación falla, la marca se queda en pantalla con su mensaje en lugar de desaparecer, y si no hay hora guardada en el teléfono se usa la hora actual para poder mostrarla. El aviso «Tardía» ya no aparece sin motivo: solo se muestra cuando de verdad pasó la hora de inicio del turno (más la gracia) y todavía no se ha marcado la entrada."
       }
     ]
+  },
+  {
+    "version": "1.0.8",
+    "id": "369a0930-5c58-476b-a32a-05da2f8b441e",
+    "name": "MonitoreApp",
+    "created_at": "2026-11-24T00:00:00Z",
+    "title": "Solicitudes de permiso y mutuos con nuevos filtros, jerarquía sin descargar y permisos de Guardify",
+    "description": "Las solicitudes de permiso muestran también las que debes aprobar o rechazar y sus adjuntos al dueño, los filtros de fecha de permisos y mutuos acuerdos nacen vacíos, la jerarquía sin descargar ofrece ir a su módulo y completar con la marca actual, Mis puestos solo cuenta turnos laborales reales y la app avisa cuando falta un permiso.",
+    "notas": [
+      {
+        "title": "Solicitud de permiso",
+        "description": "El listado muestra tus solicitudes y también las que debes aprobar o rechazar por ser el ejecutivo de cuenta a cargo, aunque hoy no tengas una marca vigente ni trabajes en un puesto de ejecutivo. Los adjuntos (imagen, archivo, audio o video) ahora los puede ver quien pidió el permiso y no solo el ejecutivo. El filtro tiene dos rangos de fecha, uno para la fecha de creación y otro para la fecha de inicio del permiso, y los dos cargan vacíos: al abrir el módulo no se oculta ninguna solicitud."
+      },
+      {
+        "title": "Mutuos acuerdos",
+        "description": "El filtro tiene tres rangos de fecha: la fecha de creación, la fecha de inicio del primer turno y la fecha del segundo turno. Los tres cargan vacíos, así que al abrir el módulo se ven todos tus mutuos acuerdos y los que debes aprobar o rechazar."
+      },
+      {
+        "title": "Mis puestos",
+        "description": "La próxima fecha de cada puesto solo toma en cuenta los turnos laborales reales: no cuentan los días libres ni las marcas sin tipo de turno, hora de inicio u hora de fin. Un puesto que solo tiene días libres ya no aparece."
+      },
+      {
+        "title": "Ubicación del puesto",
+        "description": "Se quitó la sección «Mis puestos» de este módulo: ahora está solo en su propio módulo."
+      },
+      {
+        "title": "Jerarquía sin descargar",
+        "description": "Donde la app necesita elegir la jerarquía (menús de los módulos, filtros y formularios) y todavía no está descargada, muestra un botón «Descargar jerarquía» que, tras confirmar, te lleva al módulo Jerarquía. Aparece una sola vez en el filtro y una sola vez en el formulario. En los formularios que guardan datos, mientras no haya jerarquía se usan los de tu marca actual (puesto, plaza, sucursal, etc.) y la pantalla te lo avisa. Con la jerarquía descargada todo funciona como siempre."
+      },
+      {
+        "title": "Permisos y avisos de Guardify",
+        "description": "Si tu equipo usa Guardify, las pantallas del menú se muestran según tu rol y los permisos que Guardify te asignó, y el servidor también los exige al guardar. Si falta un permiso, la app lo dice con «No tienes permiso para realizar esta acción» sin cerrar tu sesión, y lo que quedó pendiente sin conexión no se reintenta sin parar. También se muestra el mensaje «Tu administrador está intentando comunicarse contigo» cuando el administrador lo envía. Una versión sin Guardify que no pueda registrar el equipo lo dice con claridad: «Esta versión no puede registrar el equipo»."
+      }
+    ]
   }
 ]
