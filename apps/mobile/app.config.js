@@ -16,6 +16,21 @@ function getGitCommitLast4() {
 }
 
 /**
+ * Dominios que la app acepta como servidor cuando Guardify entrega la URL en la política del equipo (issue #214): `api.ejemplo.cr` exacto o
+ * `*.ejemplo.cr`. Es una lista FIJA del build y nunca llega por red. Sin `EXPO_PUBLIC_ALLOWED_SERVER_HOSTS` solo se acepta el dominio de
+ * `API_SERVER` (la política no puede mandar a otro servidor), que es el comportamiento de siempre.
+ */
+function resolveAllowedServerHosts(apiServer) {
+  const fromEnv = String(process.env.EXPO_PUBLIC_ALLOWED_SERVER_HOSTS || process.env.ALLOWED_SERVER_HOSTS || "").trim();
+  if (fromEnv) return fromEnv;
+  try {
+    return new URL(apiServer).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Información de versión que muestra la app (notas de versión y comparación con la última publicada).
  * Cada variante tiene su propia numeración: lite (entorno de pruebas) y prod (producción).
  * Debe coincidir con la entrada de `apps/server/mobile_versions_test.json` (lite) o `mobile_versions_prod.json` (prod).
@@ -206,6 +221,13 @@ module.exports = ({ config }) => {
           // test https://api-gonzalez-mobile-monorepo-production.up.railway.app
           // prod https://gonzalez-mobile-server-production.up.railway.app
           "https://api-gonzalez-mobile-monorepo-production.up.railway.app",
+        /** Dominios permitidos para la URL del servidor que entrega Guardify (separados por comas; ver `resolveAllowedServerHosts`). */
+        ALLOWED_SERVER_HOSTS: resolveAllowedServerHosts(
+          process.env.EXPO_PUBLIC_API_SERVER ||
+            process.env.API_SERVER ||
+            process.env.NEXT_PUBLIC_API_SERVER ||
+            "https://api-gonzalez-mobile-monorepo-production.up.railway.app"
+        ),
         /** Debe coincidir con `MOBILE_ACCESS_TOKEN` del servidor (query en `/api/main-structure`). */
         MOBILE_ACCESS_TOKEN:
           process.env.EXPO_PUBLIC_MOBILE_ACCESS_TOKEN ||

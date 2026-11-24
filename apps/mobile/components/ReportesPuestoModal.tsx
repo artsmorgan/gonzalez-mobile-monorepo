@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -11,7 +12,6 @@ import {
   View,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 
 import { ThemedText } from '@/components/ThemedText';
@@ -415,7 +415,7 @@ export default function ReportesPuestoModal({
       Alert.alert('Descarga', 'No hay reportes completados disponibles para descargar.');
       return;
     }
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       Alert.alert('Error', 'Server URL not configured');
       return;

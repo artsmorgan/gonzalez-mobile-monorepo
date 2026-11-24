@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -17,7 +18,6 @@ import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Network from 'expo-network';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import AppHeader from '@/components/AppHeader';
@@ -374,7 +374,7 @@ export default function NomencladoresScreen() {
   }, [refreshOnlineStatus]);
 
   const getApiUrl = () => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     return apiUrl;
   };

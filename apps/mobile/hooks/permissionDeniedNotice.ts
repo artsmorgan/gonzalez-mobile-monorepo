@@ -30,7 +30,10 @@ const MAX_REMEMBERED = 200;
 export function permissionFromBody(body: unknown): string | null {
   const message = body && typeof body === 'object' ? String((body as { message?: unknown }).message ?? '') : '';
   const m = /^permission_denied\|(.+)$/.exec(message.trim());
-  return m ? m[1]!.trim() || null : null;
+  if (m) return m[1]!.trim() || null;
+  // Respuesta ya reescrita con el texto para la persona (ver `friendlyPermissionResponse`): el permiso viaja aparte.
+  const own = body && typeof body === 'object' ? (body as { permission?: unknown }).permission : null;
+  return typeof own === 'string' && own.trim() ? own.trim() : null;
 }
 
 /**
@@ -78,7 +81,7 @@ export function recentDenial(key: string | null, now: number = Date.now()): { pe
 
 /** La respuesta que daría el servidor, para una acción que no se reenvía. */
 export function deniedResponse(permission: string | null): Response {
-  return new Response(JSON.stringify({ status: false, code: 'permission_denied', message: `permission_denied|${permission ?? ''}` }), {
+  return new Response(JSON.stringify({ status: false, code: 'permission_denied', permission, message: PERMISSION_DENIED_MESSAGE }), {
     status: 403,
     headers: { 'content-type': 'application/json; charset=utf-8' },
   });
@@ -96,15 +99,42 @@ export function shouldNotify(permission: string | null, now: number = Date.now()
 /**
  * Si la respuesta es un 403 por falta de permiso: recuerda la acción y avisa a la app. Nunca lanza ni consume la respuesta original.
  */
-export async function notifyIfPermissionDenied(response: Response, request: { method: string; url: string; body?: unknown; idempotencyKey?: string | null }): Promise<void> {
+export async function notifyIfPermissionDenied(
+  response: Response,
+  request: { method: string; url: string; body?: unknown; idempotencyKey?: string | null },
+): Promise<{ permission: string | null } | null> {
   try {
-    if (response.status !== 403) return;
+    if (response.status !== 403) return null;
     const body = await response.clone().json().catch(() => null);
-    if (!isPermissionDeniedPayload(body)) return;
+    if (!isPermissionDeniedPayload(body)) return null;
     const permission = permissionFromBody(body);
     rememberDenial(denialKey(request.method, request.url, request.body, request.idempotencyKey), permission);
     if (shouldNotify(permission)) eventBus.emit(PERMISSION_DENIED_EVENT, { permission } satisfies PermissionDeniedPayload);
+    return { permission };
   } catch {
     /* el aviso es complementario: la respuesta original sigue su camino */
+    return null;
+  }
+}
+
+/**
+ * La respuesta de una falta de permiso con el texto para la persona en `message` (en lugar del técnico `permission_denied|<permiso>`): las pantallas
+ * muestran `message` tal cual, así que TODAS dicen «No tienes permiso para realizar esta acción» sin tocarlas una por una. El código estable
+ * `code: "permission_denied"` se conserva (la app lo reconoce por él) y el permiso pasa a `permission`. Cualquier otra respuesta se devuelve igual.
+ */
+export async function friendlyPermissionResponse(response: Response, permission: string | null): Promise<Response> {
+  try {
+    const body = await response.clone().json().catch(() => null);
+    if (!body || typeof body !== 'object' || !isPermissionDeniedPayload(body)) return response;
+    const headers = new Headers(response.headers);
+    headers.delete('content-length');
+    headers.set('content-type', 'application/json; charset=utf-8');
+    return new Response(JSON.stringify({ ...body, code: 'permission_denied', permission, message: PERMISSION_DENIED_MESSAGE }), {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  } catch {
+    return response;
   }
 }

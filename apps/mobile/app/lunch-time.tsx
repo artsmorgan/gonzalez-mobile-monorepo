@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
@@ -6,7 +7,6 @@ import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
 import authedFetch from '@/hooks/authedFetch';
 import { mergeCurrentMarcaHierarchyIntoLunchRequest } from '@/hooks/lunchTimeMarcaHierarchy';
-import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState, useRef } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, TouchableOpacity, TextInput, Modal, AppState, AppStateStatus } from 'react-native';
@@ -166,7 +166,7 @@ export default function LunchTimeScreen() {
     }
 
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }
@@ -641,7 +641,7 @@ export default function LunchTimeScreen() {
 
   const sendLunchTimeRecord = async (esManual: boolean, manualStart?: Date, manualEnd?: Date, manualPausasList?: PausaRegistro[]) => {
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }
@@ -697,7 +697,7 @@ export default function LunchTimeScreen() {
 
   const sendLunchTimeRecordWithEndTime = async (esManual: boolean, start: Date, end: Date, pausasList: PausaRegistro[]) => {
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }

@@ -1,5 +1,5 @@
+import { apiServer } from '../utils/apiServer';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import Constants from 'expo-constants';
 import { useFonts } from 'expo-font';
 import * as Linking from 'expo-linking';
 import { Stack, useRouter } from 'expo-router';
@@ -25,7 +25,7 @@ export default function RootLayout() {
       const initialUrl = await Linking.getInitialURL();
       if (initialUrl) {
         if (initialUrl.includes('/recover-password/')) {
-          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+          const apiUrl = apiServer();
           let id = initialUrl.split('/recover-password/')[1];
           let response = await fetch(apiUrl + '/api/password/check-recovery-password-token/' + id, {
             method: 'GET',

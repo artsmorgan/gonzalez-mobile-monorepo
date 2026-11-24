@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
@@ -12,7 +13,6 @@ import {
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import Constants from 'expo-constants';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
 
@@ -150,7 +150,7 @@ export default function ArticuloMantenimientoArchivosModal({
   const buildRemoteUrl = (file: ArticuloMantenimientoRemoteFile) => {
     const mantId = resolvedMantId;
     if (!mantId || mantId <= 0) return '';
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) return '';
     const appendToken = (url: string) => {
       if (!accessToken?.trim()) return url;

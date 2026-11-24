@@ -153,14 +153,18 @@ export async function sendNotificationByRole(req: NextRequest, corpoId: number, 
     }
 }
 
-export async function sendNotificationByPlaza(req: NextRequest, marcaDiaId: number, title: string, description: string, plazaIds: number[]) {
+/**
+ * Notifica a las plazas indicadas (aviso en la app y push). `marcaDiaId` es la marca de quien origina el aviso: su plaza no se notifica a sí misma.
+ * Sin marca (`null`, p. ej. una carga hecha desde Guardify, que no tiene marca del día) se notifica a todas las plazas indicadas.
+ */
+export async function sendNotificationByPlaza(req: NextRequest, marcaDiaId: number | null, title: string, description: string, plazaIds: number[]) {
     try {
-        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: marcaDiaId } });
-        if (!marcaDia) {
+        const marcaDia = marcaDiaId == null ? null : await prisma.c_marca_dia.findUnique({ where: { id: marcaDiaId } });
+        if (marcaDiaId != null && !marcaDia) {
             return;
         }
 
-        const marcaDiaPlazaId = marcaDia.plaza_id;
+        const marcaDiaPlazaId = marcaDia?.plaza_id ?? null;
 
         if (plazaIds.length > 0) {
             const notification = await callDynamicPrisma({

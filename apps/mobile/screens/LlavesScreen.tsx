@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, Modal, View, Image, Dimensions, RefreshControl } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
@@ -8,7 +9,6 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import getCurrentUserDigitalSignature from '../hooks/getCurrentUserDigitalSignature';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import SignatureScreen from 'react-native-signature-canvas';
-import Constants from 'expo-constants';
 
 import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
@@ -447,7 +447,7 @@ export default function LlavesScreen() {
       return;
     }
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
       const resp = await authedFetch({
         url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,

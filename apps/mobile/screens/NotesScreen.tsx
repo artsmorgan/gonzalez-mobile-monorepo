@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Modal, View, Platform, Image, RefreshControl } from 'react-native';
 import DateTimePicker from "@react-native-community/datetimepicker";
@@ -11,7 +12,6 @@ import SlideMenu from '@/components/SlideMenu';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
-import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
@@ -667,7 +667,7 @@ export default function NotesScreen() {
     noteId: number | null | undefined,
     imageName?: string | null
   ) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl || !puestoId || !noteId || !imageName) return '';
     return `${apiUrl}/api/puestos/${puestoId}/notas/${noteId}/get-image/${encodeURIComponent(String(imageName))}`;
   };
@@ -975,7 +975,7 @@ export default function NotesScreen() {
 
       if (isConnected) {
         // Con internet: hacer fetch normal
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
@@ -1058,7 +1058,7 @@ export default function NotesScreen() {
 
       if (isConnected) {
         // Con internet: hacer fetch normal
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
@@ -1205,7 +1205,7 @@ export default function NotesScreen() {
       const isConnected = await getConnectionStatus();
 
       if (isConnected) {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
@@ -1384,7 +1384,7 @@ export default function NotesScreen() {
         setSendNotesPreview([]);
         return;
       }
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
       const params = new URLSearchParams();
       if (fechaInicio) params.set('fecha_inicio', ymd(fechaInicio));
@@ -1437,7 +1437,7 @@ export default function NotesScreen() {
           text: 'Enviar',
           onPress: async () => {
             try {
-              const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+              const apiUrl = apiServer();
               if (!apiUrl) throw new Error('Server URL not configured');
               const response = await authedFetch({
                 url: `${apiUrl}/api/puestos/notas/send-email`,
@@ -2231,7 +2231,7 @@ export default function NotesScreen() {
         throw new Error('Current marca data not found');
       }
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }

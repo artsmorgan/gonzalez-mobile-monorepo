@@ -6,11 +6,22 @@
  * `queueRaw` es el acceso SIN filtrar: el borrado remoto (`guardifyClient`) cuenta y borra el trabajo de todos los usuarios del equipo.
  * `runQueueRetention` aplica la caducidad de 2 semanas de las colas de un usuario que no se conecta (ver `queueRetention.ts`).
  */
+import { apiServer } from '../utils/apiServer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
 import { File, Paths } from 'expo-file-system';
 import { createQueueLayer, scrubStoredQueues, type LayerStorage, type RawQueueAccess } from './queueOwnership';
 import { runRetention } from './queueRetention';
+import { isQueueKey } from './evidenceQueue';
+import { eventBus } from './eventBus';
+import {
+  DENIED_STAMPS_KEY,
+  QUEUE_PERMISSION_REJECTED_EVENT,
+  markNotified,
+  parseDeniedStamps,
+  splitRejected,
+  toNotify,
+  type RejectedAction,
+} from './permissionRejectedQueue';
 import { isEmployeeProfilePhotoFileName } from './employeeProfilePhotoStorage';
 import { MAIN_STRUCTURE_CACHE_FILENAME, MAIN_STRUCTURE_CACHE_TMP_FILENAME } from './mainStructureCacheStorage';
 
@@ -19,7 +30,7 @@ const target = AsyncStorage as unknown as Patched;
 
 /** Organización = servidor al que se conecta la app (pruebas y producción no mezclan su trabajo pendiente en un mismo equipo). */
 function currentOrgId(): string | null {
-  const url = String(Constants.expoConfig?.extra?.API_SERVER ?? '').trim();
+  const url = String(apiServer() ?? '').trim();
   if (!url) return null;
   try {
     return new URL(url).host.toLowerCase();
@@ -94,5 +105,37 @@ export async function runQueueRetention(force = false): Promise<void> {
     }
   } catch (e) {
     console.warn('[colas] no se pudo aplicar la caducidad:', e);
+  }
+}
+
+/**
+ * Quita de las colas las acciones guardadas sin conexión que el servidor rechazó por falta de permiso (issue #211) y avisa UNA vez a la persona.
+ * Se llama al empezar la sincronización, cuando ninguna cola se está recorriendo. Solo actúa sobre acciones con sello de evidencia que el `fetch`
+ * global anotó como denegadas (ver `permissionRejectedQueue.ts`). Devuelve cuántas quitó. Nunca lanza.
+ */
+export async function purgePermissionRejectedActions(): Promise<number> {
+  try {
+    const denied = parseDeniedStamps(await layer.raw.getItem(DENIED_STAMPS_KEY));
+    if (Object.keys(denied).length === 0) return 0;
+    const keys = (await layer.raw.getAllKeys()).filter(isQueueKey);
+    const rejected: RejectedAction[] = [];
+    for (const key of keys) {
+      await layer.mutateQueue(key, (current) => {
+        const r = splitRejected(current, denied);
+        rejected.push(...r.rejected);
+        return r.json;
+      });
+    }
+    if (rejected.length === 0) return 0;
+    console.warn(`[colas] se quitaron ${rejected.length} acción(es) pendientes rechazadas por falta de permiso`);
+    const pending = toNotify(rejected, denied);
+    if (pending) {
+      await layer.raw.setItem(DENIED_STAMPS_KEY, markNotified(denied, pending.stamps));
+      eventBus.emit(QUEUE_PERMISSION_REJECTED_EVENT, pending.payload);
+    }
+    return rejected.length;
+  } catch (e) {
+    console.warn('[colas] no se pudieron revisar las acciones rechazadas por permiso:', e);
+    return 0;
   }
 }

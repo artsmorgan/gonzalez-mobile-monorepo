@@ -5,6 +5,7 @@ import { PlanillasError, type ActionEnv, type ActionErrorCode, type ActionHttp }
 import { aprobarMutuoAcuerdo } from "./aprobar-mutuo";
 import { registrarEvidenciaDeAccion } from "./evidenciaAccion";
 import { cargarInventarioPuesto, INVENTARIO_MAX_FILAS } from "./inventario";
+import { ACTIVIDADES_MAX_FILAS, cargarActividadesPuesto } from "./actividades";
 import { aprobarPermisoSolicitud } from "./aprobar-permiso";
 import { accionesDeMutuo, rechazarMutuoAcuerdo } from "./mutuos";
 import { accionesDePermiso, rechazarPermisoSolicitud } from "./permisos";
@@ -344,6 +345,9 @@ export async function handleLookupEmpleado(req: Request, deps: ActionDeps): Prom
 
 /** Máximo de filas por carga: cada fila revisa varias tablas y el envío a Planillas es de una vez. */
 export const IMPORT_MAX_ROWS = INVENTARIO_MAX_FILAS;
+/** Cargas masivas que existen. `actividades-puesto` (issue #213) crea actividades de puesto; no usa Planillas. */
+export const IMPORT_TIPOS = ["inventario-puesto", "actividades-puesto"] as const;
+const IMPORT_MAX_ROWS_POR_TIPO: Record<(typeof IMPORT_TIPOS)[number], number> = { "inventario-puesto": IMPORT_MAX_ROWS, "actividades-puesto": ACTIVIDADES_MAX_FILAS };
 
 /**
  * Carga masiva para Guardify: `POST /api/guardify/actions/imports/inventario-puesto` con `{ modo: "validar" | "aplicar", filas: [...] }`.
@@ -357,16 +361,26 @@ export async function handleImport(req: Request, tipo: string, deps: ActionDeps)
         if (raw instanceof Response) return raw;
         const a = autenticar(req, raw, deps);
         if (!a.ok) return a.res;
-        if (tipo !== "inventario-puesto") return err("invalid_request", `No existe la carga «${tipo}».`, 404);
+        if (!(IMPORT_TIPOS as readonly string[]).includes(tipo)) return err("invalid_request", `No existe la carga «${tipo}».`, 404);
+        const tipoCarga = tipo as (typeof IMPORT_TIPOS)[number];
         const body: any = parseJson(raw);
         const modo = body?.modo === "aplicar" ? "aplicar" : body?.modo === "validar" ? "validar" : null;
         if (!modo) return err("invalid_request", "El modo debe ser «validar» o «aplicar».");
         if (!Array.isArray(body?.filas) || body.filas.length === 0) return err("invalid_request", "Debe indicar al menos una fila.");
-        if (body.filas.length > IMPORT_MAX_ROWS) return err("invalid_request", `Son demasiadas filas (máximo ${IMPORT_MAX_ROWS} por carga).`);
+        const maxFilas = IMPORT_MAX_ROWS_POR_TIPO[tipoCarga];
+        if (body.filas.length > maxFilas) return err("invalid_request", `Son demasiadas filas (máximo ${maxFilas} por carga).`);
         const env = deps.getEnv();
         const actor = await resolveActorEmployee(env.prisma, a.claims);
         if (!actor) return err("out_of_scope", "No se pudo identificar a esta persona en la app.");
         const correr = async () => {
+            if (tipoCarga === "actividades-puesto") {
+                // Sin Planillas: crea en la base de la app, firmando como la persona que Guardify identifica (firma digital generada aquí).
+                const res = await cargarActividadesPuesto(env, { filas: body.filas, modo, actorId: actor.id, firmaDigital: firmaDigitalDeActor(actor.id, a.huella, a.ts) });
+                console.log(JSON.stringify({ level: "info", msg: "guardify_import", tipo, modo, filas: body.filas.length, ok: res.ok, status: res.status, actor: actor.id }));
+                if (!res.ok) return failure(res);
+                const evidencia = modo === "aplicar" && res.body.actividadIds.length > 0 ? await registrarEvidenciaDeAccion(env, { tabla: "e_actividades", registroIds: res.body.actividadIds, usuarioId: actor.id, cedula: actor.cedula, huella: a.huella }) : null;
+                return json({ modo, creadas: res.body.creadas, actividadIds: res.body.actividadIds, filas: res.body.filas, resumen: res.body.resumen, mensaje: res.body.mensaje, ...(evidencia === null ? {} : { evidencia: evidencia ? "registrada" : "pendiente" }) });
+            }
             let planillasToken: string | null = null;
             if (modo === "aplicar") {
                 planillasToken = await env.tokenPlanillas(actor.id);

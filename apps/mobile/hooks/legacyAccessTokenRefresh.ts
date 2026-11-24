@@ -1,5 +1,5 @@
+import { apiServer } from '../utils/apiServer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import { AUTH_STORAGE_KEYS } from './authTokenStorage';
 
@@ -30,7 +30,7 @@ export async function refreshLegacyAccessToken(): Promise<boolean> {
         return false;
       }
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         return false;
       }

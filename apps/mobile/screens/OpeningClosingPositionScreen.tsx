@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet,
@@ -29,7 +30,6 @@ import SlideMenu from '@/components/SlideMenu';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
-import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
@@ -550,7 +550,7 @@ export default function OpeningClosingPositionScreen() {
       return;
     }
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
 
       const resp = await authedFetch({
@@ -933,7 +933,7 @@ export default function OpeningClosingPositionScreen() {
       const isConnected = await getConnectionStatus();
       if (!isConnected) return;
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
 
       const response = await authedFetch({

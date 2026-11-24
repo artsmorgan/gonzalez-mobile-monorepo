@@ -1,4 +1,4 @@
-import Constants from "expo-constants";
+import { apiServer } from '../utils/apiServer';
 import authedFetch from "./authedFetch";
 import { readStoredPlanillasToken } from "./planillasTokenStorage";
 import { pickPlanillasToken } from "./planillasSendToken";
@@ -29,7 +29,7 @@ export default async function saveMarca({
             throw new Error('Auth handlers not provided');
         }
 
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }

@@ -1,4 +1,4 @@
-import Constants from "expo-constants";
+import { apiServer } from '../utils/apiServer';
 import authedFetch from "./authedFetch";
 
 interface AuthHandlers {
@@ -7,7 +7,7 @@ interface AuthHandlers {
 }
 
 function apiBase() {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
         throw new Error("Server URL not configured");
     }

@@ -1,10 +1,10 @@
+import { apiServer } from '../utils/apiServer';
 import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import { Ionicons } from '@expo/vector-icons';
-import Constants from 'expo-constants';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -162,7 +162,7 @@ export default function RecoverPasswordScreen() {
     setIsSubmitting(true);
     
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         Alert.alert('Error', 'URL del servidor no configurada');
         return;

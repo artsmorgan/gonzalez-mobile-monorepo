@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Text, Alert, ActivityIndicator, View, Image, Modal, Dimensions, Platform, RefreshControl } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
@@ -9,7 +10,6 @@ import SlideMenu from '@/components/SlideMenu';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
-import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
@@ -363,7 +363,7 @@ export default function VisitorsScreen() {
   const getVisitorCedulaImageUrl = (visitorId: number | string, fotoCedula: string | null): string | null => {
     if (!fotoCedula || typeof fotoCedula !== 'string' || fotoCedula.trim() === '') return null;
     if (fotoCedula.startsWith('data:')) return null;
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) return null;
     const id = typeof visitorId === 'string' ? parseInt(visitorId, 10) : visitorId;
     if (Number.isNaN(id) || id <= 0) return null;
@@ -559,7 +559,7 @@ export default function VisitorsScreen() {
       return;
     }
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
       const resp = await authedFetch({
         url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
@@ -592,7 +592,7 @@ export default function VisitorsScreen() {
 
       if (isConnected) {
         // Con internet: hacer fetch normal
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
@@ -1447,7 +1447,7 @@ export default function VisitorsScreen() {
       if (shouldFetchImage) {
         // Fetch from server
         try {
-          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+          const apiUrl = apiServer();
           if (apiUrl) {
             const imageUrl = appendTokenToUrl(`${apiUrl}/api/uploads/visitors/${visitor.id}/cedula?name=${fotoCedula}`);
             const response = await fetch(imageUrl);

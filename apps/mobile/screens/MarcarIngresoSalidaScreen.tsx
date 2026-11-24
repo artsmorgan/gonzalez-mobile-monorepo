@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
@@ -10,7 +11,6 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { ActivityIndicator, Alert, Share, StyleSheet, TouchableOpacity, ScrollView, Modal, TextInput, View } from 'react-native';
-import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import { format, toZonedTime } from 'date-fns-tz';
@@ -1136,7 +1136,7 @@ export default function MarcarIngresoSalidaScreen() {
         }
       }
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }
@@ -1643,7 +1643,7 @@ export default function MarcarIngresoSalidaScreen() {
     setIsUpdating(true);
 
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }
@@ -2011,7 +2011,7 @@ export default function MarcarIngresoSalidaScreen() {
   const getLunchTimeConfig = async (marcaId: number) => {
     await AsyncStorage.removeItem('lunch_time_config');
     await AsyncStorage.setItem('alert_lunch_time', 'false');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -2042,7 +2042,7 @@ export default function MarcarIngresoSalidaScreen() {
 }
 
 const getActivities = async (marcaId: number) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -2428,7 +2428,7 @@ const getActivities = async (marcaId: number) => {
   };
 
   const getCorporateVehicles = async (corpoId: number) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
 
     if (!apiUrl) {
       throw new Error('Server URL not configured');
@@ -2515,7 +2515,7 @@ const getActivities = async (marcaId: number) => {
 
     try {
       setIsLoadingFutureMarks(true);
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }
@@ -2752,7 +2752,7 @@ const getActivities = async (marcaId: number) => {
     }
 
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }

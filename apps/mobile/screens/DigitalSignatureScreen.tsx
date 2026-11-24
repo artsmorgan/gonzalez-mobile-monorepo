@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
@@ -14,7 +15,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import SignatureScreen from "react-native-signature-canvas";
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
-import Constants from 'expo-constants';
 import authedFetch from '@/hooks/authedFetch';
 import { jwtDecode } from 'jwt-decode';
 import saveManualSignature from '@/hooks/saveManualSignature';
@@ -292,7 +292,7 @@ export default function DigitalSignatureScreen() {
         (networkState.isInternetReachable === true || networkState.isInternetReachable === null);
 
       if (online) {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (apiUrl) {
           const response = await authedFetch({
             url: `${apiUrl}/api/digital-signature/manual-signature/${employee.id}`,

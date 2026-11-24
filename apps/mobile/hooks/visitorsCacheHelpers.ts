@@ -1,5 +1,5 @@
+import { apiServer } from '../utils/apiServer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
 import authedFetch from '@/hooks/authedFetch';
 import { localizeSignatureFieldInList, deleteSignatureLocalRef } from '@/hooks/fileStorage';
 
@@ -84,7 +84,7 @@ export async function syncVisitorsCacheFromNetwork(params: {
   if (!Number.isFinite(marcaId) || marcaId <= 0 || !Number.isFinite(corpoId) || corpoId <= 0) {
     return { ok: false, message: 'Marca o sucursal no válidas' };
   }
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) {
     return { ok: false, message: 'Server URL not configured' };
   }

@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Text, Alert, ActivityIndicator, Modal, View, Platform, Image, Dimensions, RefreshControl } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
@@ -10,7 +11,6 @@ import SlideMenu from '@/components/SlideMenu';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
-import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
@@ -1009,7 +1009,7 @@ export default function VehiclesScreen() {
       return;
     }
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
 
       const resp = await authedFetch({
@@ -2766,7 +2766,7 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
   const [imageBase64, setImageBase64] = React.useState<string | null>(null);
   const [isLoadingImage, setIsLoadingImage] = React.useState<boolean>(false);
   const [isImageExpanded, setIsImageExpanded] = React.useState<boolean>(false);
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
 
   const hasAttachment =
     Boolean(vehicle.local_attachment_file) ||

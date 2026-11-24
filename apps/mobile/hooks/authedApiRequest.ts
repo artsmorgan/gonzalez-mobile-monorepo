@@ -1,11 +1,11 @@
-import Constants from 'expo-constants';
+import { apiServer } from '../utils/apiServer';
 import authedFetch from './authedFetch';
 import getValidAccessTokenOrLogout, { getRequestAuthToken } from './getValidAccessTokenOrLogout';
 
 export { authedFetch, getRequestAuthToken, getValidAccessTokenOrLogout };
 
 export function getApiServerUrl(): string {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) {
     throw new Error('Server URL not configured');
   }

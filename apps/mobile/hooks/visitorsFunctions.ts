@@ -1,4 +1,4 @@
-import Constants from "expo-constants";
+import { apiServer } from '../utils/apiServer';
 import authedFetch from "./authedFetch";
 import { parseApiErrorResponse } from "./parseApiErrorResponse";
 
@@ -29,7 +29,7 @@ export async function createVisitor({
     logout
 }: CreateVisitorParams) {
     try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }
@@ -75,7 +75,7 @@ export async function updateVisitor({
     logout
 }: UpdateVisitorParams) {
     try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }
@@ -120,7 +120,7 @@ export async function deleteVisitor({
     logout
 }: DeleteVisitorParams) {
     try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }

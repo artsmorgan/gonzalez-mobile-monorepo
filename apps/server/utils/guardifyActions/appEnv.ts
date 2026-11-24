@@ -7,7 +7,7 @@ import { prisma } from "../prismaClient";
 import { dynamicIdempotencyStore } from "../idempotencyDynamicStore";
 import type { IdempotencyStore } from "../idempotency";
 import { reportError } from "../reportError";
-import { sendNotificationByEmployee } from "../sendNotification";
+import { sendNotificationByEmployee, sendNotificationByPlaza } from "../sendNotification";
 import type { ActionEnv } from "./env";
 import { makeActionEnv } from "./envFactory";
 
@@ -25,6 +25,7 @@ export function buildActionEnv(req: NextRequest, route: string, method: string, 
             markInternalRequest,
             reportError,
             sendNotificationByEmployee,
+            sendNotificationByPlaza,
             prisma,
             planillasPost: async (path, body, token) => (await axios.post(`${process.env.PLANILLAS_URL}${path}`, body, { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, timeout: PLANILLAS_TIMEOUT_MS })).data,
             ahoraPared: () => toZonedTime(new Date(), "America/Costa_Rica"),

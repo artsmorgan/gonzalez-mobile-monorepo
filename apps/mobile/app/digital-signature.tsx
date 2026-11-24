@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import AppHeader from '@/components/AppHeader';
 import SlideMenu from '@/components/SlideMenu';
 import { ThemedText } from '@/components/ThemedText';
@@ -9,7 +10,6 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useState, useRef } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, TouchableOpacity, View, ScrollView, Modal, Image, Dimensions } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
-import Constants from 'expo-constants';
 import SignatureScreen from "react-native-signature-canvas";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -127,7 +127,7 @@ export default function DigitalSignatureScreen() {
     setSignatureError(null);
 
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }
@@ -185,7 +185,7 @@ export default function DigitalSignatureScreen() {
 
     setIsLoadingManualSignature(true);
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }
@@ -266,7 +266,7 @@ export default function DigitalSignatureScreen() {
 
     setIsSavingSignature(true);
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }

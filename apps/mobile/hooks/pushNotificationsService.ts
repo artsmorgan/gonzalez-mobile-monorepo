@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
@@ -203,7 +204,7 @@ export async function syncPushDeviceRegistration(params: {
   accessToken: string | null;
   apiUrl?: string | null;
 }): Promise<void> {
-  const apiUrl = params.apiUrl || Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = params.apiUrl || apiServer();
   if (!apiUrl || !params.empleadoId) return;
 
   const token = await getNativePushToken();
@@ -270,7 +271,7 @@ export async function flushPushDeviceActions(params: {
   accessToken: string;
   apiUrl?: string | null;
 }): Promise<void> {
-  const apiUrl = params.apiUrl || Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = params.apiUrl || apiServer();
   if (!apiUrl || !params.accessToken) return;
 
   const connectivity = await resolveAppConnectivity();

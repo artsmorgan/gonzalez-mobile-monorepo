@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -25,7 +26,6 @@ import * as DocumentPicker from 'expo-document-picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import Constants from 'expo-constants';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
@@ -254,7 +254,7 @@ const buildPermitRequestMediaUrl = (
   type: string,
   accessToken?: string | null
 ): string => {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return '';
   if (!recordId || !fileName || !String(fileName).trim()) return '';
   const cleanType = String(type || '').toLowerCase().trim();
@@ -400,7 +400,7 @@ export default function PermitRequestScreenV2() {
   };
 
   const getEmpleadoByCodigo = async (codigo: string) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const response = await authedFetch({
       url: `${apiUrl}/api/empleados/codigo/${encodeURIComponent(String(codigo).trim())}`,
@@ -419,7 +419,7 @@ export default function PermitRequestScreenV2() {
   };
 
   const getEmpleadoById = async (id: number) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const response = await authedFetch({
       url: `${apiUrl}/api/empleados/${id}`,
@@ -460,7 +460,7 @@ export default function PermitRequestScreenV2() {
         await loadRecordsFromCache();
         return;
       }
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
       // El servidor decide qué solicitudes trae: las propias y las que esta persona debe aprobar o rechazar (por ser su ejecutivo de cuenta).
       // Antes la app pedía solo las propias según el nombre del puesto de la marca actual, y un ejecutivo sin marca no veía las suyas.
@@ -529,7 +529,7 @@ export default function PermitRequestScreenV2() {
       return;
     }
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
 
       const referenceMs = (await getHoraAccion()) || Date.now();
@@ -738,7 +738,7 @@ export default function PermitRequestScreenV2() {
       const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
       const planillasToken = planillasTokenCheck.token;
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
 
       const filesPayload: {
@@ -1030,7 +1030,7 @@ export default function PermitRequestScreenV2() {
       const planillasToken = planillasTokenCheck.token;
 
       setIsSavingComplete(true);
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
       const resp = await authedFetch({
         url: `${apiUrl}/api/permit-request/${selectedRecord.id}`,
@@ -1095,7 +1095,7 @@ export default function PermitRequestScreenV2() {
       const planillasToken = planillasTokenCheck.token;
 
       setRejectingRecordId(record.id);
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
       const resp = await authedFetch({
         url: `${apiUrl}/api/permit-request/${record.id}/reject`,

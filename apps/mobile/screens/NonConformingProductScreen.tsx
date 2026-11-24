@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -17,7 +18,6 @@ import RecordAudioButton from '@/components/RecordAudioButton';
 import AudioPreviewModal from '@/components/AudioPreviewModal';
 import { ZoomableThumbnailImage, FullscreenVideoButton } from '@/components/FullscreenMediaViewer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
 import { resolveAppConnectivity } from '@/hooks/resolveAppConnectivity';
 import * as DocumentPicker from 'expo-document-picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -527,7 +527,7 @@ export default function NonConformingProductScreen() {
       return;
     }
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
 
       const resp = await authedFetch({
@@ -743,7 +743,7 @@ export default function NonConformingProductScreen() {
       const isConnected = await getConnectionStatus();
       if (!isConnected) return;
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) return;
 
       const response = await authedFetch({
@@ -1511,7 +1511,7 @@ export default function NonConformingProductScreen() {
       return `data:${mime};base64,${file.base64}`;
     }
 
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (apiUrl && pncId) {
       if (file.type === 'image') return appendTokenToUrl(`${apiUrl}/api/non-conforming-product/${pncId}/get-image/${encodeURIComponent(file.name)}`);
       if (file.type === 'audio') return appendTokenToUrl(`${apiUrl}/api/non-conforming-product/${pncId}/get-audio/${encodeURIComponent(file.name)}`);

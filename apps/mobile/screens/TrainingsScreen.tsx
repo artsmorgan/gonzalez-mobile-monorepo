@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   StyleSheet,
@@ -25,7 +26,6 @@ import { ZoomableThumbnailImage, FullscreenVideoButton } from '@/components/Full
 import { useNavigation, useFocusEffect, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
-import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import { Picker } from '@react-native-picker/picker';
@@ -416,21 +416,21 @@ export default function TrainingsScreen() {
   };
   // URLs de adjuntos: mismo criterio que JobManualsScreen (getManual*Url + buildFileUrl)
   const getTrainingImageUrl = (trainingId: number, fileName: string) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) return '';
     return appendTokenToUrl(
       `${apiUrl}/api/training/${trainingId}/get-image/${encodeURIComponent(fileName)}`
     );
   };
   const getTrainingAudioUrl = (trainingId: number, fileName: string) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) return '';
     return appendTokenToUrl(
       `${apiUrl}/api/training/${trainingId}/get-audio/${encodeURIComponent(fileName)}`
     );
   };
   const getTrainingVideoUrl = (trainingId: number, fileName: string) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) return '';
     return appendTokenToUrl(
       `${apiUrl}/api/training/${trainingId}/get-video/${encodeURIComponent(fileName)}`
@@ -447,7 +447,7 @@ export default function TrainingsScreen() {
       if (kind === 'image') return getTrainingImageUrl(trainingId, fileName);
       if (kind === 'audio') return getTrainingAudioUrl(trainingId, fileName);
       if (kind === 'video') return getTrainingVideoUrl(trainingId, fileName);
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (apiUrl) {
         return appendTokenToUrl(
           `${apiUrl}/api/training/${trainingId}/get-file/${encodeURIComponent(fileName)}`
@@ -691,7 +691,7 @@ export default function TrainingsScreen() {
       if (isStale()) return;
 
       if (hasConnection) {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
@@ -1251,7 +1251,7 @@ export default function TrainingsScreen() {
         return;
       }
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       const connectionStatus = await checkConnection();
       let empleadoDetalle = parsed.empleadoDetalle;
       if (connectionStatus && apiUrl && !empleadoDetalle) {
@@ -1312,7 +1312,7 @@ export default function TrainingsScreen() {
         let empleadoDetalle = undefined;
         if (connectionStatus) {
           // Fetch empleado details
-          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+          const apiUrl = apiServer();
           if (!apiUrl) {
             throw new Error('Server URL not configured');
           }
@@ -1546,7 +1546,7 @@ export default function TrainingsScreen() {
     if (firmaParsed && !firmaParsed.empleadoDetalle && firmaParsed.empleadoId) {
       void (async () => {
         try {
-          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+          const apiUrl = apiServer();
           if (!apiUrl) return;
           const empleadoResponse = await authedFetch({
             url: `${apiUrl}/api/empleados/${firmaParsed.empleadoId}`,
@@ -3148,7 +3148,7 @@ const TrainingImageComponent: React.FC<{ trainingId: number; fileName?: string }
   useEffect(() => {
     const fetchImage = async () => {
       try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) return;
         const getImagePath =
           fileName && String(fileName).trim() !== ''

@@ -1,5 +1,5 @@
+import { apiServer } from '../utils/apiServer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
 import React, { createContext, ReactNode, useContext, useEffect, useState, useRef } from 'react';
 import { eventBus } from '../hooks/eventBus';
 import { resolveAppConnectivity } from '../hooks/resolveAppConnectivity';
@@ -157,7 +157,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const login = async (cedula: string, password: string): Promise<{ success: boolean; passwordExpired?: boolean; error?: string }> => {
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         return { success: false, error: 'Server URL not configured' };
       }
@@ -356,7 +356,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const logout = async (): Promise<{ status: boolean; message: string }> => {
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       let serverResponse = { status: true, message: 'Sesión cerrada correctamente' };
 
       // Desregistrar token FCM mientras aún hay sesión válida
@@ -469,7 +469,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const tokenToUse = refreshToken || (await AsyncStorage.getItem(REFRESH_TOKEN_KEY));
       if (!tokenToUse) return false;
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         return false;
       }

@@ -6,14 +6,29 @@
  * agrega `X-Device-Uid` y, si guarda datos (POST/PUT/PATCH/DELETE), las cabeceras de evidencia, sin pisar las que ya traiga.
  * Se importa en `index.js`, después de `installSecureStorage`. Nunca hace fallar la petición: ante un error envía la original sin cambios.
  */
-import Constants from 'expo-constants';
+import { apiServer } from '../utils/apiServer';
 import { getEvidenceHeaders, isMutatingMethod } from './evidenceCapture';
 import { getDeviceUid } from './installSecureStorage';
 import { getGuardifyIdentity } from './guardifyIdentity';
 import { getEmbeddedAppVersionInfo } from './appVariant';
 import { notifyIfUpdateRequired } from './updateRequired';
-import { deniedResponse, denialKey, notifyIfPermissionDenied, recentDenial } from './permissionDeniedNotice';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { deniedResponse, denialKey, friendlyPermissionResponse, notifyIfPermissionDenied, recentDenial } from './permissionDeniedNotice';
 import { headersFromStamp, takeStampFromBody } from './evidenceQueue';
+import { DENIED_STAMPS_KEY, addDeniedStamp } from './permissionRejectedQueue';
+
+/** Anota la hora de sello de una acción denegada (uno a la vez: leer-modificar-escribir). Nunca lanza. */
+let denialWrites: Promise<void> = Promise.resolve();
+function rememberDeniedQueueAction(stampAt: string | null, permission: string | null): Promise<void> {
+  if (!stampAt || !/^\d+$/.test(stampAt)) return Promise.resolve();
+  denialWrites = denialWrites
+    .then(async () => {
+      const raw = await AsyncStorage.getItem(DENIED_STAMPS_KEY);
+      await AsyncStorage.setItem(DENIED_STAMPS_KEY, addDeniedStamp(raw, stampAt, permission, Date.now()));
+    })
+    .catch(() => undefined);
+  return denialWrites;
+}
 
 const g = globalThis as unknown as { fetch: typeof fetch; __evidenceFetchInstalled?: boolean };
 
@@ -93,7 +108,7 @@ export function installEvidenceFetch(): void {
   g.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     let nextInit = init;
     try {
-      const apiBase = String(Constants.expoConfig?.extra?.API_SERVER ?? '').replace(/\/+$/, '');
+      const apiBase = String(apiServer() ?? '').replace(/\/+$/, '');
       nextInit = await withEvidenceHeaders(input, init, apiBase);
     } catch {
       nextInit = init;
@@ -110,8 +125,15 @@ export function installEvidenceFetch(): void {
     const response = await original(input as RequestInfo, nextInit);
     // El servidor exige otra versión de la app (HTTP 426): se avisa a la app para que lo muestre. La respuesta sigue su camino.
     if (response.status === 426) void notifyIfUpdateRequired(response);
-    // El servidor niega el permiso (403 `permission_denied|<permiso>`): se avisa una vez y se recuerda la acción.
-    if (response.status === 403) void notifyIfPermissionDenied(response, { method, url, body: nextInit?.body, idempotencyKey });
+    // El servidor niega el permiso (403 `permission_denied|<permiso>`): se avisa una vez, se recuerda la acción y la respuesta lleva el texto para
+    // la persona (las pantallas muestran `message`). Si venía de una cola sin conexión, se anota su hora para quitarla de la cola (issue #211).
+    if (response.status === 403) {
+      const denial = await notifyIfPermissionDenied(response, { method, url, body: nextInit?.body, idempotencyKey });
+      if (denial) {
+        void rememberDeniedQueueAction(headerValue(nextInit?.headers, 'X-Evidence-At'), denial.permission);
+        return friendlyPermissionResponse(response, denial.permission);
+      }
+    }
     return response;
   };
 }

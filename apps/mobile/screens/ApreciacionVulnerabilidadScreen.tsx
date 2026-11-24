@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -59,7 +60,6 @@ import {
   reconcileSignatureFieldAfterSync,
 } from '@/hooks/fileStorage';
 import { buildApreciacionImagenesJsonForUpload, deleteApreciacionLocalFilesFromMeta, stripApreciacionImagesForActionPayload } from '@/hooks/apreciacionVulnerabilidadFilesSync';
-import Constants from 'expo-constants';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
 import { appVersionQuery } from '../hooks/appVersionHeader';
@@ -1884,7 +1884,7 @@ export default function ApreciacionVulnerabilidadScreen() {
       return;
     }
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
 
       const resp = await authedFetch({
@@ -2059,7 +2059,7 @@ export default function ApreciacionVulnerabilidadScreen() {
                         const serverImage = (Array.isArray(it.images) ? it.images : []).find(
                           (img: any) => String(img?.original_name || '') === String(q.id)
                         );
-                        const apiBase = Constants.expoConfig?.extra?.API_SERVER;
+                        const apiBase = apiServer();
                         const endpointGetImage =
                           apiBase && serverImage?.name
                             ? `${apiBase}/api/apreciacion-vulnerabilidad/${it.id}/get-image/${encodeURIComponent(String(serverImage.name))}`

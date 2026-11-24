@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import { ThemedText } from './ThemedText';
 import { ThemedView } from './ThemedView';
 import { useAuth } from '../contexts/AuthContext';
@@ -6,7 +7,6 @@ import { ActivityIndicator, Alert, Animated, Dimensions, Modal, StyleSheet, Touc
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
-import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import { eventBus } from '../hooks/eventBus';
@@ -219,7 +219,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
   };
 
   const fetchPermissions = async () => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }

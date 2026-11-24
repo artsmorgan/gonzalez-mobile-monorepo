@@ -1,5 +1,5 @@
+import { apiServer } from '../utils/apiServer';
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import Constants from "expo-constants";
 import authedFetch from "./authedFetch";
 import { parseApiErrorResponse } from "./parseApiErrorResponse";
 
@@ -37,7 +37,7 @@ export async function createVehicle({
     logout
 }: CreateVehicleParams) {
     try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }
@@ -88,7 +88,7 @@ export async function updateVehicle({
     logout
 }: UpdateVehicleParams) {
     try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }
@@ -137,7 +137,7 @@ export async function deleteVehicleAttachment({
     logout,
 }: DeleteVehicleAttachmentParams) {
     try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }
@@ -181,7 +181,7 @@ export async function deleteVehicle({
     logout
 }: DeleteVehicleParams) {
     try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }

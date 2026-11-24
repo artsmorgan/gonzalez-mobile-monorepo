@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useEffect, useState, useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, FlatList, TextInput } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
@@ -7,7 +8,6 @@ import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import { useAuth } from '@/contexts/AuthContext';
 import authedFetch from '@/hooks/authedFetch';
-import Constants from 'expo-constants';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -51,7 +51,7 @@ export default function RolePermissionsScreen() {
     Alert.alert('Confirmacion', `¿Estás seguro de que deseas ${action_text} el permiso "${action}" para el rol "${roleName}" en "${moduleName}"?`, [
         { text: 'Cancelar', style: 'cancel' },
         { text: 'Confirmar', style: 'destructive', onPress: async () => {
-            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+            const apiUrl = apiServer();
             if (!apiUrl) {
                 Alert.alert('Error', 'URL del servidor no configurada');
                 return;
@@ -102,7 +102,7 @@ export default function RolePermissionsScreen() {
       setLoading(true);
       setError(null);
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }

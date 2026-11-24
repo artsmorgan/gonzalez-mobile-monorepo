@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -25,7 +26,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import SignatureScreen from 'react-native-signature-canvas';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
-import Constants from 'expo-constants';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import AppHeader from '@/components/AppHeader';
@@ -1288,7 +1288,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
       const cached = serverRevisionImageUrlCacheRef.current.get(cacheKey);
       if (cached) return cached;
       const url = appendTokenToUrl(
-        `${Constants.expoConfig?.extra?.API_SERVER}/api/bitacora-vehiculo-detenido/${bitacoraId}/get-image/${encodeURIComponent(fileName)}`
+        `${apiServer()}/api/bitacora-vehiculo-detenido/${bitacoraId}/get-image/${encodeURIComponent(fileName)}`
       );
       serverRevisionImageUrlCacheRef.current.set(cacheKey, url);
       return url;
@@ -1762,7 +1762,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
       return;
     }
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
       const resp = await authedFetch({
         url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
@@ -1875,7 +1875,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
       try {
         const isConnected = await getConnectionStatus();
         if (!isConnected) return null;
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) return null;
 
         const response = await authedFetch({
@@ -2528,7 +2528,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
         try {
           const isConnected = await getConnectionStatus();
           if (isConnected) {
-            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+            const apiUrl = apiServer();
             if (apiUrl) {
               const usoResponse = await authedFetch({
                 url: `${apiUrl}/api/corporate-vehicles/uses/${usoIdFromItem}`,

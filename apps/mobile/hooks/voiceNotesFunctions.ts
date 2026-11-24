@@ -1,5 +1,5 @@
+import { apiServer } from '../utils/apiServer';
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import Constants from "expo-constants";
 import authedFetch from "./authedFetch";
 
 interface CreateVoiceNoteParams {
@@ -30,7 +30,7 @@ export async function createVoiceNote({
     logout
 }: CreateVoiceNoteParams) {
     try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }
@@ -79,7 +79,7 @@ export async function updateVoiceNote({
     logout
 }: UpdateVoiceNoteParams) {
     try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }
@@ -123,7 +123,7 @@ export async function deleteVoiceNote({
     logout
 }: DeleteVoiceNoteParams) {
     try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }

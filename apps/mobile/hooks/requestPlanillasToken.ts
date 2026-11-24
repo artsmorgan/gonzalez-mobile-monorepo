@@ -1,4 +1,4 @@
-import Constants from 'expo-constants';
+import { apiServer } from '../utils/apiServer';
 import authedFetch from './authedFetch';
 import {
   extractPlanillasTokenFromResponse,
@@ -20,7 +20,7 @@ export default async function requestPlanillasToken({
   refreshAccessToken,
   logout,
 }: RequestPlanillasTokenArgs): Promise<RequestPlanillasTokenResult> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) {
     return { success: false, message: 'Server URL not configured' };
   }

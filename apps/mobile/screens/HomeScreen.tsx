@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
@@ -12,7 +13,6 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
-import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   getPendingSyncActions,
@@ -418,7 +418,7 @@ export default function HomeScreen() {
         if (fromGuardify.ok || fromGuardify.cancelled) return;
         console.warn('[guardify] descarga desde el catálogo falló, se usa el servidor:', fromGuardify.message);
       }
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         Alert.alert('Error', 'No se encontró la URL del servidor.');
         return;

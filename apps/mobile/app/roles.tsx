@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useEffect, useState, useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, FlatList, TextInput } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
@@ -7,7 +8,6 @@ import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import { useAuth } from '@/contexts/AuthContext';
 import authedFetch from '@/hooks/authedFetch';
-import Constants from 'expo-constants';
 import { router } from 'expo-router';
 
 interface Role {
@@ -44,7 +44,7 @@ export default function RolesScreen() {
       setLoading(true);
       setError(null);
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }

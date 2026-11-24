@@ -1,4 +1,4 @@
-import Constants from 'expo-constants';
+import { apiServer } from '../utils/apiServer';
 import authedFetch from '@/hooks/authedFetch';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { mergeJobManualsCacheForPuesto } from '@/hooks/jobManualsCacheHelpers';
@@ -155,7 +155,7 @@ const getJobManuals = async (puestoId: number | null | undefined, refreshAccessT
       puestoId != null && Number.isFinite(Number(puestoId)) && Number(puestoId) > 0 ? Number(puestoId) : null;
     if (!pid) return;
 
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -184,7 +184,7 @@ const getJobManuals = async (puestoId: number | null | undefined, refreshAccessT
   }
 
 const getMainStructure = async (refreshAccessToken: any, logout: any) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -215,7 +215,7 @@ const getMainStructure = async (refreshAccessToken: any, logout: any) => {
 
 const shouldUpdateMainStructureCache = async (refreshAccessToken: any, logout: any): Promise<boolean> => {
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) return false;
 
       if (!(await evaluateInternetConnection())) return false;
@@ -250,7 +250,7 @@ const shouldUpdateMainStructureCache = async (refreshAccessToken: any, logout: a
   };
 
 const getBitacoraVehiculoDetenido = async (marcaId: number, refreshAccessToken: any, logout: any) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -292,7 +292,7 @@ const getBitacoraVehiculoDetenido = async (marcaId: number, refreshAccessToken: 
 
 const getDocumentosEntregados = async (corpoId: number, refreshAccessToken: any, logout: any) => {
     await AsyncStorage.removeItem('documentos_entregados_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -318,7 +318,7 @@ const getDocumentosEntregados = async (corpoId: number, refreshAccessToken: any,
   }
 
 const getLlaves = async (corpoId: number, refreshAccessToken: any, logout: any) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -351,7 +351,7 @@ const getLlaves = async (corpoId: number, refreshAccessToken: any, logout: any) 
   };
   
 const getLlaveros = async (corpoId: number, refreshAccessToken: any, logout: any) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -385,7 +385,7 @@ const getLlaveros = async (corpoId: number, refreshAccessToken: any, logout: any
 
 const getTrainings = async (marcaId: number, refreshAccessToken: any, logout: any) => {
     await AsyncStorage.removeItem('trainings_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -412,7 +412,7 @@ const getTrainings = async (marcaId: number, refreshAccessToken: any, logout: an
 
 const getVoiceNotes = async (marca: { corpo?: { id?: number }; puesto?: { id?: number } }, refreshAccessToken: any, logout: any) => {
     await AsyncStorage.removeItem('voice_notes_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -451,7 +451,7 @@ export const getCategories = async (refreshAccessToken: any, logout: any) => {
     if (cache && (cache != '' && cache != '[]')) {
       return;
     }
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -482,7 +482,7 @@ const getCategoriesMantenimiento = async (refreshAccessToken: any, logout: any) 
     if (cache && (cache != '' && cache != '[]')) {
       return;
     }
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -513,7 +513,7 @@ export const getTipoQuejas = async (refreshAccessToken: any, logout: any) => {
     if (cache && (cache != '' && cache != '[]')) {
       return;
     }
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -544,7 +544,7 @@ const getTipoClientesQuejas = async (refreshAccessToken: any, logout: any) => {
     if (cache && (cache != '' && cache != '[]')) {
       return;
     }
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -575,7 +575,7 @@ export const getTiposProductoNoConforme = async (refreshAccessToken: any, logout
     if (cache && (cache != '' && cache != '[]')) {
       return;
     }
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -605,7 +605,7 @@ export const getManualClassification = async (refreshAccessToken: any, logout: a
     if (cache && (cache != '' && cache != '[]')) {
       return;
     }
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -635,7 +635,7 @@ const getTipoActivo = async (refreshAccessToken: any, logout: any) => {
     if (cache && (cache != '' && cache != '[]')) {
       return;
     }
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -671,7 +671,7 @@ const getNotes = async (
     if (!Number.isFinite(pid) || pid <= 0) {
       return;
     }
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -714,7 +714,7 @@ const getNotes = async (
 
 const getEvaluations = async (corpoId: number, refreshAccessToken: any, logout: any) => {
     await AsyncStorage.removeItem('evaluations_staff_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -741,7 +741,7 @@ const getEvaluations = async (corpoId: number, refreshAccessToken: any, logout: 
 
 const getEmployeesCorpo = async (corpoId: number, refreshAccessToken: any, logout: any) => {
     await AsyncStorage.removeItem('employees_corpo_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -767,7 +767,7 @@ const getEmployeesCorpo = async (corpoId: number, refreshAccessToken: any, logou
   }
 
 const getIncidents = async (corpoId: number, refreshAccessToken: any, logout: any) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -799,7 +799,7 @@ export const getIncidentsClassifications = async (refreshAccessToken: any, logou
     if (cache && (cache != '' && cache != '[]')) {
       return;
     }
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -829,7 +829,7 @@ export const getDocumentTypes = async (refreshAccessToken: any, logout: any) => 
     if (cache && (cache != '' && cache != '[]')) {
       return;
     }
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -859,7 +859,7 @@ const getExecutives = async (refreshAccessToken: any, logout: any) => {
     if (cache && (cache != '' && cache != '[]')) {
       return;
     }
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -886,7 +886,7 @@ const getExecutives = async (refreshAccessToken: any, logout: any) => {
 
 const getSurveys = async (marcaId: number, refreshAccessToken: any, logout: any) => {
     await AsyncStorage.removeItem('surveys_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -916,7 +916,7 @@ const getPuestosCorpo = async (corpoId: number, refreshAccessToken: any, logout:
     if (cache && (cache != '' && cache != '[]')) {
       return;
     }
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -943,7 +943,7 @@ const getPuestosCorpo = async (corpoId: number, refreshAccessToken: any, logout:
 
 const getArticulos = async (refreshAccessToken: any, logout: any) => {
     await AsyncStorage.removeItem('articulos_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }

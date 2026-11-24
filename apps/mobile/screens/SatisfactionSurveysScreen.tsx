@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   StyleSheet,
@@ -22,7 +23,6 @@ import SlideMenu from '@/components/SlideMenu';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
-import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
@@ -984,7 +984,7 @@ export default function SatisfactionSurveysScreen() {
         return;
       }
       try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) throw new Error('Server URL not configured');
 
         const resp = await authedFetch({
@@ -1329,7 +1329,7 @@ export default function SatisfactionSurveysScreen() {
           return null;
         }
 
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) return null;
         const puestosResponse = await authedFetch({
           url: `${apiUrl}/api/puestos/corpo/${corpoId}`,
@@ -1397,7 +1397,7 @@ export default function SatisfactionSurveysScreen() {
         const isConnected = await getConnectionStatus();
 
         if (isConnected) {
-          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+          const apiUrl = apiServer();
           if (!apiUrl) {
             throw new Error('Server URL not configured');
           }
@@ -1755,7 +1755,7 @@ export default function SatisfactionSurveysScreen() {
 
   const fetchEmpleadoDetalle = async (empleadoId: number) => {
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) return null;
       const response = await authedFetch({
         url: `${apiUrl}/api/empleados/${empleadoId}`,

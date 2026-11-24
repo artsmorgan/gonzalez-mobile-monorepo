@@ -68,6 +68,16 @@ function bodyContainer(el: unknown): (typeof BODY_CONTAINERS)[number] | null {
   return null;
 }
 
+/** Hora del sello (`at`) de una acción encolada, como texto; null si la acción no tiene sello (anterior a esa versión). */
+export function stampAtOf(el: unknown): string | null {
+  const c = bodyContainer(el);
+  if (!c) return null;
+  const stamp = (el as QueueElement)[c][EVIDENCE_STAMP_KEY];
+  if (!stamp || typeof stamp !== 'object' || Array.isArray(stamp)) return null;
+  const at = Number((stamp as { at?: unknown }).at);
+  return Number.isFinite(at) && at > 0 ? String(Math.round(at)) : null;
+}
+
 /** Huella de una acción sin su sello: sirve para reconocer, entre dos versiones de la cola, la misma acción. */
 function fingerprint(el: QueueElement, container: string): string {
   const { [EVIDENCE_STAMP_KEY]: _omit, ...body } = el[container] as QueueElement;

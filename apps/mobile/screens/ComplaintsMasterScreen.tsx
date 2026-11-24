@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet,
@@ -26,7 +27,6 @@ import SlideMenu from '@/components/SlideMenu';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
-import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
@@ -260,7 +260,7 @@ interface FirmaData {
 }
 
 const buildComplaintFileUrl = (complaintId: string | number, file: ComplaintFile, accessToken?: string | null) => {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return '';
   const idNum = typeof complaintId === 'number' ? complaintId : parseInt(String(complaintId), 10);
   if (!Number.isFinite(idNum) || idNum <= 0) return '';
@@ -663,7 +663,7 @@ export default function ComplaintsMasterScreen() {
       tipoCatalogosServerFetchPromise = (async () => {
         const isConnected = await getConnectionStatus();
         if (!isConnected) return;
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl || String(apiUrl).trim() === '') return;
 
         const pull = async (
@@ -1136,7 +1136,7 @@ export default function ComplaintsMasterScreen() {
       return;
     }
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
 
       const resp = await authedFetch({
@@ -1382,7 +1382,7 @@ export default function ComplaintsMasterScreen() {
       const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
 
       let empleadoDetalle = undefined;
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (apiUrl) {
         try {
           const empleadoResponse = await authedFetch({
@@ -1462,7 +1462,7 @@ export default function ComplaintsMasterScreen() {
       const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
 
       let empleadoDetalle = undefined;
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (apiUrl) {
         try {
           const empleadoResponse = await authedFetch({

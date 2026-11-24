@@ -1,10 +1,10 @@
+import { apiServer } from '../utils/apiServer';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { writeMainStructureCacheString } from '@/hooks/mainStructureCacheStorage';
 import {
   loadMainStructureFragmentsObject,
   writeMainStructureFragmentPatch,
 } from '@/hooks/mainStructureFragmentsStorage';
-import Constants from 'expo-constants';
 import authedFetch from '@/hooks/authedFetch';
 import { syncPuestoArticulosFragmentFromReportesList } from '@/hooks/mantenimientoEquipoMainStructureSync';
 import type { ArticuloMantenimientoPendingFile } from '@/utils/articuloMantenimientoFiles';
@@ -500,7 +500,7 @@ export async function refreshPuestoArticulosFromServer(params: {
   const pid = Number(puestoId);
   if (!Number.isFinite(pid) || pid <= 0) return;
 
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return;
 
   try {

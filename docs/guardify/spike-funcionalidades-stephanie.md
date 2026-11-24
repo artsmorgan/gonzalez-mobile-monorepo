@@ -87,7 +87,7 @@ Tres tipos, todos de **solo lectura** sobre datos que ya existen:
 | Entrega de puestos | Lista plan, entrega y **último mantenimiento** de cada artículo del puesto | `apps/server/app/api/entrega-puestos/route.ts:96` (GET), `:584` plan, `:612` entrega |
 | Producto no conforme | Incidente de calidad con descripción y archivos; **no** enlaza con el inventario | `apps/server/app/prisma/schema.prisma:681` |
 | Acta de entrega de productos | Acta firmada (`tipo_entrega`, `detalle`, `observaciones`); **no tiene campo de faltantes** (solo texto libre) | `apps/server/app/prisma/schema.prisma:21` |
-| Solicitud de uniforme | Cola `uniform_request` → `createUniformRequest`; los planes/entregas de uniforme viven en tablas de Planillas | `apps/mobile/App.tsx:4732`, `apps/mobile/hooks/evaluationFunctions.ts:429`; `schema.prisma:1788`, `:1968`, `:3423`, `:4782` |
+| Solicitud de uniforme | Cola `uniform_request` → `createUniformRequest`; los planes/entregas de uniforme viven en tablas de Planillas | `apps/mobile/App.tsx:4741`, `apps/mobile/hooks/evaluationFunctions.ts:429`; `schema.prisma:1788`, `:1968`, `:3423`, `:4782` |
 
 ### 2.2 Valores de `estado` y `accion`, y regla de «último estado»
 
@@ -176,7 +176,7 @@ Los códigos y el HTTP son los de la tabla del protocolo (sección 6.1); las rut
 1. **Mutuo: el estado se guardaba antes de llamar a Planillas y no se revertía.** `apps/server/utils/guardifyActions/aprobar-mutuo.ts:96` pone `aprobado` y recién en `:108` se llama a Planillas; si fallaba quedaba aprobado y un reintento recibía «solo se puede aprobar un mutuo pendiente».
    **✅ Corregido en el PR #190:** `revertir` (`apps/server/utils/guardifyActions/aprobar-mutuo.ts:99`) devuelve el mutuo a su estado anterior y sin firmas si Planillas lanza un error (`:121`) o responde que no (`:126`), y se revisa todo lo revisable antes de escribir. Pruebas: `apps/server/utils/guardifyActions/guardifyActions.test.ts` (sección «Planillas dice que no»).
    En permisos el orden ya era el correcto (Planillas antes del registro).
-2. **Permiso con varios turnos: creación parcial.** El bucle de `apps/server/utils/guardifyActions/aprobar-permiso.ts:107` crea un permiso por turno; si el segundo falla ya se creó el primero y no hay forma de saberlo ni de reintentar solo lo que falta. El PR lo documenta (`apps/server/docs/guardify-actions-api.md:48`) y su mensaje pide revisar en Planillas antes de reintentar.
+2. **Permiso con varios turnos: creación parcial.** El bucle de `apps/server/utils/guardifyActions/aprobar-permiso.ts:107` crea un permiso por turno; si el segundo falla ya se creó el primero y no hay forma de saberlo ni de reintentar solo lo que falta. El PR lo documenta (`apps/server/docs/guardify-actions-api.md:61`) y su mensaje pide revisar en Planillas antes de reintentar.
 3. **Regla de ejecutivo distinta** entre permisos (`apps/server/utils/guardifyActions/permisos.ts:6`) y mutuos (`apps/server/utils/guardifyActions/aprobar-mutuo.ts:61`): en mutuos el ejecutivo directo no puede firmar. Hay que decidir cuál es la regla y centralizarla.
 4. **`coordinado_por_id: 3` fijo** (`apps/server/utils/guardifyActions/aprobar-permiso.ts:245`, `apps/server/utils/guardifyActions/aprobar-mutuo.ts:115`). Hay que saber qué representa.
 
@@ -192,7 +192,7 @@ Los códigos y el HTTP son los de la tabla del protocolo (sección 6.1); las rut
 - **Escritura:** no escribe directo; reenvía a Planillas `POST /articulos-puesto/carga-masiva` con el token del usuario (`apps/server/utils/guardifyActions/inventario.ts:259`).
 - **Límites:** la ruta de la app no pone tope de filas (en el teléfono se limita a 5.000 desde #175); la API de Guardify rechaza más de 2.000 (`apps/server/utils/guardifyActions/handler.ts:346`).
 - **Transaccional:** no. Antes de enviar compara contra lo existente y **omite** lo que ya está (`apps/server/utils/guardifyActions/inventario.ts:113-137`); es **idempotente solo en la práctica** (reenviar el mismo lote omite lo ya cargado) y con una carrera si dos lotes llegan a la vez.
-- **Salida:** `{ status, message, created_plans, created_entregas, skipped: [texto] }`: resumen y textos, **no hay resultado por fila**. La API de Guardify la traslada a `{ modo, creados, omitidos, mensaje }` (`apps/server/utils/guardifyActions/handler.ts:380`).
+- **Salida:** `{ status, message, created_plans, created_entregas, skipped: [texto] }`: resumen y textos, **no hay resultado por fila**. La API de Guardify la traslada a `{ modo, creados, omitidos, mensaje }` (`apps/server/utils/guardifyActions/handler.ts:394`).
 
 **Defectos (los marcados ✅ ya están corregidos):**
 
@@ -253,9 +253,9 @@ La implementación de la app es el **PR #190** (`guardify/acciones`, commit `2dd
 | Mismas reglas de negocio que la app | Las rutas de la app y las de Guardify llaman a la misma lógica (`utils/guardifyActions/`); reglas de 3.1 sin cambios | `apps/server/docs/guardify-actions-api.md:20` |
 | Tabla de errores tipados y HTTP | El mapa coincide **con la tabla del protocolo** (`signature_required` 400, `planillas_session_required` 409, `out_of_scope` 403…). Se descartan los códigos que propuse en 3.4 (`not_authorized`, `already_signed`, 422) | `apps/server/utils/guardifyActions/handler.ts:121` |
 | Planillas sin credencial nueva | Usa el token que la app ya guarda (`a_mobile_token_for_planillas`, 60 min); sin uno vigente → `409 planillas_session_required` **sin tocar nada**. **Esto resuelve la decisión 4 del spike** (no hay cuenta de servicio: sección 3.2) | `apps/server/utils/guardifyActions/handler.ts:298`, `apps/server/docs/guardify-actions-api.md:24` |
-| Mutuo no queda aprobado si Planillas falla | Vuelve a `pendiente` y se puede reintentar (el defecto 1 de 3.5) | `apps/server/docs/guardify-actions-api.md:48` |
+| Mutuo no queda aprobado si Planillas falla | Vuelve a `pendiente` y se puede reintentar (el defecto 1 de 3.5) | `apps/server/docs/guardify-actions-api.md:61` |
 | Reemplazo de un turno | `GET /lookup/empleado?codigo=` devuelve solo id, código y nombre; un código repetido no se adivina | `apps/server/utils/guardifyActions/handler.ts:325` |
-| Carga masiva `validar` / `aplicar` | `validar` no escribe ni pide sesión de Planillas; `aplicar` sí; respuesta `{ modo, creados, omitidos, mensaje }` | `apps/server/utils/guardifyActions/handler.ts:354`, `:336` |
+| Carga masiva `validar` / `aplicar` | `validar` no escribe ni pide sesión de Planillas; `aplicar` sí; respuesta `{ modo, creados, omitidos, mensaje }` | `apps/server/utils/guardifyActions/handler.ts:358`, `:336` |
 | Actividades, omisiones, requisición | Sin carga masiva de actividades (como en 4.3); omisiones y requisición son **reportes de solo lectura**, no acciones | — |
 
 ### 6.2 Qué no encaja o falta

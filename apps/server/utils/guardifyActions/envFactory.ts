@@ -15,6 +15,8 @@ export type EnvDeps = {
     reportError: (req: any, route: string, method: string, status: number, message: string) => Promise<unknown>;
     sendNotificationByEmployee: (req: any, corpoId: number, originators: number[], title: string, message: string, recipients: number[]) => Promise<unknown>;
     prisma: any;
+    /** `sendNotificationByPlaza` (con `null` en la marca: sin plaza de origen que excluir). */
+    sendNotificationByPlaza?: (req: any, marcaDiaId: number | null, title: string, description: string, plazaIds: number[]) => Promise<unknown>;
     /** `POST {PLANILLAS_URL}{path}`; devuelve el cuerpo. Lanza con `response.status` si Planillas responde con error. */
     planillasPost: (path: string, body: Record<string, unknown>, token: string) => Promise<any>;
     /** Hora «de pared» de Costa Rica (la convención de la app). */
@@ -28,6 +30,7 @@ export function makeActionEnv(deps: EnvDeps, req: object, route: string, method:
         call,
         prisma: deps.prisma,
         notify: (title, message, recipients, originators) => deps.sendNotificationByEmployee(req, 0, originators, title, message, recipients),
+        ...(deps.sendNotificationByPlaza ? { notifyPlazas: (title: string, message: string, plazaIds: number[]) => deps.sendNotificationByPlaza!(req, null, title, message, plazaIds) } : {}),
         report: async (status, message) => {
             try {
                 await deps.reportError(req, route, method, status, message);

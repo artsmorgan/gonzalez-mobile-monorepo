@@ -1,4 +1,4 @@
-import Constants from 'expo-constants';
+import { apiServer } from '../utils/apiServer';
 import authedFetch from './authedFetch';
 
 type CreateJobManualParams = {
@@ -71,7 +71,7 @@ export const createJobManual = async ({
   refreshAccessToken,
   logout,
 }: CreateJobManualParams): Promise<any> => {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) {
     throw new Error('Server URL not configured');
   }
@@ -105,7 +105,7 @@ export const listJobManualsByPuesto = async ({
   refreshAccessToken,
   logout,
 }: ListJobManualsParams): Promise<any> => {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) {
     throw new Error('Server URL not configured');
   }
@@ -146,7 +146,7 @@ export const listJobManualsByEmpleado = async ({
   refreshAccessToken,
   logout,
 }: ListJobManualsByEmpleadoParams): Promise<any> => {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) {
     throw new Error('Server URL not configured');
   }
@@ -187,7 +187,7 @@ export const deleteJobManual = async ({
   refreshAccessToken,
   logout,
 }: DeleteJobManualParams): Promise<any> => {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) {
     throw new Error('Server URL not configured');
   }
@@ -223,7 +223,7 @@ export const signJobManual = async ({
   logout,
   marcaId,
 }: SignJobManualParams): Promise<any> => {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) {
     throw new Error('Server URL not configured');
   }
@@ -269,7 +269,7 @@ export const appendJobManualPuestos = async ({
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<any> => {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) {
     throw new Error('Server URL not configured');
   }
@@ -307,7 +307,7 @@ export const appendJobManualEmpleados = async ({
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<any> => {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) {
     throw new Error('Server URL not configured');
   }
@@ -342,7 +342,7 @@ export const updateJobManualVisualizacionField = async ({
   refreshAccessToken,
   logout,
 }: UpdateJobManualVisualizacionFieldParams): Promise<any> => {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) {
     throw new Error('Server URL not configured');
   }
@@ -384,7 +384,7 @@ export const putJobManualQuizResult = async ({
   refreshAccessToken,
   logout,
 }: PutQuizResultParams): Promise<any> => {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) {
     throw new Error('Server URL not configured');
   }
@@ -425,7 +425,7 @@ type EditJobManualParams = {
  * conexión: no pasa por la cola. Responde `{ status, message, code?, version?, version_cambio?, notificados? }`.
  */
 export const editJobManual = async ({ id, body, refreshAccessToken, logout }: EditJobManualParams): Promise<any> => {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) {
     throw new Error('Server URL not configured');
   }
@@ -459,7 +459,7 @@ type DeleteJobManualFileParams = {
 
 /** Borra AL INSTANTE un archivo del documento (fila y archivo del almacén). Solo con conexión. */
 export const deleteJobManualFile = async ({ id, fileId, marcaId, refreshAccessToken, logout }: DeleteJobManualFileParams): Promise<any> => {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) {
     throw new Error('Server URL not configured');
   }

@@ -1,4 +1,4 @@
-import Constants from 'expo-constants';
+import { apiServer } from '../utils/apiServer';
 import authedFetch from './authedFetch';
 
 export type EmpleadoLite = {
@@ -30,7 +30,7 @@ export async function searchEmployeesReportes(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: EmpleadoLite[]; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -53,7 +53,7 @@ export async function fetchReportesList(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const sp = new URLSearchParams();
   Object.entries(params.query).forEach(([k, v]) => {
@@ -77,7 +77,7 @@ export async function previewUserLoginRefreshTokens(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -105,7 +105,7 @@ export async function searchActaStructure(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: StructureLite[]; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -142,7 +142,7 @@ export async function searchCorporateVehicles(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: VehiculoCorporativoLite[]; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -169,7 +169,7 @@ export async function previewRevisionVehiculos(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -197,7 +197,7 @@ export async function previewAgendaMinuta(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -225,7 +225,7 @@ export async function previewAperturaCierrePuesto(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -253,7 +253,7 @@ export async function previewVulnerabilidad(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -281,7 +281,7 @@ export async function previewActividades(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -309,7 +309,7 @@ export async function previewControlAsistencia(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -337,7 +337,7 @@ export async function previewDocumentosEntregados(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -365,7 +365,7 @@ export async function previewEncuestaSatisfaccion(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -393,7 +393,7 @@ export async function previewRegistroVisitas(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -421,7 +421,7 @@ export async function previewVisitasVehiculos(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -449,7 +449,7 @@ export async function previewMutuosAcuerdos(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -477,7 +477,7 @@ export async function previewAccionesPersonales(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -505,7 +505,7 @@ export async function previewActaEntregaProductos(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -533,7 +533,7 @@ export async function previewEntregaPuesto(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -561,7 +561,7 @@ export async function previewIncidentes(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -589,7 +589,7 @@ export async function previewBitacoraNovedades(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -617,7 +617,7 @@ export async function previewMaestroQuejas(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -645,7 +645,7 @@ export async function previewChecklistSupervision(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -673,7 +673,7 @@ export async function previewEvaluacionPersonal(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -701,7 +701,7 @@ export async function previewProductoNoConforme(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -729,7 +729,7 @@ export async function previewRegistroCapacitaciones(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -757,7 +757,7 @@ export async function previewRegistroInduccionGeneral(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -784,7 +784,7 @@ export async function searchAlmuerzoCedulas(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: CedulaAlmuerzoLite[]; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -808,7 +808,7 @@ export async function previewTiempoAlmuerzo(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -836,7 +836,7 @@ export async function previewLoginMarca(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -864,7 +864,7 @@ export async function previewCambiosUbicacionPuesto(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -892,7 +892,7 @@ export async function previewNotasVoz(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -920,7 +920,7 @@ export async function previewInduccionRecorrido(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -948,7 +948,7 @@ export async function previewArticulosPuesto(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -976,7 +976,7 @@ export async function previewRegistroVehiculosCorporativos(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -1004,7 +1004,7 @@ export async function previewMantenimientoArticulos(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -1032,7 +1032,7 @@ export async function previewManualesPuesto(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -1060,7 +1060,7 @@ export async function previewLlaves(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -1088,7 +1088,7 @@ export async function previewLlaveros(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -1123,7 +1123,7 @@ export async function purgeOldMobileReports(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: PurgeOldMobileReportsResult; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -1147,7 +1147,7 @@ export async function previewSolicitudesPermiso(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -1174,7 +1174,7 @@ export async function createReportJob(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; message?: string; data?: any }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -1197,7 +1197,7 @@ export async function createReportePuesto(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; message?: string; data?: any }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,
@@ -1220,7 +1220,7 @@ export async function listReportesPuesto(params: {
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; data?: any[]; message?: string }> {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) return { status: false, message: 'Server URL not configured' };
   const res = await authedFetch({
     url: `${apiUrl}/api/reportes`,

@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   StyleSheet,
@@ -18,7 +19,6 @@ import SlideMenu from '@/components/SlideMenu';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
-import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
@@ -550,7 +550,7 @@ export default function VoiceNotesScreen() {
           }
           return;
         }
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
           return;
         }
@@ -667,7 +667,7 @@ export default function VoiceNotesScreen() {
       const listPuestoId = getMarcaPuestoIdFromJson(marca);
 
       if (hasConnection) {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
@@ -903,7 +903,7 @@ export default function VoiceNotesScreen() {
       const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
 
       let empleadoDetalle: FirmaData['empleadoDetalle'] = undefined;
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (apiUrl) {
         try {
           const empleadoResponse = await authedFetch({
@@ -969,7 +969,7 @@ export default function VoiceNotesScreen() {
 
       // Fetch employee details
       let empleadoDetalle = undefined;
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (apiUrl) {
         try {
           const empleadoResponse = await authedFetch({
@@ -1979,7 +1979,7 @@ export default function VoiceNotesScreen() {
         return null;
       }
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }

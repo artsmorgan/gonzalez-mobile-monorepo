@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, TextInput, Image, View, Platform, Dimensions, Animated, RefreshControl } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -12,7 +13,6 @@ import SlideMenu from '@/components/SlideMenu';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
-import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
@@ -121,7 +121,7 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
   const [cachedActivityImage, setCachedActivityImage] = React.useState<string | null>(null);
   const [serverActivityImageBase64, setServerActivityImageBase64] = React.useState<string | null>(null);
   const [activityImageRefreshKey, setActivityImageRefreshKey] = React.useState<number>(0);
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
 
   // Function to get cached image for activity
   const getCachedActivityImage = async (activityId: number) => {
@@ -426,7 +426,7 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
   const [isConnected, setIsConnected] = React.useState<boolean>(true);
   const [serverImageBase64, setServerImageBase64] = React.useState<string | null>(null);
   const [imageRefreshKey, setImageRefreshKey] = React.useState<number>(0);
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
 
   const loadImageFromServer = React.useCallback(async () => {
     if (
@@ -1466,7 +1466,7 @@ export default function ActivitiesScreen() {
 
       if (isConnected) {
         // Online: fetch from API and cache
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
@@ -1670,7 +1670,7 @@ export default function ActivitiesScreen() {
 
     if (isConnected) {
       try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
@@ -2221,7 +2221,7 @@ export default function ActivitiesScreen() {
 
   const fetchSignatureEmployee = async (employeeId: string) => {
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }
@@ -3693,7 +3693,7 @@ export default function ActivitiesScreen() {
         Alert.alert('Sin conexión', 'Este submódulo funciona exclusivamente con internet.');
         return;
       }
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         Alert.alert('Error', 'No se encontró la URL del servidor.');
         return;

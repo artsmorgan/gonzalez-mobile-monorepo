@@ -1,4 +1,4 @@
-import Constants from 'expo-constants';
+import { apiServer } from '../utils/apiServer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import authedFetch from './authedFetch';
 import { getFile } from './fileStorage';
@@ -106,7 +106,7 @@ export const listCreatedActivitiesByPuesto = async ({
   logout: () => Promise<any>;
 }): Promise<{ status: boolean; message?: string; actividades?: any[] }> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     const response = await authedFetch({
@@ -138,7 +138,7 @@ export const appendCreatedActivityPuestos = async ({
   logout: () => Promise<any>;
 }): Promise<ApiResponse & { created_count?: number; skipped_already_linked?: number }> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const response = await authedFetch({
       url: `${apiUrl}/api/activities/created/${activityId}/puestos`,
@@ -170,7 +170,7 @@ export const updateCreatedActivity = async ({
   logout: () => Promise<any>;
 }): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const response = await authedFetch({
       url: `${apiUrl}/api/activities/created/${activityId}`,
@@ -200,7 +200,7 @@ export const duplicateCreatedActivity = async ({
   logout: () => Promise<any>;
 }): Promise<ApiResponse & { actividad?: any; actividad_id?: number; puestos_duplicados?: number }> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const response = await authedFetch({
       url: `${apiUrl}/api/activities/created/${activityId}/duplicate`,
@@ -228,7 +228,7 @@ export const unlinkCreatedActivityPuesto = async ({
   logout: () => Promise<any>;
 }): Promise<ApiResponse & { actividad_id?: number; puesto_id?: number }> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const response = await authedFetch({
       url: `${apiUrl}/api/activities/created/${activityId}/puestos/${puestoId}`,
@@ -254,7 +254,7 @@ export const deleteCreatedActivity = async ({
   logout: () => Promise<any>;
 }): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const response = await authedFetch({
       url: `${apiUrl}/api/activities/created/${activityId}`,
@@ -276,7 +276,7 @@ export const createActivity = async ({
   logout,
 }: CreateActivityParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -320,7 +320,7 @@ export const updateActivity = async ({
   logout,
 }: UpdateActivityParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -366,7 +366,7 @@ export const updateRevisionEquipo = async ({
   logout,
 }: UpdateRevisionEquipoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }

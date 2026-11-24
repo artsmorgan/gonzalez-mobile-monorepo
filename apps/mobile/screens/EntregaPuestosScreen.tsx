@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Modal, View, Platform, Image, RefreshControl } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
@@ -9,7 +10,6 @@ import SlideMenu from '@/components/SlideMenu';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
-import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
@@ -270,7 +270,7 @@ export default function EntregaPuestosScreen() {
   ): string => {
     const name = String(fileName || '').trim();
     if (!recordId || !name) return '';
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) return '';
     return appendTokenToUrl(
       `${String(apiUrl).replace(/\/+$/, '')}/api/entrega-puestos/${recordId}/get-image/${encodeURIComponent(name)}`,
@@ -652,7 +652,7 @@ export default function EntregaPuestosScreen() {
       const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
       const planillasToken = planillasTokenCheck.token;
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }
@@ -787,7 +787,7 @@ export default function EntregaPuestosScreen() {
         return;
       }
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }
@@ -1094,7 +1094,7 @@ export default function EntregaPuestosScreen() {
               };
 
               if (isConnected) {
-                const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+                const apiUrl = apiServer();
                 if (!apiUrl) {
                   throw new Error('Server URL not configured');
                 }

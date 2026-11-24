@@ -1,7 +1,7 @@
+import { apiServer } from '../utils/apiServer';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import AppFooter from '@/components/AppFooter';
-import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import React, { useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
@@ -101,7 +101,7 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
     setIsSubmitting(true);
     
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         Alert.alert('Error', 'URL del servidor no configurada');
         return;

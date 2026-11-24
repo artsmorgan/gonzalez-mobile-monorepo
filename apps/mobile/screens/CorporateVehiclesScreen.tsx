@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -28,7 +29,6 @@ import {
 import * as Network from 'expo-network';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import { ZoomableThumbnailImage } from '@/components/FullscreenMediaViewer';
-import Constants from 'expo-constants';
 import { Picker } from '@react-native-picker/picker';
 import { useAuth } from '@/contexts/AuthContext';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
@@ -978,7 +978,7 @@ export default function CorporateVehiclesScreen() {
       return;
     }
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
       const resp = await authedFetch({
         url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
@@ -1395,7 +1395,7 @@ export default function CorporateVehiclesScreen() {
       return `data:${mime};base64,${img.base64}`;
     }
 
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (apiUrl && vehiculoId) {
       return appendTokenToUrl(`${apiUrl}/api/corporate-vehicles/${vehiculoId}/get-image/${encodeURIComponent(img.name)}`);
     }
@@ -1412,7 +1412,7 @@ export default function CorporateVehiclesScreen() {
     const localUri = getLocalFileDisplayUri(imageName.trim());
     if (localUri) return localUri;
 
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (apiUrl && vehiculoId) {
       return appendTokenToUrl(`${apiUrl}/api/corporate-vehicles/${vehiculoId}/get-maintenance-image/${encodeURIComponent(imageName)}`);
     }
@@ -2233,7 +2233,7 @@ export default function CorporateVehiclesScreen() {
     }
 
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
 
       const resp = await authedFetch({

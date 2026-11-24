@@ -1,4 +1,4 @@
-import Constants from "expo-constants";
+import { apiServer } from '../utils/apiServer';
 import authedFetch from "./authedFetch";
 
 interface saveAbsentReasonParams {
@@ -21,7 +21,7 @@ export default async function saveAbsentReason({
             throw new Error('Auth handlers not provided');
         }
 
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }

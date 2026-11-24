@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -22,7 +23,6 @@ import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
 import { jwtDecode } from 'jwt-decode';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import AppHeader from '@/components/AppHeader';
@@ -631,7 +631,7 @@ export default function ActaEntregaProductosScreen() {
       return;
     }
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
 
       const resp = await authedFetch({
@@ -778,7 +778,7 @@ export default function ActaEntregaProductosScreen() {
 
   const loadImageFromServer = useCallback(async (actaId: number, imageName: string): Promise<string | null> => {
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) return null;
 
       const resp = await authedFetch({
@@ -2104,7 +2104,7 @@ export default function ActaEntregaProductosScreen() {
   };
 
   const renderImagesPreview = (record: ActaEntregaProducto) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER as string | undefined;
+    const apiUrl = apiServer() as string | undefined;
     const imgs = (record.images || []) as ActaImage[];
     if (imgs.length === 0) return null;
 
@@ -2285,7 +2285,7 @@ export default function ActaEntregaProductosScreen() {
   );
 
   const renderPhotosSection = () => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER as string | undefined;
+    const apiUrl = apiServer() as string | undefined;
     const actaIdSafe = editingRecord ? actaEntregaNumericServerId(editingRecord) : 0;
 
     return (

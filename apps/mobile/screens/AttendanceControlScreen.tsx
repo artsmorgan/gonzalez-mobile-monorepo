@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   StyleSheet,
@@ -24,7 +25,6 @@ import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
-import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
@@ -592,7 +592,7 @@ export default function AttendanceControlScreen() {
       return;
     }
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
       const resp = await authedFetch({
         url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
@@ -627,7 +627,7 @@ export default function AttendanceControlScreen() {
 
   const normalizeControl = (raw: any): AttendanceControl => {
     const clienteName = raw?.cliente ?? raw?.nombre_cliente ?? null;
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER || '';
+    const apiUrl = apiServer() || '';
     const recordId = raw?.id;
     const idLocalRaw = raw?.id_local;
     const idLocal =
@@ -823,7 +823,7 @@ export default function AttendanceControlScreen() {
 
   const loadMarcas = useCallback(async () => {
     if (!formCorpoId || !turno || !fecha) return;
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) return;
     setLoadingMarcas(true);
     setErrorMarcas(null);
@@ -891,7 +891,7 @@ export default function AttendanceControlScreen() {
   const refreshColaboradoresFromServer = useCallback(async (recordId: string, openModalAfter = true) => {
     try {
       setIsRefreshingColaboradores(true);
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
 
       const refreshResp = await authedFetch({
@@ -1653,7 +1653,7 @@ export default function AttendanceControlScreen() {
 
       setFirmaResponsableHash(hash);
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
 
       const decodedHash = atob(hash);
@@ -1724,7 +1724,7 @@ export default function AttendanceControlScreen() {
       const connectionStatus = await getConnectionStatus();
       let empleadoDetalle = undefined;
       if (connectionStatus) {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) throw new Error('Server URL not configured');
         const empleadoResponse = await authedFetch({
           url: `${apiUrl}/api/empleados/${empleadoId}`,
@@ -2080,7 +2080,7 @@ export default function AttendanceControlScreen() {
             }
           }
 
-          const listApiUrl = Constants.expoConfig?.extra?.API_SERVER;
+          const listApiUrl = apiServer();
           const recordDraft = attendanceControlRecordIsDraft(record);
           const listRemoteImages = recordDraft ? [] : (record.images || []);
 

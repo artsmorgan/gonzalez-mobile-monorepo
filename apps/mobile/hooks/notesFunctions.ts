@@ -1,5 +1,5 @@
+import { apiServer } from '../utils/apiServer';
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import Constants from "expo-constants";
 import authedFetch from "./authedFetch";
 
 interface CreateNoteParams {
@@ -42,7 +42,7 @@ export async function createNote({
     logout
 }: CreateNoteParams) {
     try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }
@@ -128,7 +128,7 @@ export async function updateNote({
             throw new Error('Marca ID not found');
         }
 
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }
@@ -179,7 +179,7 @@ export async function deleteNote({
     logout
 }: DeleteNoteParams) {
     try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }
@@ -228,7 +228,7 @@ export async function deleteNoteImage({
     logout
 }: DeleteNoteImageParams) {
     try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) throw new Error('Server URL not configured');
         if (!puestoId) throw new Error('Puesto ID not found');
         if (!noteId) throw new Error('Note ID not found');

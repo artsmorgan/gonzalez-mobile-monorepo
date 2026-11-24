@@ -1,4 +1,4 @@
-import Constants from 'expo-constants';
+import { apiServer } from '../utils/apiServer';
 import authedFetch from '@/hooks/authedFetch';
 import { getFile, deleteFile } from '@/hooks/fileStorage';
 
@@ -36,7 +36,7 @@ export async function fetchActaEntregaImageDataUrl(
   deps: { refreshAccessToken: () => Promise<boolean>; logout: () => Promise<any> },
 ): Promise<string | null> {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl || !actaId || !imageName) return null;
     const url = `${apiUrl}/api/acta-entrega-productos/${actaId}/get-image/${encodeURIComponent(imageName)}?t=${Date.now()}`;
 

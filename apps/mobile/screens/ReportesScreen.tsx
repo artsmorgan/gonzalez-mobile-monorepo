@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -15,7 +16,6 @@ import { getDocumentTypes, getTiposProductoNoConforme, getIncidentsClassificatio
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import * as Network from 'expo-network';
-import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import { renderReportesPreviewRow, reportesPreviewRowKey } from '../utils/reportesPreviewRender';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
@@ -1068,7 +1068,7 @@ export default function ReportesScreen() {
   useEffect(() => {
     const loadReportesControlVersiones = async () => {
       try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) return;
         const response = await authedFetch({
           url: `${apiUrl}/api/nomenclators/control-versiones-reportes`,
@@ -3417,7 +3417,7 @@ export default function ReportesScreen() {
       return;
     }
 
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       Alert.alert('Error', 'Server URL not configured');
       return;
@@ -3456,7 +3456,7 @@ export default function ReportesScreen() {
       return;
     }
 
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       Alert.alert('Error', 'Server URL not configured');
       return;

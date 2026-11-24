@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
@@ -12,7 +13,6 @@ import {
     View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
 import * as Network from 'expo-network';
 import * as DocumentPicker from 'expo-document-picker';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
@@ -104,7 +104,7 @@ const getBase64Only = (value: string | null | undefined): string => {
 };
 
 const buildFileUrl = (accionId: number | string, fileName: string, fileType: string, accessToken?: string | null): string => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (apiUrl && typeof accionId === 'number' && accionId > 0) {
         const url = `${apiUrl}/api/traslado-plaza/${accionId}/get-file/${encodeURIComponent(fileName)}`;
         if (!accessToken || accessToken.trim().length === 0) return url;
@@ -202,7 +202,7 @@ export default function TrasladoPlazasScreen() {
             const isConnected = await getConnectionStatus();
 
             if (isConnected) {
-                const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+                const apiUrl = apiServer();
                 if (!apiUrl) {
                     throw new Error('Server URL not configured');
                 }
@@ -459,7 +459,7 @@ export default function TrasladoPlazasScreen() {
                 const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
                 const planillasToken = planillasTokenCheck.token;
 
-                const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+                const apiUrl = apiServer();
                 if (!apiUrl) {
                     throw new Error('Server URL not configured');
                 }

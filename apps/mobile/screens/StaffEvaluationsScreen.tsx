@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { eventBus } from '@/hooks/eventBus';
 import {
@@ -26,7 +27,6 @@ import SlideMenu from '@/components/SlideMenu';
 import { useAuth } from '@/contexts/AuthContext';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
 import * as Network from 'expo-network';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import { Picker } from '@react-native-picker/picker';
@@ -848,7 +848,7 @@ export default function StaffEvaluationsScreen() {
     const gen = ++listFetchGenRef.current;
     const isStale = () => gen !== listFetchGenRef.current;
 
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       setEvaluaciones([]);
       return;
@@ -1281,7 +1281,7 @@ export default function StaffEvaluationsScreen() {
         return;
       }
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       let empleadoDetalle: FirmaData['empleadoDetalle'] = undefined;
       const isConnected = await checkConnection();
       if (isConnected && apiUrl) {
@@ -1333,7 +1333,7 @@ export default function StaffEvaluationsScreen() {
         }
         const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
 
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         let empleadoDetalle: FirmaData['empleadoDetalle'] = undefined;
         const isConnected = await checkConnection();
         if (isConnected && apiUrl) {
@@ -2781,7 +2781,7 @@ export default function StaffEvaluationsScreen() {
                                 hasIdLocal: !!(ev.id_local && String(ev.id_local).length > 0),
                                 getServerImageUrl: (name) =>
                                   appendTokenToUrl(
-                                    `${Constants.expoConfig?.extra?.API_SERVER}/api/evaluation/${ev.id}/get-image/${encodeURIComponent(name)}`
+                                    `${apiServer()}/api/evaluation/${ev.id}/get-image/${encodeURIComponent(name)}`
                                   ),
                               }),
                             }}

@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -23,7 +24,6 @@ import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignatu
 import * as Network from 'expo-network';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
-import Constants from 'expo-constants';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
@@ -966,7 +966,7 @@ export default function GeneralInductionRegisterScreen() {
 
   const loadImageFromServer = useCallback(async (registroId: number, imageName: string): Promise<string | null> => {
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) return null;
 
       const resp = await authedFetch({
@@ -1294,7 +1294,7 @@ export default function GeneralInductionRegisterScreen() {
       return;
     }
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
       const resp = await authedFetch({
         url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
@@ -1950,7 +1950,7 @@ export default function GeneralInductionRegisterScreen() {
 
   const fetchEmpleadoByIdForColaborador = useCallback(
     async (id_local: string, empleadoId: number) => {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
       const response = await authedFetch({
         url: `${apiUrl}/api/empleados/${empleadoId}`,
@@ -1979,7 +1979,7 @@ export default function GeneralInductionRegisterScreen() {
         Alert.alert('Error', 'Debes ingresar un código');
         return;
       }
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
       const response = await authedFetch({
         url: `${apiUrl}/api/empleados/codigo/${encodeURIComponent(code)}`,

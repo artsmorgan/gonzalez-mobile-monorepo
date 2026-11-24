@@ -1,5 +1,5 @@
+import { apiServer } from '../utils/apiServer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
 import authedFetch from './authedFetch';
 
 interface CreateStaffEvaluationParams {
@@ -38,7 +38,7 @@ export const createStaffEvaluation = async ({
   logout,
 }: CreateStaffEvaluationParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -107,7 +107,7 @@ export const deleteStaffEvaluation = async ({
   logout,
 }: DeleteStaffEvaluationParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -152,7 +152,7 @@ export const updateStaffEvaluationSignature = async ({
   logout,
 }: UpdateStaffEvaluationSignatureParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }

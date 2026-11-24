@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -41,7 +42,6 @@ import {
   updateDocumentoEntregado,
 } from '../hooks/documentosEntregadosFunctions';
 import { listDocumentosEntregados } from '../hooks/documentosEntregadosFunctions';
-import Constants from 'expo-constants';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import {
@@ -421,7 +421,7 @@ export default function DocumentosEntregadosScreen() {
       return;
     }
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
 
       const resp = await authedFetch({
@@ -677,7 +677,7 @@ export default function DocumentosEntregadosScreen() {
         return;
       }
       try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) return;
         const res = await authedFetch({
           url: `${apiUrl}/api/puestos/corpo/${corpoId}`,

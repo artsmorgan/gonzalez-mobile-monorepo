@@ -1,4 +1,4 @@
-import Constants from "expo-constants";
+import { apiServer } from '../utils/apiServer';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Network from 'expo-network';
 import { Alert } from "react-native";
@@ -45,7 +45,7 @@ function emitServerTimeUpdated(): void {
         return;
       }
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }

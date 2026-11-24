@@ -1,6 +1,6 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, StyleSheet, TouchableOpacity } from 'react-native';
-import Constants from 'expo-constants';
 import * as Network from 'expo-network';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import { ThemedText } from '@/components/ThemedText';
@@ -46,7 +46,7 @@ export default function MisPuestosSection({ refreshAccessToken, logout, startOpe
       setMessage('Para buscar tus puestos necesitas conexión a internet.');
       return;
     }
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       setMessage('No se encontró la URL del servidor.');
       return;

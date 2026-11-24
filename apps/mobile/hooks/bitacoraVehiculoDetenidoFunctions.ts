@@ -1,4 +1,4 @@
-import Constants from 'expo-constants';
+import { apiServer } from '../utils/apiServer';
 import authedFetch from './authedFetch';
 
 type BasicResponse = { status: boolean; message?: string;[k: string]: any };
@@ -58,7 +58,7 @@ type DeleteParams = {
 };
 
 const getApiUrl = () => {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) throw new Error('Server URL not configured');
   return apiUrl;
 };

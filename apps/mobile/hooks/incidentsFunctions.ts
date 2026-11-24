@@ -1,4 +1,4 @@
-import Constants from 'expo-constants';
+import { apiServer } from '../utils/apiServer';
 import authedFetch from './authedFetch';
 import { hydrateIncidentArchivosInPayload } from './incidentsArchivosSync';
 import type {
@@ -100,7 +100,7 @@ const requireAuthHandlers = (refreshAccessToken?: () => Promise<boolean>, logout
 
 export const listIncidentsByCorpo = async ({ corpoId, refreshAccessToken, logout }: ListIncidentsParams): Promise<IncidentsListResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
@@ -133,7 +133,7 @@ export const listIncidentsByCorpo = async ({ corpoId, refreshAccessToken, logout
 
 export const listIncidentClassifications = async ({ refreshAccessToken, logout }: ListIncidentClassificationsParams): Promise<IncidentsClassificationsResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
@@ -166,7 +166,7 @@ export const listIncidentClassifications = async ({ refreshAccessToken, logout }
 
 export const listExecutives = async ({ refreshAccessToken, logout }: ListExecutivesParams): Promise<ExecutivesResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
@@ -194,7 +194,7 @@ export const listExecutives = async ({ refreshAccessToken, logout }: ListExecuti
 
 export const createIncident = async ({ requestData, refreshAccessToken, logout }: CreateIncidentParams): Promise<CreateIncidentResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -253,7 +253,7 @@ export const createIncident = async ({ requestData, refreshAccessToken, logout }
 
 export const updateIncident = async ({ requestData, incidentId, refreshAccessToken, logout }: UpdateIncidentParams): Promise<BasicResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -317,7 +317,7 @@ interface DeleteIncidentParams {
 
 export const deleteIncident = async ({ incidentId, refreshAccessToken, logout }: DeleteIncidentParams): Promise<BasicResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
@@ -353,7 +353,7 @@ interface DeleteIncidentFileParams {
 
 export const deleteIncidentFile = async ({ incidentId, fileId, refreshAccessToken, logout }: DeleteIncidentFileParams): Promise<BasicResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
@@ -386,7 +386,7 @@ export const listIncidentContributions = async ({
   logout,
 }: ListIncidentContributionsParams): Promise<IncidentContributionsListResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
@@ -419,7 +419,7 @@ export const createIncidentContribution = async ({
   logout,
 }: CreateIncidentContributionParams): Promise<any> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
@@ -478,7 +478,7 @@ export const updateIncidentContribution = async ({
   logout,
 }: UpdateIncidentContributionParams): Promise<BasicResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
@@ -537,7 +537,7 @@ export const deleteIncidentContribution = async ({
   logout,
 }: DeleteIncidentContributionParams): Promise<BasicResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
@@ -572,7 +572,7 @@ export const deleteIncidentContributionFile = async ({
   logout,
 }: DeleteIncidentContributionFileParams): Promise<BasicResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 

@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, View, Image, Dimensions, Linking, Modal, RefreshControl } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -33,7 +34,6 @@ import {
     MovimientoArticuloMantenimientoItem,
     updateMovimientoArticuloMantenimiento,
 } from '../hooks/movimientosArticulosMantenimientoFunctions';
-import Constants from 'expo-constants';
 import getHoraAccion from '../hooks/getHoraAccion';
 import { isStoredPlanillasTokenValid } from '../hooks/planillasTokenStorage';
 import PlanillasPasswordRevalidationModal from '../components/PlanillasPasswordRevalidationModal';
@@ -280,7 +280,7 @@ function ActivoFilesViewer({
             return `data:${mime};base64,${raw}`;
         }
 
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) return '';
         const appendTokenToUrl = (url: string) => {
             if (!accessToken || accessToken.trim().length === 0) return url;
@@ -1388,7 +1388,7 @@ export default function MantenimientoEquipoScreen() {
             return;
         }
         try {
-            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+            const apiUrl = apiServer();
             if (!apiUrl) throw new Error('Server URL not configured');
 
             const resp = await authedFetch({
@@ -1619,7 +1619,7 @@ export default function MantenimientoEquipoScreen() {
         }
         try {
             setIsBulkDownloadingPlantilla(true);
-            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+            const apiUrl = apiServer();
             if (!apiUrl) {
                 throw new Error('Server URL not configured');
             }
@@ -1874,7 +1874,7 @@ export default function MantenimientoEquipoScreen() {
         if (unitArticuloCatalog.length > 0) return;
         try {
             setIsUnitCatalogLoading(true);
-            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+            const apiUrl = apiServer();
             if (!apiUrl) throw new Error('Server URL not configured');
             const response = await authedFetch({
                 url: `${apiUrl}/api/mantenimiento-equipo/articulos-catalogo`,
@@ -2097,7 +2097,7 @@ export default function MantenimientoEquipoScreen() {
         try {
             const isConnected = await getConnectionStatus();
             if (isConnected) {
-                const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+                const apiUrl = apiServer();
                 if (!apiUrl) return;
 
                 const response = await authedFetch({
@@ -2229,7 +2229,7 @@ export default function MantenimientoEquipoScreen() {
 
             const isConnected = await getConnectionStatus();
             if (isConnected) {
-                const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+                const apiUrl = apiServer();
                 if (!apiUrl) {
                     throw new Error('Server URL not configured');
                 }
@@ -2418,7 +2418,7 @@ export default function MantenimientoEquipoScreen() {
 
             const isConnected = await getConnectionStatus();
             if (isConnected) {
-                const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+                const apiUrl = apiServer();
                 if (!apiUrl) {
                     throw new Error('Server URL not configured');
                 }
@@ -3172,19 +3172,19 @@ export default function MantenimientoEquipoScreen() {
     };
 
     const getActivoImageUrl = (activoId: number, fileName: string) => {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) return '';
         return appendTokenToUrl(`${apiUrl}/api/articulo-mantenimiento/${activoId}/get-image/${encodeURIComponent(fileName)}`);
     };
 
     const getActivoAudioUrl = (activoId: number, fileName: string) => {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) return '';
         return appendTokenToUrl(`${apiUrl}/api/articulo-mantenimiento/${activoId}/get-audio/${encodeURIComponent(fileName)}`);
     };
 
     const getActivoVideoUrl = (activoId: number, fileName: string) => {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) return '';
         return appendTokenToUrl(`${apiUrl}/api/articulo-mantenimiento/${activoId}/get-video/${encodeURIComponent(fileName)}`);
     };
@@ -3200,7 +3200,7 @@ export default function MantenimientoEquipoScreen() {
             if (file.type === 'image') return getActivoImageUrl(activoId, file.name);
             if (file.type === 'audio') return getActivoAudioUrl(activoId, file.name);
             if (file.type === 'video') return getActivoVideoUrl(activoId, file.name);
-            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+            const apiUrl = apiServer();
             if (apiUrl) return appendTokenToUrl(`${apiUrl}/api/articulo-mantenimiento/${activoId}/get-file/${encodeURIComponent(file.name)}`);
         }
 
@@ -3374,7 +3374,7 @@ export default function MantenimientoEquipoScreen() {
         setSubmitResponse(null);
 
         const isConnected = await getConnectionStatus();
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             Alert.alert('Error', 'Server URL not configured');
             return;
@@ -3898,7 +3898,7 @@ export default function MantenimientoEquipoScreen() {
                 return;
             }
             const online = await getConnectionStatus();
-            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+            const apiUrl = apiServer();
             if (online && apiUrl) {
                 const res = await authedFetch({
                     url: `${apiUrl}/api/articulo-mantenimiento/${activo.id}/archivos/${file.id}`,

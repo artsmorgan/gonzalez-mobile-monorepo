@@ -1,5 +1,5 @@
+import { apiServer } from '../utils/apiServer';
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import Constants from "expo-constants";
 import authedFetch from "./authedFetch";
 
 interface UpdateSurveySignatureParams {
@@ -18,7 +18,7 @@ export async function updateSurveySignature({
     logout
 }: UpdateSurveySignatureParams) {
     try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }
@@ -67,7 +67,7 @@ export async function createSurvey({
     logout
 }: CreateSurveyParams) {
     try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }
@@ -123,7 +123,7 @@ export async function updateSurvey({
     logout,
 }: UpdateSurveyParams) {
     try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }
@@ -173,7 +173,7 @@ export async function deleteSurvey({
     logout,
 }: DeleteSurveyParams) {
     try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
             throw new Error('Server URL not configured');
         }

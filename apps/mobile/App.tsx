@@ -1,3 +1,4 @@
+import { apiServer } from './utils/apiServer';
 import 'react-native-gesture-handler';
 import 'react-native-reanimated';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -6,7 +7,6 @@ import { NavigationContainer, DarkTheme, DefaultTheme, CommonActions, useFocusEf
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useFonts } from 'expo-font';
 import * as Linking from 'expo-linking';
-import Constants from 'expo-constants';
 import { Alert, Animated, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider } from './contexts/AuthContext';
@@ -92,7 +92,8 @@ import { eventBus } from './hooks/eventBus';
 import { APP_UPDATE_REQUIRED_EVENT, type AppUpdateRequiredPayload } from './hooks/updateRequired';
 import { PERMISSION_DENIED_EVENT, PERMISSION_DENIED_MESSAGE } from './hooks/permissionDeniedNotice';
 import { shouldCheckVersion } from './hooks/versionCheckThrottle';
-import { runQueueRetention } from './hooks/installQueueOwnership';
+import { purgePermissionRejectedActions, runQueueRetention } from './hooks/installQueueOwnership';
+import { QUEUE_PERMISSION_REJECTED_EVENT, queueRejectedMessage, type QueuePermissionRejectedPayload } from './hooks/permissionRejectedQueue';
 import {
   patchSucursalPuestosUbicacionInFragments,
   writePuestoUbicacionDispositivo,
@@ -807,9 +808,15 @@ function AppContent() {
     const onPermissionDenied = () => {
       Alert.alert('Sin permiso', PERMISSION_DENIED_MESSAGE);
     };
+    // Acciones guardadas sin conexión que el servidor rechazó por falta de permiso y se quitaron de los pendientes (issue #211): se avisa una vez.
+    const onQueueRejected = (payload?: QueuePermissionRejectedPayload) => {
+      Alert.alert('Sin permiso', queueRejectedMessage(payload?.count ?? 1));
+    };
     eventBus.on(PERMISSION_DENIED_EVENT, onPermissionDenied);
+    eventBus.on(QUEUE_PERMISSION_REJECTED_EVENT, onQueueRejected);
     return () => {
       eventBus.off(PERMISSION_DENIED_EVENT, onPermissionDenied);
+      eventBus.off(QUEUE_PERMISSION_REJECTED_EVENT, onQueueRejected);
     };
   }, []);
 
@@ -933,7 +940,7 @@ function AppContent() {
         return;
       }
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl || !appVersionInfo) {
         emitFromLastKnown(null);
         return;
@@ -1091,6 +1098,8 @@ function AppContent() {
         // Conexión real con sesión activa: se registra que este usuario se conectó y se eliminan las acciones (y sus archivos) de los usuarios
         // que llevan más de 2 semanas sin conectarse.
         await runQueueRetention();
+        // Lo guardado sin conexión que el servidor rechazó por falta de permiso se quita de las colas antes de recorrerlas (issue #211).
+        await purgePermissionRejectedActions();
 
         console.log('Conectado — sync cachés (única instancia)');
 
@@ -3169,7 +3178,7 @@ function AppContent() {
     const actions = JSON.parse(actionsStr);
     if (!Array.isArray(actions) || actions.length === 0) return;
 
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) return;
 
     const still: any[] = [];
@@ -3235,7 +3244,7 @@ function AppContent() {
 
     console.log('Sincronizando acciones de mantenimientos de artículos:', actions.length);
 
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) return;
 
     for (const action of actions) {
@@ -3414,7 +3423,7 @@ function AppContent() {
 
     console.log('Sincronizando acciones de activos de mantenimiento:', actions.length);
 
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) return;
 
     for (const action of actions) {
@@ -4019,7 +4028,7 @@ function AppContent() {
     if (!employee) return;
     const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
     if (!token) return;
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     await flushPushDeviceActions({ accessToken: token, apiUrl });
   };
 
@@ -4378,7 +4387,7 @@ function AppContent() {
         const cm = JSON.parse(cmStr);
         const marcaId = Number(cm?.id);
         if (!Number.isFinite(marcaId) || marcaId <= 0) return;
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) return;
         const response = await authedFetch({
           url: `${apiUrl}/api/activities/marca/${marcaId}`,
@@ -6353,7 +6362,7 @@ function AppContent() {
             }
           } else if (action.type === 'puesto_ubicacion') {
             console.log('Actualizando ubicación del puesto:', action.puesto_id);
-            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+            const apiUrl = apiServer();
             if (!apiUrl) {
               console.error('Server URL not configured');
               continue;
@@ -8803,7 +8812,7 @@ function AppContent() {
     if (!Array.isArray(actions) || actions.length === 0) return;
 
     console.log('Sincronizando acciones de entrega de puestos:', actions.length);
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) return;
 
     for (const action of [...actions]) {
@@ -8857,7 +8866,7 @@ function AppContent() {
     if (!Array.isArray(actions) || actions.length === 0) return;
 
     console.log('Sincronizando archivos de traslado de plazas:', actions.length);
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) return;
 
     for (const action of [...actions]) {
@@ -9359,7 +9368,7 @@ function AppContent() {
     const handleDeepLink = async () => {
       const initialUrl = await Linking.getInitialURL();
       if (initialUrl && initialUrl.includes('/recover-password/')) {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         const token = initialUrl.split('/recover-password/')[1];
 
         try {
@@ -9729,7 +9738,7 @@ function AppContent() {
       currentUnwatchedCount = currentNotifications.filter((n: any) => !n.watched).length;
     }
 
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -9865,7 +9874,7 @@ function AppContent() {
         await syncPushDeviceRegistration({
           empleadoId: employee.id,
           accessToken,
-          apiUrl: Constants.expoConfig?.extra?.API_SERVER,
+          apiUrl: apiServer(),
         });
       } catch (error) {
         console.error('[push] Error registrando dispositivo:', error);

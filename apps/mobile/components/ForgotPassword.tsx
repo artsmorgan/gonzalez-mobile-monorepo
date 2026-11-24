@@ -1,6 +1,6 @@
+import { apiServer } from '../utils/apiServer';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
-import Constants from 'expo-constants';
 import React, { useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, TextInput, TouchableOpacity } from 'react-native';
 
@@ -28,7 +28,7 @@ export default function ForgotPassword({ onBackToLogin }: ForgotPasswordProps) {
     setIsLoading(true);
 
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         Alert.alert('Error', 'URL del servidor no configurada');
         return;

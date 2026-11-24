@@ -1,7 +1,7 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, Dimensions, Image, Modal, ScrollView, StyleSheet, TextInput, TouchableOpacity, View, RefreshControl } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
 import * as Network from 'expo-network';
 import getCurrentUserDigitalSignature from '../hooks/getCurrentUserDigitalSignature';
 import * as DocumentPicker from 'expo-document-picker';
@@ -479,19 +479,19 @@ export default function JobManualsScreen() {
   // Helpers para construir URLs de archivos en el servidor (similar a IncidentsScreen)
   const getManualImageUrl = (manualId: number, fileName: string) => {
     console.log("Accediendo a la imagen: ", fileName);
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) return '';
     return appendTokenToUrl(`${apiUrl}/api/job-manuals/${manualId}/get-image/${encodeURIComponent(fileName)}`);
   };
 
   const getManualAudioUrl = (manualId: number, fileName: string) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) return '';
     return appendTokenToUrl(`${apiUrl}/api/job-manuals/${manualId}/get-audio/${encodeURIComponent(fileName)}`);
   };
 
   const getManualVideoUrl = (manualId: number, fileName: string) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) return '';
     return appendTokenToUrl(`${apiUrl}/api/job-manuals/${manualId}/get-video/${encodeURIComponent(fileName)}`);
   };
@@ -513,7 +513,7 @@ export default function JobManualsScreen() {
       if (file.type === 'image') return getManualImageUrl(manualId, file.name);
       if (file.type === 'audio') return getManualAudioUrl(manualId, file.name);
       if (file.type === 'video') return getManualVideoUrl(manualId, file.name);
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (apiUrl) return appendTokenToUrl(`${apiUrl}/api/job-manuals/${manualId}/get-file/${encodeURIComponent(file.name)}`);
     }
 
@@ -572,7 +572,7 @@ export default function JobManualsScreen() {
         return;
       }
       try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) throw new Error('Server URL not configured');
         const resp = await authedFetch({
           url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
@@ -2364,7 +2364,7 @@ export default function JobManualsScreen() {
       return `data:${mime};base64,${file.base64}`;
     }
 
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (manualId && visId && apiUrl) {
       if (file.type === 'image') return appendTokenToUrl(`${apiUrl}/api/job-manuals/${manualId}/visualizations/${visId}/get-image/${encodeURIComponent(file.name)}`);
       if (file.type === 'audio') return appendTokenToUrl(`${apiUrl}/api/job-manuals/${manualId}/visualizations/${visId}/get-audio/${encodeURIComponent(file.name)}`);
@@ -2411,7 +2411,7 @@ export default function JobManualsScreen() {
     let empleadoDetalle: FirmaData['empleadoDetalle'] | undefined = undefined;
 
     if (hasConnection) {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (apiUrl) {
         const response = await authedFetch({
           url: `${apiUrl}/api/empleados/${empleadoId}`,

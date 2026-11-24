@@ -1,4 +1,4 @@
-import Constants from 'expo-constants';
+import { apiServer } from '../utils/apiServer';
 import authedFetch from './authedFetch';
 import { readStoredPlanillasToken } from './planillasTokenStorage';
 import { pickPlanillasToken } from './planillasSendToken';
@@ -38,7 +38,7 @@ export const listMutuosAcuerdosMine = async ({
   logout,
 }: CommonAuth): Promise<ListMutuosAcuerdosResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
@@ -72,7 +72,7 @@ export const listMarcasParaMutuo = async ({
   logout,
 }: { empleado_id: number; fecha: string; planillasToken?: string | null } & CommonAuth): Promise<ListMarcasMutuoResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
@@ -105,7 +105,7 @@ export const createMutuoAcuerdo = async ({
   logout,
 }: { requestData: any } & CommonAuth): Promise<MutuoAcuerdoUpsertResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
@@ -142,7 +142,7 @@ export const acceptMutuoAcuerdo = async ({
   firma_reemplaza_manual?: string;
 } & CommonAuth): Promise<BasicResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
@@ -187,7 +187,7 @@ export const signMutuoAcuerdoEjecutivo = async ({
   planillasToken?: string | null;
 } & CommonAuth): Promise<BasicResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
@@ -228,7 +228,7 @@ export const rejectMutuoAcuerdoEjecutivo = async ({
   logout,
 }: { id: number; hora_accion?: string } & CommonAuth): Promise<BasicResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 

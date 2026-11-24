@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, Modal, View, Image, Dimensions, RefreshControl } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -75,7 +76,6 @@ import {
   MODULES_RELEASE_UPDATED_EVENT,
   readModulesReleaseFromStorage,
 } from '@/hooks/getModulesRelease';
-import Constants from 'expo-constants';
 import { isStoredPlanillasTokenValid, readStoredPlanillasToken } from '@/hooks/planillasTokenStorage';
 import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRevalidationModal';
 import { HIDDEN_REFRESH_CONTROL_PROPS } from '@/constants/pullToSearch';
@@ -2007,7 +2007,7 @@ export default function ChecklistSupervisionScreen() {
       return;
     }
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
       const resp = await authedFetch({
         url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
@@ -2064,7 +2064,7 @@ export default function ChecklistSupervisionScreen() {
       if (missingIds.length === 0) return rows;
 
       try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) return rows;
         const response = await authedFetch({
           url: `${apiUrl}/api/empleados?ids=${missingIds.join(',')}`,
@@ -3009,7 +3009,7 @@ export default function ChecklistSupervisionScreen() {
 
     const serverId = editing?.id != null ? Number(editing.id) : 0;
     if (Number.isFinite(serverId) && serverId > 0 && photo.file_name) {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (apiUrl) {
         return appendTokenToUrl(
           `${apiUrl}/api/checklist-supervision/${serverId}/get-image/${encodeURIComponent(photo.file_name)}?t=${Date.now()}`,
@@ -4400,7 +4400,7 @@ export default function ChecklistSupervisionScreen() {
     }
     const checklistId = row.id != null ? Number(row.id) : 0;
     if (photo.file_name && Number.isFinite(checklistId) && checklistId > 0) {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (apiUrl) {
         return appendTokenToUrl(
           `${apiUrl}/api/checklist-supervision/${checklistId}/get-image/${encodeURIComponent(photo.file_name)}?t=${Date.now()}`,

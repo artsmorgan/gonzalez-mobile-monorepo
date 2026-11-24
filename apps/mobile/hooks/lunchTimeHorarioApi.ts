@@ -1,4 +1,4 @@
-import Constants from 'expo-constants';
+import { apiServer } from '../utils/apiServer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import authedFetch from './authedFetch';
 import { buildPlanillasTokenRequestHeaders, readStoredPlanillasToken } from './planillasTokenStorage';
@@ -23,7 +23,7 @@ export function isValidLunchMinutesValue(minutos: unknown): boolean {
 }
 
 function getApiUrl(): string {
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl) throw new Error('Server URL not configured');
   return String(apiUrl);
 }

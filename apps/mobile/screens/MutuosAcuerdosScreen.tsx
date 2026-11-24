@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -22,7 +23,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import * as DocumentPicker from 'expo-document-picker';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
-import Constants from 'expo-constants';
 
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
@@ -285,7 +285,7 @@ export default function MutuosAcuerdosScreen() {
         return;
       }
       try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) throw new Error('Server URL not configured');
         const resp = await authedFetch({
           url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
@@ -387,7 +387,7 @@ export default function MutuosAcuerdosScreen() {
   }, [records, filterEstado, filterNombreSolicitante, filterCreacion, filterFechaAusente, filterFechaReemplaza, filterMotivo]);
 
   const getEmpleadoById = async (id: number) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const response = await authedFetch({
       url: `${apiUrl}/api/empleados/${id}`,
@@ -407,7 +407,7 @@ export default function MutuosAcuerdosScreen() {
   };
 
   const getEmpleadoByCodigo = async (codigo: string) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const response = await authedFetch({
       url: `${apiUrl}/api/empleados/codigo/${encodeURIComponent(String(codigo).trim())}`,

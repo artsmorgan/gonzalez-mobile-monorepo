@@ -1,6 +1,6 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Dimensions, Modal, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
-import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import { ThemedText } from '@/components/ThemedText';
@@ -39,7 +39,7 @@ export default function AppVersionNotice() {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [downloading, setDownloading] = useState(false);
 
-  const apiUrl = String(Constants.expoConfig?.extra?.API_SERVER ?? '').replace(/\/+$/, '');
+  const apiUrl = String(apiServer() ?? '').replace(/\/+$/, '');
 
   const check = useCallback(
     async (silent: boolean) => {

@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -31,7 +32,6 @@ import SlideMenu from '@/components/SlideMenu';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import HierarchyEmptyState from '@/components/HierarchyEmptyState';
 import { useAuth } from '@/contexts/AuthContext';
-import Constants from 'expo-constants';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
@@ -675,7 +675,7 @@ export default function PhysicalMinuteAgendaScreen() {
       const isConnected = await getConnectionStatus();
       if (!isConnected) return;
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
       const response = await authedFetch({
         url: `${apiUrl}/api/main-structure`,
@@ -1051,7 +1051,7 @@ export default function PhysicalMinuteAgendaScreen() {
       return;
     }
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) throw new Error('Server URL not configured');
       const resp = await authedFetch({
         url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
@@ -1301,7 +1301,7 @@ export default function PhysicalMinuteAgendaScreen() {
       return getLocalFileDisplayUri(img.localFileName) || '';
     }
     if (img.serverImageId && img.serverImageName && editingRecord && hasAgendaMinutaServerId(editingRecord)) {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (apiUrl) {
         return appendTokenToUrl(
           `${apiUrl}/api/agenda-minuta/${editingRecord.id}/get-image/${encodeURIComponent(img.serverImageName)}?t=${Date.now()}`
@@ -1335,7 +1335,7 @@ export default function PhysicalMinuteAgendaScreen() {
 
   /** Imagen vía get-image (lazy: solo se arma la URL cuando el collapsable está expandido). */
   const getAgendaListImageUri = (recordId: number, img: { id: number; name: string }): string => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) return '';
     return appendTokenToUrl(`${apiUrl}/api/agenda-minuta/${recordId}/get-image/${encodeURIComponent(img.name)}?t=${Date.now()}`);
   };
@@ -1514,7 +1514,7 @@ export default function PhysicalMinuteAgendaScreen() {
   };
 
   const getEmpleadoByCodigo = async (codigo: string) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const response = await authedFetch({
       url: `${apiUrl}/api/empleados/codigo/${encodeURIComponent(String(codigo).trim())}`,
@@ -1597,7 +1597,7 @@ export default function PhysicalMinuteAgendaScreen() {
 
       const isConnected = await getConnectionStatus();
       if (isConnected) {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        const apiUrl = apiServer();
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }

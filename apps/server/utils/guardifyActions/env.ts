@@ -12,6 +12,8 @@ export type ActionEnv = {
     prisma: any;
     /** `sendNotificationByEmployee`: título, mensaje, destinatarios y quienes la originan. */
     notify: (title: string, message: string, recipients: number[], originators: number[]) => Promise<unknown>;
+    /** Aviso a las plazas indicadas (en la app y push), sin marca de origen: nadie queda excluido. Opcional: solo lo usan las cargas que crean tareas para plazas. */
+    notifyPlazas?: (title: string, message: string, plazaIds: number[]) => Promise<unknown>;
     /** `reportError` de la ruta que corresponda. */
     report: (status: number, message: string) => Promise<void>;
     /** Hora de la acción en ISO con la convención de la app (Costa Rica); si el cliente mandó una, esa. */

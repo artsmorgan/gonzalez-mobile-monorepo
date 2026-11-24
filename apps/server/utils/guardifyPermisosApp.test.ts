@@ -82,14 +82,15 @@ describe("permisos de Guardify en la app: aviso y cola sin conexión", () => {
         const r = deniedResponse("bitacora.visitas-de-vehiculos");
         assert.equal(r.status, 403);
         const body = await r.json();
-        assert.equal(body.message, "permission_denied|bitacora.visitas-de-vehiculos");
+        assert.equal(body.message, "No tienes permiso para realizar esta acción.", "las pantallas muestran `message`: el texto es para la persona");
         assert.equal(body.code, "permission_denied");
+        assert.equal(body.permission, "bitacora.visitas-de-vehiculos");
     });
 
     it("el fetch global frena la acción denegada y avisa; la pantalla de Marcar no confunde la falta de permiso con una sesión vencida", () => {
         const f = leer(mobile, "hooks/installEvidenceFetch.ts");
         assert.match(f, /const blocked = recentDenial\(key\);\s*if \(blocked\) return deniedResponse\(blocked\.permission\);/);
-        assert.match(f, /if \(response\.status === 403\) void notifyIfPermissionDenied\(response,/);
+        assert.match(f, /if \(response\.status === 403\) \{\s*const denial = await notifyIfPermissionDenied\(response,/);
         const app = leer(mobile, "App.tsx");
         assert.match(app, /eventBus\.on\(PERMISSION_DENIED_EVENT, onPermissionDenied\);/);
         assert.match(app, /Alert\.alert\('Sin permiso', PERMISSION_DENIED_MESSAGE\)/);

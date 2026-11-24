@@ -21,6 +21,8 @@ import { getEmbeddedAppVersionInfo, resolveRuntimeAppVariant } from './appVarian
 import isDeviceOnline from './isDeviceOnline';
 import { eventBus } from './eventBus';
 import { getDeviceUid, guardifyStorage } from './installSecureStorage';
+import { decideServerChange, sameServerUrl, setPolicyServerUrl } from './apiServerCore';
+import { allowedServerHosts, buildApiServer } from '../utils/apiServer';
 import { queueRaw } from './installQueueOwnership';
 import getHoraAccion from './getHoraAccion';
 import { readLastLocationFromStorage } from './updateLastLocation';
@@ -155,8 +157,57 @@ function currentAppVersion(): string {
   return String(getEmbeddedAppVersionInfo().version ?? '').trim();
 }
 
+/** Llave (en el almacén de Guardify, que el borrado conserva) de la última URL de servidor con la que trabajó la app. */
+const LAST_SERVER_URL_KEY = 'last_server_url';
+let serverSync: Promise<void> | null = null;
+let serverSyncAgain = false;
+
+/**
+ * El servidor de la app lo entrega Guardify en la política del equipo (issue #214, SDK 0.7.0). Aquí se conoce esa URL y se aplica:
+ *  - se valida contra `ALLOWED_SERVER_HOSTS` (lista fija del build): una URL de otro dominio se ignora y se usa la del build;
+ *  - si la URL resultante es distinta de la última con la que trabajó la app, esos datos son de OTRO servidor: se cierra la sesión, se borran los
+ *    datos locales (cachés y colas sin conexión) y la persona vuelve al inicio de sesión contra el servidor nuevo;
+ *  - sin política conocida (equipo sin registrar) no se cambia nada.
+ * Se ejecuta al arrancar y cada vez que la política puede haber cambiado (estado del SDK, `refreshStatus`, renovación). Nunca lanza.
+ */
+function syncServerUrl(): Promise<void> {
+  if (serverSync) {
+    serverSyncAgain = true;
+    return serverSync;
+  }
+  serverSync = (async () => {
+    try {
+      do {
+        serverSyncAgain = false;
+        await applyServerUrlOnce();
+      } while (serverSyncAgain);
+    } catch (e) {
+      console.warn('[guardify] no se pudo aplicar el servidor de la política:', e);
+    } finally {
+      serverSync = null;
+    }
+  })();
+  return serverSync;
+}
+
+async function applyServerUrlOnce(): Promise<void> {
+  const dev = client;
+  if (!dev?.deviceId) return;
+  const build = buildApiServer();
+  const next = dev.serverUrl({ allowedHosts: allowedServerHosts(), fallback: build });
+  const last = await guardifyStorage.get(LAST_SERVER_URL_KEY).catch(() => null);
+  if (decideServerChange({ last, next, buildUrl: build }) === 'switch') {
+    console.warn('[guardify] el servidor de la app cambió: se cierra la sesión y se borran los datos locales del servidor anterior');
+    await handlers?.logout().catch(() => undefined); // antes de cambiar la URL: lo que cierre sesión todavía habla con el servidor anterior
+    await wipeAllLocalData();
+  }
+  setPolicyServerUrl(sameServerUrl(next, build) ? null : next);
+  await guardifyStorage.set(LAST_SERVER_URL_KEY, next).catch(() => undefined);
+}
+
 function publishIdentity(): void {
   setGuardifyIdentity({ deviceId: client?.deviceId, sessionId: client?.session?.id });
+  void syncServerUrl();
   const s = client?.session;
   const access: GuardifyAccess | null = s ? { externalUserId: s.externalUserId, role: s.role, grants: s.grants ?? [], conditions: s.conditions ?? {} } : null;
   // Solo se avisa si cambió algo: el menú se vuelve a dibujar con los permisos nuevos (p. ej. tras una renovación).
@@ -223,6 +274,7 @@ async function doInit(): Promise<void> {
     await dev.init();
     client = dev;
     publishIdentity();
+    await syncServerUrl(); // antes de dejar pasar al inicio de sesión: así ya habla con el servidor correcto
     const order = parseWipeOrder(await guardifyStorage.get(WIPE_ORDER_KEY).catch(() => null));
     const consent = await guardifyStorage.get(LOCATION_CONSENT_KEY).catch(() => null);
     patch({
@@ -287,6 +339,7 @@ export async function refreshGuardifyStatus(): Promise<void> {
     if (!dev.deviceId) await autoRegister();
     else await dev.refreshStatus();
     patch({ sdk: dev.state() });
+    void syncServerUrl();
   } catch (e) {
     patch({ error: friendlyError(e) });
   } finally {

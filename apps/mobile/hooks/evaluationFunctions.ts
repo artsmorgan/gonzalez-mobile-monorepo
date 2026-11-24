@@ -1,4 +1,4 @@
-import Constants from 'expo-constants';
+import { apiServer } from '../utils/apiServer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { hydrateAgendaMinutaRequestData } from '@/hooks/agendaMinutaImageHydration';
 
@@ -78,7 +78,7 @@ export const createEvaluation = async ({
   logout,
 }: CreateEvaluationParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -139,7 +139,7 @@ export const createMileageControl = async ({
   logout,
 }: CreateMileageControlParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -202,7 +202,7 @@ export const updateMileageControl = async ({
   logout,
 }: UpdateMileageControlParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -264,7 +264,7 @@ export const deleteMileageControl = async ({
   logout,
 }: DeleteMileageControlParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -325,7 +325,7 @@ export const listMileageControlsByCorpo = async ({
   logout,
 }: ListMileageControlsByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -432,7 +432,7 @@ export const createUniformRequest = async ({
   logout,
 }: CreateUniformRequestParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -495,7 +495,7 @@ export const updateUniformRequest = async ({
   logout,
 }: UpdateUniformRequestParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -557,7 +557,7 @@ export const deleteUniformRequest = async ({
   logout,
 }: DeleteUniformRequestParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -618,7 +618,7 @@ export const listUniformRequestsByCorpo = async ({
   logout,
 }: ListUniformRequestsByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -734,7 +734,7 @@ export const createRouteAndTour = async ({
   logout,
 }: CreateRouteAndTourParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -797,7 +797,7 @@ export const updateRouteAndTour = async ({
   logout,
 }: UpdateRouteAndTourParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -854,7 +854,7 @@ export const deleteRouteAndTour = async ({
   logout,
 }: DeleteRouteAndTourParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -915,7 +915,7 @@ export const listRoutesAndToursByCorpo = async ({
   logout,
 }: ListRoutesAndToursByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -1028,7 +1028,7 @@ export const createEmployeeSatisfaction = async ({
   logout,
 }: CreateEmployeeSatisfactionParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -1086,7 +1086,7 @@ export const updateEmployeeSatisfaction = async ({
   logout,
 }: UpdateEmployeeSatisfactionParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -1148,7 +1148,7 @@ export const deleteEmployeeSatisfaction = async ({
   logout,
 }: DeleteEmployeeSatisfactionParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -1209,7 +1209,7 @@ export const listEmployeeSatisfactionByCorpo = async ({
   logout,
 }: ListEmployeeSatisfactionByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -1305,7 +1305,7 @@ export const createVehicleMaintenance = async ({
   logout,
 }: CreateVehicleMaintenanceParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -1368,7 +1368,7 @@ export const updateVehicleMaintenance = async ({
   logout,
 }: UpdateVehicleMaintenanceParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -1430,7 +1430,7 @@ export const deleteVehicleMaintenance = async ({
   logout,
 }: DeleteVehicleMaintenanceParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -1491,7 +1491,7 @@ export const listVehicleMaintenanceByCorpo = async ({
   logout,
 }: ListVehicleMaintenanceByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -1745,7 +1745,7 @@ export const createNonConformingProduct = async ({
   logout,
 }: CreateNonConformingProductParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -1808,7 +1808,7 @@ export const updateNonConformingProduct = async ({
   logout,
 }: UpdateNonConformingProductParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -1870,7 +1870,7 @@ export const deleteNonConformingProduct = async ({
   logout,
 }: DeleteNonConformingProductParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -1932,7 +1932,7 @@ export const deleteNonConformingProductArchivo = async ({
   logout,
 }: DeleteNonConformingProductArchivoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -1996,7 +1996,7 @@ export const listNonConformingProductByCorpo = async ({
   logout,
 }: ListNonConformingProductByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -2058,7 +2058,7 @@ export const createCorporateVehicle = async ({
   logout,
 }: CreateCorporateVehicleParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -2116,7 +2116,7 @@ export const updateCorporateVehicle = async ({
   logout,
 }: UpdateCorporateVehicleParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -2174,7 +2174,7 @@ export const deleteCorporateVehicleImage = async ({
   logout,
 }: DeleteCorporateVehicleImageParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -2235,7 +2235,7 @@ export const deleteCorporateVehicle = async ({
   logout,
 }: DeleteCorporateVehicleParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -2291,7 +2291,7 @@ export const listCorporateVehiclesByCorpo = async ({
   logout,
 }: ListCorporateVehiclesByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -2357,7 +2357,7 @@ export const listCorporateVehicles = async ({
   logout,
 }: ListCorporateVehiclesParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -2418,7 +2418,7 @@ export const listCorporateVehicleUses = async ({
   logout,
 }: ListCorporateVehicleUsesParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -2471,7 +2471,7 @@ export const createCorporateVehicleUse = async ({
   logout,
 }: CreateCorporateVehicleUseParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -2529,7 +2529,7 @@ export const updateCorporateVehicleUse = async ({
   logout,
 }: UpdateCorporateVehicleUseParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -2586,7 +2586,7 @@ export const deleteCorporateVehicleUse = async ({
   logout,
 }: DeleteCorporateVehicleUseParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -2677,7 +2677,7 @@ export const listCorporateVehicleMaintenances = async ({
   logout,
 }: ListCorporateVehicleMaintenancesParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -2735,7 +2735,7 @@ export const createCorporateVehicleMaintenance = async ({
   logout,
 }: CreateCorporateVehicleMaintenanceParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -2793,7 +2793,7 @@ export const updateCorporateVehicleMaintenance = async ({
   logout,
 }: UpdateCorporateVehicleMaintenanceParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -2856,7 +2856,7 @@ export const deleteCorporateVehicleMaintenanceImage = async ({
   logout: () => Promise<any>;
 }): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -2923,7 +2923,7 @@ export const deleteCorporateVehicleMaintenance = async ({
   logout,
 }: DeleteCorporateVehicleMaintenanceParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -3070,7 +3070,7 @@ export const createComplaintsMaster = async ({
   logout,
 }: CreateComplaintsMasterParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -3133,7 +3133,7 @@ export const updateComplaintsMaster = async ({
   logout,
 }: UpdateComplaintsMasterParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -3195,7 +3195,7 @@ export const deleteComplaintsMaster = async ({
   logout,
 }: DeleteComplaintsMasterParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -3257,7 +3257,7 @@ export const deleteComplaintsMasterFile = async ({
   logout,
 }: DeleteComplaintsMasterFileParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -3318,7 +3318,7 @@ export const listComplaintsMasterByCorpo = async ({
   logout,
 }: ListComplaintsMasterByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -3451,7 +3451,7 @@ export const createCleanersControl = async ({
   logout,
 }: CreateCleanersControlParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -3514,7 +3514,7 @@ export const updateCleanersControl = async ({
   logout,
 }: UpdateCleanersControlParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -3576,7 +3576,7 @@ export const deleteCleanersControl = async ({
   logout,
 }: DeleteCleanersControlParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -3637,7 +3637,7 @@ export const listCleanersControlByCorpo = async ({
   logout,
 }: ListCleanersControlByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -3749,7 +3749,7 @@ export const createAgendaMinuta = async ({
   logout,
 }: CreateAgendaMinutaParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -3814,7 +3814,7 @@ export const updateAgendaMinuta = async ({
   logout,
 }: UpdateAgendaMinutaParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -3878,7 +3878,7 @@ export const deleteAgendaMinuta = async ({
   logout,
 }: DeleteAgendaMinutaParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -3940,7 +3940,7 @@ export const deleteAgendaMinutaImage = async ({
   logout,
 }: DeleteAgendaMinutaImageParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -4001,7 +4001,7 @@ export const listAgendaMinutaByCorpo = async ({
   logout,
 }: ListAgendaMinutaByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -4103,7 +4103,7 @@ export const createActionPlan = async ({
   logout,
 }: CreateActionPlanParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -4166,7 +4166,7 @@ export const updateActionPlan = async ({
   logout,
 }: UpdateActionPlanParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -4228,7 +4228,7 @@ export const deleteActionPlan = async ({
   logout,
 }: DeleteActionPlanParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -4289,7 +4289,7 @@ export const listActionPlanByCorpo = async ({
   logout,
 }: ListActionPlanByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -4389,7 +4389,7 @@ export const createWorkRole = async ({
   logout,
 }: CreateWorkRoleParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -4452,7 +4452,7 @@ export const updateWorkRole = async ({
   logout,
 }: UpdateWorkRoleParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -4514,7 +4514,7 @@ export const deleteWorkRole = async ({
   logout,
 }: DeleteWorkRoleParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -4575,7 +4575,7 @@ export const listWorkRoleByCorpo = async ({
   logout,
 }: ListWorkRoleByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -4682,7 +4682,7 @@ export const createContractBasicData = async ({
   logout,
 }: CreateContractBasicDataParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -4745,7 +4745,7 @@ export const updateContractBasicData = async ({
   logout,
 }: UpdateContractBasicDataParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -4807,7 +4807,7 @@ export const deleteContractBasicData = async ({
   logout,
 }: DeleteContractBasicDataParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -4868,7 +4868,7 @@ export const listContractBasicDataByCorpo = async ({
   logout,
 }: ListContractBasicDataByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -4970,7 +4970,7 @@ export const createDeliverySchedule = async ({
   logout,
 }: CreateDeliveryScheduleParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -5033,7 +5033,7 @@ export const updateDeliverySchedule = async ({
   logout,
 }: UpdateDeliveryScheduleParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -5095,7 +5095,7 @@ export const deleteDeliverySchedule = async ({
   logout,
 }: DeleteDeliveryScheduleParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -5156,7 +5156,7 @@ export const listDeliveryScheduleByCorpo = async ({
   logout,
 }: ListDeliveryScheduleByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -5283,7 +5283,7 @@ export const createEnvironmentalManagementPlan = async ({
   logout,
 }: CreateEnvironmentalManagementPlanParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -5346,7 +5346,7 @@ export const updateEnvironmentalManagementPlan = async ({
   logout,
 }: UpdateEnvironmentalManagementPlanParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -5408,7 +5408,7 @@ export const deleteEnvironmentalManagementPlan = async ({
   logout,
 }: DeleteEnvironmentalManagementPlanParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -5469,7 +5469,7 @@ export const listEnvironmentalManagementPlanByCorpo = async ({
   logout,
 }: ListEnvironmentalManagementPlanByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -5587,7 +5587,7 @@ export const createCleaningWorkPlan = async ({
   logout,
 }: CreateCleaningWorkPlanParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -5650,7 +5650,7 @@ export const updateCleaningWorkPlan = async ({
   logout,
 }: UpdateCleaningWorkPlanParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -5712,7 +5712,7 @@ export const deleteCleaningWorkPlan = async ({
   logout,
 }: DeleteCleaningWorkPlanParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -5773,7 +5773,7 @@ export const listCleaningWorkPlanByCorpo = async ({
   logout,
 }: ListCleaningWorkPlanByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -5869,7 +5869,7 @@ export const createSpecialSituationsPlan = async ({
   logout,
 }: CreateSpecialSituationsPlanParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -5932,7 +5932,7 @@ export const updateSpecialSituationsPlan = async ({
   logout,
 }: UpdateSpecialSituationsPlanParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -5994,7 +5994,7 @@ export const deleteSpecialSituationsPlan = async ({
   logout,
 }: DeleteSpecialSituationsPlanParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -6055,7 +6055,7 @@ export const listSpecialSituationsPlanByCorpo = async ({
   logout,
 }: ListSpecialSituationsPlanByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -6189,7 +6189,7 @@ export const createCleaningTasksActivities = async ({
   logout,
 }: CreateCleaningTasksActivitiesParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -6252,7 +6252,7 @@ export const updateCleaningTasksActivities = async ({
   logout,
 }: UpdateCleaningTasksActivitiesParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -6314,7 +6314,7 @@ export const deleteCleaningTasksActivities = async ({
   logout,
 }: DeleteCleaningTasksActivitiesParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -6375,7 +6375,7 @@ export const listCleaningTasksActivitiesByCorpo = async ({
   logout,
 }: ListCleaningTasksActivitiesByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -6467,7 +6467,7 @@ export const createRiskMatrix = async ({
   logout,
 }: CreateRiskMatrixParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -6530,7 +6530,7 @@ export const updateRiskMatrix = async ({
   logout,
 }: UpdateRiskMatrixParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -6592,7 +6592,7 @@ export const deleteRiskMatrix = async ({
   logout,
 }: DeleteRiskMatrixParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -6653,7 +6653,7 @@ export const listRiskMatrixByCorpo = async ({
   logout,
 }: ListRiskMatrixByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -6745,7 +6745,7 @@ export const createOpportunityMatrix = async ({
   logout,
 }: CreateOpportunityMatrixParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -6808,7 +6808,7 @@ export const updateOpportunityMatrix = async ({
   logout,
 }: UpdateOpportunityMatrixParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -6870,7 +6870,7 @@ export const deleteOpportunityMatrix = async ({
   logout,
 }: DeleteOpportunityMatrixParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -6931,7 +6931,7 @@ export const listOpportunityMatrixByCorpo = async ({
   logout,
 }: ListOpportunityMatrixByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -7023,7 +7023,7 @@ export const createProcessIndicatorMatrix = async ({
   logout,
 }: CreateProcessIndicatorMatrixParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -7086,7 +7086,7 @@ export const updateProcessIndicatorMatrix = async ({
   logout,
 }: UpdateProcessIndicatorMatrixParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -7148,7 +7148,7 @@ export const deleteProcessIndicatorMatrix = async ({
   logout,
 }: DeleteProcessIndicatorMatrixParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -7209,7 +7209,7 @@ export const listProcessIndicatorMatrixByCorpo = async ({
   logout,
 }: ListProcessIndicatorMatrixByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -7305,7 +7305,7 @@ export const createMonthlyWorkRole = async ({
   logout,
 }: CreateMonthlyWorkRoleParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -7368,7 +7368,7 @@ export const updateMonthlyWorkRole = async ({
   logout,
 }: UpdateMonthlyWorkRoleParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -7430,7 +7430,7 @@ export const deleteMonthlyWorkRole = async ({
   logout,
 }: DeleteMonthlyWorkRoleParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -7491,7 +7491,7 @@ export const listMonthlyWorkRoleByCorpo = async ({
   logout,
 }: ListMonthlyWorkRoleByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -7607,7 +7607,7 @@ export const createPermitRequest = async ({
   logout,
 }: CreatePermitRequestParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -7670,7 +7670,7 @@ export const updatePermitRequest = async ({
   logout,
 }: UpdatePermitRequestParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -7732,7 +7732,7 @@ export const deletePermitRequest = async ({
   logout,
 }: DeletePermitRequestParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -7793,7 +7793,7 @@ export const listPermitRequestByCorpo = async ({
   logout,
 }: ListPermitRequestByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -7862,7 +7862,7 @@ export const listPermitRequestMine = async ({
   logout,
 }: ListPermitRequestMineParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -8007,7 +8007,7 @@ export const createActaEntregaProducto = async ({
   logout,
 }: CreateActaEntregaProductoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -8065,7 +8065,7 @@ export const updateActaEntregaProducto = async ({
   logout,
 }: UpdateActaEntregaProductoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -8122,7 +8122,7 @@ export const deleteActaEntregaProducto = async ({
   logout,
 }: DeleteActaEntregaProductoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -8179,7 +8179,7 @@ export const deleteActaEntregaProductoImage = async ({
   logout,
 }: DeleteActaEntregaProductoImageParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -8249,7 +8249,7 @@ export const listActaEntregaProducto = async ({
   logout,
 }: ListActaEntregaProductoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -8319,7 +8319,7 @@ export const listActaEntregaProductoByCorpo = async ({
   logout,
 }: ListActaEntregaProductoByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -8435,7 +8435,7 @@ export const createAttendanceControl = async ({
   logout,
 }: CreateAttendanceControlParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -8498,7 +8498,7 @@ export const updateAttendanceControl = async ({
   logout,
 }: UpdateAttendanceControlParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -8560,7 +8560,7 @@ export const deleteAttendanceControl = async ({
   logout,
 }: DeleteAttendanceControlParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -8629,7 +8629,7 @@ export const deleteAttendanceControlImage = async ({
   logout,
 }: DeleteAttendanceControlImageParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -8701,7 +8701,7 @@ export const updateAttendanceEmpleadoSignature = async ({
   logout,
 }: UpdateAttendanceEmpleadoSignatureParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -8777,7 +8777,7 @@ export const listAttendanceControl = async ({
   logout,
 }: ListAttendanceControlParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -8850,7 +8850,7 @@ export const listAttendanceControlByCorpo = async ({
   logout,
 }: ListAttendanceControlByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -8989,7 +8989,7 @@ export const createOpeningClosingPosition = async ({
   logout,
 }: CreateOpeningClosingPositionParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -9055,7 +9055,7 @@ export const deleteOpeningClosingPositionImage = async ({
   logout,
 }: DeleteOpeningClosingPositionImageParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     let token = await AsyncStorage.getItem('access_token');
     if (!token) {
@@ -9106,7 +9106,7 @@ export const updateOpeningClosingPosition = async ({
   logout,
 }: UpdateOpeningClosingPositionParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -9168,7 +9168,7 @@ export const deleteOpeningClosingPosition = async ({
   logout,
 }: DeleteOpeningClosingPositionParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -9229,7 +9229,7 @@ export const listOpeningClosingPositionByCorpo = async ({
   logout,
 }: ListOpeningClosingPositionByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -9360,7 +9360,7 @@ export const createInductionTourRecord = async ({
   logout,
 }: CreateInductionTourRecordParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -9423,7 +9423,7 @@ export const updateInductionTourRecord = async ({
   logout,
 }: UpdateInductionTourRecordParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -9485,7 +9485,7 @@ export const deleteInductionTourRecord = async ({
   logout,
 }: DeleteInductionTourRecordParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -9564,7 +9564,7 @@ export const listInductionTourRecords = async ({
   logout,
 }: ListInductionTourRecordsParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -9635,7 +9635,7 @@ export const listInductionTourRecordByCorpo = async ({
   logout,
 }: ListInductionTourRecordByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -9757,7 +9757,7 @@ export const createGeneralInductionRegister = async ({
   logout,
 }: CreateGeneralInductionRegisterParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -9815,7 +9815,7 @@ export const updateGeneralInductionRegister = async ({
   logout,
 }: UpdateGeneralInductionRegisterParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -9880,7 +9880,7 @@ export const deleteGeneralInductionRegisterImage = async ({
   logout,
 }: DeleteGeneralInductionRegisterImageParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -9940,7 +9940,7 @@ export const deleteGeneralInductionRegister = async ({
   logout,
 }: DeleteGeneralInductionRegisterParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -10006,7 +10006,7 @@ export const listGeneralInductionRegisters = async ({
   logout,
 }: ListGeneralInductionRegistersParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -10071,7 +10071,7 @@ export const listGeneralInductionRegisterByCorpo = async ({
   logout,
 }: ListGeneralInductionRegisterByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
 
     let token = await AsyncStorage.getItem('access_token');
@@ -10185,7 +10185,7 @@ export const createSupervisionReport = async ({
   logout,
 }: CreateSupervisionReportParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -10247,7 +10247,7 @@ export const updateSupervisionReport = async ({
   logout,
 }: UpdateSupervisionReportParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -10309,7 +10309,7 @@ export const deleteSupervisionReport = async ({
   logout,
 }: DeleteSupervisionReportParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -10370,7 +10370,7 @@ export const listSupervisionReportByCorpo = async ({
   logout,
 }: ListSupervisionReportByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -10472,7 +10472,7 @@ export const createElectricBrushGuide = async ({
   logout,
 }: CreateElectricBrushGuideParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -10535,7 +10535,7 @@ export const updateElectricBrushGuide = async ({
   logout,
 }: UpdateElectricBrushGuideParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -10597,7 +10597,7 @@ export const deleteElectricBrushGuide = async ({
   logout,
 }: DeleteElectricBrushGuideParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -10658,7 +10658,7 @@ export const listElectricBrushGuideByCorpo = async ({
   logout,
 }: ListElectricBrushGuideByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -10788,7 +10788,7 @@ export const createGeneralClientsList = async ({
   logout,
 }: CreateGeneralClientsListParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -10851,7 +10851,7 @@ export const updateGeneralClientsList = async ({
   logout,
 }: UpdateGeneralClientsListParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -10913,7 +10913,7 @@ export const deleteGeneralClientsList = async ({
   logout,
 }: DeleteGeneralClientsListParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -10969,7 +10969,7 @@ export const listGeneralClientsListByCorpo = async ({
   logout,
 }: ListGeneralClientsListByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -11127,7 +11127,7 @@ export const createImprovementActionsControl = async ({
   logout,
 }: CreateImprovementActionsControlParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -11190,7 +11190,7 @@ export const updateImprovementActionsControl = async ({
   logout,
 }: UpdateImprovementActionsControlParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -11247,7 +11247,7 @@ export const deleteImprovementActionsControl = async ({
   logout,
 }: DeleteImprovementActionsControlParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -11308,7 +11308,7 @@ export const listImprovementActionsControlByCorpo = async ({
   logout,
 }: ListImprovementActionsControlByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -11404,7 +11404,7 @@ export const createQualityPolicy = async ({
   logout,
 }: CreateQualityPolicyParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -11467,7 +11467,7 @@ export const updateQualityPolicy = async ({
   logout,
 }: UpdateQualityPolicyParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -11529,7 +11529,7 @@ export const deleteQualityPolicy = async ({
   logout,
 }: DeleteQualityPolicyParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -11590,7 +11590,7 @@ export const listQualityPolicyByCorpo = async ({
   logout,
 }: ListQualityPolicyByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -11686,7 +11686,7 @@ export const createBusinessQualityObjectives = async ({
   logout,
 }: CreateBusinessQualityObjectivesParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -11749,7 +11749,7 @@ export const updateBusinessQualityObjectives = async ({
   logout,
 }: UpdateBusinessQualityObjectivesParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -11811,7 +11811,7 @@ export const deleteBusinessQualityObjectives = async ({
   logout,
 }: DeleteBusinessQualityObjectivesParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -11872,7 +11872,7 @@ export const listBusinessQualityObjectivesByCorpo = async ({
   logout,
 }: ListBusinessQualityObjectivesByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -11959,7 +11959,7 @@ export const createStakeholderAnalysisMatrix = async ({
   logout,
 }: CreateStakeholderAnalysisMatrixParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -12022,7 +12022,7 @@ export const updateStakeholderAnalysisMatrix = async ({
   logout,
 }: UpdateStakeholderAnalysisMatrixParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -12084,7 +12084,7 @@ export const deleteStakeholderAnalysisMatrix = async ({
   logout,
 }: DeleteStakeholderAnalysisMatrixParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -12145,7 +12145,7 @@ export const listStakeholderAnalysisMatrixByCorpo = async ({
   logout,
 }: ListStakeholderAnalysisMatrixByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -12243,7 +12243,7 @@ export const createCommunicationPlan = async ({
   logout,
 }: CreateCommunicationPlanParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -12306,7 +12306,7 @@ export const updateCommunicationPlan = async ({
   logout,
 }: UpdateCommunicationPlanParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -12368,7 +12368,7 @@ export const deleteCommunicationPlan = async ({
   logout,
 }: DeleteCommunicationPlanParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -12429,7 +12429,7 @@ export const listCommunicationPlanByCorpo = async ({
   logout,
 }: ListCommunicationPlanByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -12521,7 +12521,7 @@ export const createKnowledgeManagementMatrix = async ({
   logout,
 }: CreateKnowledgeManagementMatrixParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -12584,7 +12584,7 @@ export const updateKnowledgeManagementMatrix = async ({
   logout,
 }: UpdateKnowledgeManagementMatrixParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -12646,7 +12646,7 @@ export const deleteKnowledgeManagementMatrix = async ({
   logout,
 }: DeleteKnowledgeManagementMatrixParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -12702,7 +12702,7 @@ export const listKnowledgeManagementMatrixByCorpo = async ({
   logout,
 }: ListKnowledgeManagementMatrixByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -12802,7 +12802,7 @@ export const createChangePlanning = async ({
   logout,
 }: CreateChangePlanningParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -12865,7 +12865,7 @@ export const updateChangePlanning = async ({
   logout,
 }: UpdateChangePlanningParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -12927,7 +12927,7 @@ export const deleteChangePlanning = async ({
   logout,
 }: DeleteChangePlanningParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
@@ -12988,7 +12988,7 @@ export const listChangePlanningByCorpo = async ({
   logout,
 }: ListChangePlanningByCorpoParams): Promise<ApiResponse> => {
   try {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }

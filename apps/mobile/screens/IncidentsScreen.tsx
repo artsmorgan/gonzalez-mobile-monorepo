@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Dimensions, Modal, Platform, ScrollView, StyleSheet, TextInput, TouchableOpacity, View, Image, RefreshControl } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
@@ -10,7 +11,6 @@ import * as Network from 'expo-network';
 import * as DocumentPicker from 'expo-document-picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
 
@@ -166,7 +166,7 @@ const buildIncidentFileUrl = (incidentId: number | undefined, file: any, accessT
   }
 
   // Para registros sincronizados, usar la API
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl || !incidentId) return '';
   const appendTokenToUrl = (url: string) => {
     if (!accessToken || accessToken.trim().length === 0) return url;
@@ -195,7 +195,7 @@ const buildContributionFileUrl = (incidentId: number | undefined, contributionId
     return `data:${mime};base64,${file.base64}`;
   }
 
-  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  const apiUrl = apiServer();
   if (!apiUrl || !incidentId || !contributionId) return '';
   const appendTokenToUrl = (url: string) => {
     if (!accessToken || accessToken.trim().length === 0) return url;
@@ -1104,7 +1104,7 @@ export default function IncidentsScreen() {
   };
 
   const getEmpleadoByCodigo = async (codigo: string) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const apiUrl = apiServer();
     if (!apiUrl) throw new Error('Server URL not configured');
     const response = await authedFetch({
       url: `${apiUrl}/api/empleados/codigo/${encodeURIComponent(String(codigo).trim())}`,
