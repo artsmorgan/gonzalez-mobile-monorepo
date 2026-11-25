@@ -20,6 +20,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Picker } from '@react-native-picker/picker';
 import { Buffer } from 'buffer';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import { ACTIVITIES_NEEDS_SHIFT_MESSAGE, hasActiveShift } from '@/hooks/turnoActivo'; import { ON_DEMAND_TITLE } from '@/hooks/frecuenciaCuandoAplica';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import { eventBus } from '@/hooks/eventBus';
 import { TIPOS_TURNO_OPCIONES, tiposTurnoDeActividad, toggleTipoTurno, type TipoTurnoActividad } from '@/hooks/actividadTiposTurno';
@@ -923,6 +924,8 @@ export default function ActivitiesScreen() {
   // Importante: "sin internet" NO cuenta como error (solo es un estado informativo)
   const [offlineMessage, setOfflineMessage] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
+  /** Turno activo: ingreso digitado y salida sin digitar en la marca actual. Sin él no se buscan las actividades asignadas. */
+  const [hasActiveShiftNow, setHasActiveShiftNow] = useState<boolean>(false);
   const [moduleStep, setModuleStep] = useState<'assigned' | 'created' | 'form'>('assigned');
   const [isEntregaPuestosVisible, setIsEntregaPuestosVisible] = useState<boolean>(false);
 
@@ -959,7 +962,7 @@ export default function ActivitiesScreen() {
   const [isCreateActivityVisible, setIsCreateActivityVisible] = useState(false);
   const [isEditingCreatedActivity, setIsEditingCreatedActivity] = useState(false);
   const [editingCreatedActivityId, setEditingCreatedActivityId] = useState<number | null>(null);
-  const [repetitionType, setRepetitionType] = useState<'daily' | 'weekly' | 'monthly-weekday' | 'monthly-last' | 'yearly' | 'weekdays' | 'custom'>('custom');
+  const [repetitionType, setRepetitionType] = useState<'daily' | 'weekly' | 'monthly-weekday' | 'monthly-last' | 'yearly' | 'weekdays' | 'on-demand' | 'custom'>('custom');
   const [weeklyLabel, setWeeklyLabel] = useState<string>('Cada semana');
   const [monthlyWeekdayLabel, setMonthlyWeekdayLabel] = useState<string>('Mes (día sem.)');
   const [monthlyLastLabel, setMonthlyLastLabel] = useState<string>('Mes (último día sem.)');
@@ -1056,12 +1059,15 @@ export default function ActivitiesScreen() {
       const tree = await loadMainStructureTreeMerged();
       const empresas = Array.isArray(tree) ? tree : [];
       structureRef.current = empresas as MainStructureTree;
-      setStructure(empresas as MainStructureTree);
+      // Sin jerarquía descargada el resultado es siempre un arreglo vacío NUEVO: guardarlo cambiaba `structure` en cada carga, y como el efecto del
+      // formulario de búsqueda depende de ese estado, volvía a cargar sin parar (la jerarquía vacía parpadeaba y nunca salía el botón para ir a
+      // Jerarquía). Si ya estaba vacía se conserva el mismo arreglo.
+      setStructure((prev) => (prev.length === 0 && empresas.length === 0 ? prev : (empresas as MainStructureTree)));
       return empresas as MainStructureTree;
     } catch (error) {
       console.error('Error loading main structure:', error);
       structureRef.current = [];
-      setStructure([]);
+      setStructure((prev) => (prev.length === 0 ? prev : []));
       setCatalogError('No se pudo leer la jerarquía guardada.');
       return [];
     } finally {
@@ -1451,11 +1457,23 @@ export default function ActivitiesScreen() {
       const currentMarca = await AsyncStorage.getItem('current_marca');
       if (!currentMarca) {
         setHasCurrentMarca(false);
+        setHasActiveShiftNow(false);
+        setActivities([]);
         setIsLoading(false);
         return;
       }
 
       const currentMarcaData = JSON.parse(currentMarca);
+      // Sin turno activo (ingreso sin digitar o salida ya digitada) no se hace ninguna búsqueda: ni al servidor ni al caché.
+      if (!hasActiveShift(currentMarcaData)) {
+        setHasCurrentMarca(true);
+        setHasActiveShiftNow(false);
+        setActivities([]);
+        setOfflineMessage(null);
+        setIsLoading(false);
+        return;
+      }
+      setHasActiveShiftNow(true);
       const marcaId = currentMarcaData.id;
       const puestoId = Number(currentMarcaData?.puesto?.id);
       setCurrentPuestoId(Number.isFinite(puestoId) && puestoId > 0 ? puestoId : null);
@@ -1627,7 +1645,8 @@ export default function ActivitiesScreen() {
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) return;
       const currentMarcaData = JSON.parse(currentMarcaStr);
-      let tree: MainStructureTree = Array.isArray(treeOverride) ? treeOverride : structure;
+      // Se lee de la referencia y no del estado: depender de `structure` recreaba esta función en cada carga y el efecto que la llama se repetía sin fin.
+      let tree: MainStructureTree = Array.isArray(treeOverride) ? treeOverride : structureRef.current;
       if (!Array.isArray(tree) || tree.length === 0) {
         tree = await loadMainStructureCache();
       }
@@ -1655,7 +1674,7 @@ export default function ActivitiesScreen() {
     } catch (error) {
       console.error('Error preloading hierarchy from current_marca:', error);
     }
-  }, [structure, loadMainStructureCache]);
+  }, [loadMainStructureCache]);
 
   const loadPuestosCatalog = async (corpoId: number, isConnected: boolean) => {
     const loadFromCache = async () => {
@@ -1777,6 +1796,8 @@ export default function ActivitiesScreen() {
     const weekOrdinals = ['primer', 'segundo', 'tercer', 'cuarto', 'último'];
 
     let title = '';
+    // «Cuando aplica» no se repite: no lleva el sufijo de fin de la repetición.
+    if (type === 'on-demand') return ON_DEMAND_TITLE;
 
     switch (type) {
       case 'daily':
@@ -3899,10 +3920,8 @@ export default function ActivitiesScreen() {
         <AppHeader onMenuPress={handleMenuPress} title="Actividades" />
         <ThemedView style={styles.noMarcaContainer}>
           <Ionicons name="alert-circle-outline" size={80} color="#FF9500" />
-          <ThemedText style={styles.noMarcaTitle}>No hay marca registrada</ThemedText>
-          <ThemedText style={styles.noMarcaMessage}>
-            Debes registrar una marca de ingreso antes de acceder a las actividades.
-          </ThemedText>
+          <ThemedText style={styles.noMarcaTitle}>Sin turno activo</ThemedText>
+          <ThemedText style={styles.noMarcaMessage}>{ACTIVITIES_NEEDS_SHIFT_MESSAGE}</ThemedText>
           <TouchableOpacity
             style={styles.goBackButton}
             onPress={() => navigation.goBack()}
@@ -3989,6 +4008,10 @@ export default function ActivitiesScreen() {
                   >
                     <ThemedText style={styles.retryButtonText}>Reintentar</ThemedText>
                   </TouchableOpacity>
+                </ThemedView>
+              ) : !hasActiveShiftNow ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>{ACTIVITIES_NEEDS_SHIFT_MESSAGE}</ThemedText>
                 </ThemedView>
               ) : activities.length === 0 ? (
                 <ThemedView style={styles.emptyContainer}>
@@ -4615,6 +4638,7 @@ export default function ActivitiesScreen() {
                       <Picker.Item label={monthlyLastLabel} value="monthly-last" color="#000000" />
                       <Picker.Item label={yearlyLabel} value="yearly" color="#000000" />
                       <Picker.Item label="Todos los días laborales (lunes a viernes)" value="weekdays" color="#000000" />
+                      <Picker.Item label={ON_DEMAND_TITLE} value="on-demand" color="#000000" />
                       <Picker.Item label="Personalizado" value="custom" color="#000000" />
                     </Picker>
                   </ThemedView>

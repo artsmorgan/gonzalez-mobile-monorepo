@@ -1,6 +1,6 @@
 import type { ActionEnv } from "./env";
 import { PlanillasError } from "./env";
-import { tokenPlanillasVigente } from "./planillas";
+import { tokenPlanillasVigente } from "./planillas"; import { horaDePared } from "../horaAccion";
 
 /**
  * Arma el entorno de las acciones con las piezas reales INYECTADAS (así se prueba el comportamiento de verdad sin base de datos ni red).
@@ -38,7 +38,7 @@ export function makeActionEnv(deps: EnvDeps, req: object, route: string, method:
                 console.error("[guardifyActions] no se pudo registrar el error:", e instanceof Error ? e.message : e);
             }
         },
-        nowIso: (hora) => (hora ? hora.toISOString() : deps.ahoraPared().toISOString()),
+        nowIso: (hora) => (hora ? horaDePared(hora).toISOString() : deps.ahoraPared().toISOString()),
         planillas: async (path, body, token) => {
             try {
                 return await deps.planillasPost(path, body, token);

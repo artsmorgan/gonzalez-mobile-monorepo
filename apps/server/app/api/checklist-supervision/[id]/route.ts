@@ -12,7 +12,7 @@ import {
   stripMantenimientoFilesFromArticulosPuesto,
 } from "../../../../utils/sanitizeArticulosPuestoForPersistence";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../utils/hydratePreexistentIncludes";
-import { reportError } from "../../../../utils/reportError";
+import { reportError } from "../../../../utils/reportError"; import { horaDePared } from "../../../../utils/horaAccion";
 
 import { auditUpdateFields } from "../../../../utils/auditFields";
 const CHECKLIST_SUPERVISION_INCLUDE = {
@@ -263,7 +263,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
           puesto_id: puestoIdNum,
           payload,
           notifySenderIds,
-          fechaNotificacion: accionAt,
+          fechaNotificacion: horaDePared(accionAt),
           isUpdate: true,
         });
 

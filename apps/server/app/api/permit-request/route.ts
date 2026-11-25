@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
-import { toZonedTime } from "date-fns-tz";
+import { toZonedTime } from "date-fns-tz"; import { horaDePared } from "../../../utils/horaAccion";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { permitVisibilityWhere } from "../../../utils/permitVisibilidad";
 import { prisma } from "../../../utils/prismaClient";
@@ -554,7 +554,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const now = horaAccion ? horaAccion.toISOString() : toZonedTime(new Date(), "America/Costa_Rica").toISOString();
+    const now = horaDePared(horaAccion).toISOString();
     const created = await callDynamicPrisma({
       req,
       data: {

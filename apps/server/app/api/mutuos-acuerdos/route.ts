@@ -6,7 +6,7 @@ import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee } from "../../../utils/sendNotification";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
-import { reportError } from "../../../utils/reportError";
+import { reportError } from "../../../utils/reportError"; import { horaDePared } from "../../../utils/horaAccion";
 import {
   dateAtUtcMidnight,
   parseIntStrict,
@@ -771,7 +771,7 @@ export async function POST(req: NextRequest) {
     }
 
     const createdBy = parseIntStrict((payload as any)?.id) || 0;
-    const createdAt = horaAccion ? horaAccion : toZonedTime(new Date(), "America/Costa_Rica");
+    const createdAt = horaDePared(horaAccion);
     const marcasAusenteStr = stringifyMarcaIds(marcasAusenteIds);
     const marcasReemplazaStr = stringifyMarcaIds(marcasReemplazaIds);
 

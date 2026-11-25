@@ -105,7 +105,7 @@ describe("referencias del spike #189", () => {
         ["apps/server/app/api/auth/login/route.ts", 205, /a_mobile_token_for_planillas/],
         ["apps/server/app/api/modules-release/route.ts", 15, /n_app_module_visibility/],
         ["apps/server/app/api/lunch-time/route.ts", 172, /es_manual/],
-        ["apps/mobile/screens/ActivitiesScreen.tsx", 52, /'Bueno' \| 'Malo' \| 'No está'/],
+        ["apps/mobile/screens/ActivitiesScreen.tsx", 53, /'Bueno' \| 'Malo' \| 'No está'/],
         ["apps/mobile/screens/MantenimientoEquipoScreen.tsx", 3412, /'Reemplazar'/],
         ["apps/mobile/screens/MantenimientoEquipoScreen.tsx", 3418, /'Reparar en taller'/],
         ["apps/mobile/hooks/mantenimientoEquipoPlantillaLocal.ts", 12, /PLANTILLA_TABLE1_HEADERS/],

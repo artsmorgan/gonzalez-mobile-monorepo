@@ -1,5 +1,5 @@
 import { normalizeTiposTurno, tipoTurnoRespaldo, type TipoTurnoActividad } from "../actividadTipoTurno";
-import { jerarquiaComun } from "../syncActividadHierarchy";
+import { jerarquiaComun } from "../syncActividadHierarchy"; import { ON_DEMAND_TITLE, ON_DEMAND_TYPE } from "../frecuenciaCuandoAplica";
 import { fail, type ActionEnv, type ActionHttp } from "./env";
 import { INVENTARIO_MAX_FILAS, MOTIVO_NO_PROCESADA, parseFechaEntregaParts, resumenDe, type ResultadoFila, type ResumenCarga } from "./inventario";
 
@@ -23,8 +23,8 @@ export const ACTIVIDADES_MAX_FILAS = INVENTARIO_MAX_FILAS;
 
 export type FilaActividadRaw = Record<string, unknown>;
 
-export type FrecuenciaTipo = "diaria" | "semanal" | "laborables" | "mensual" | "anual";
-export const FRECUENCIAS: readonly FrecuenciaTipo[] = ["diaria", "semanal", "laborables", "mensual", "anual"];
+export type FrecuenciaTipo = "diaria" | "semanal" | "laborables" | "mensual" | "anual" | "cuando aplica";
+export const FRECUENCIAS: readonly FrecuenciaTipo[] = ["diaria", "semanal", "laborables", "mensual", "anual", "cuando aplica"];
 
 export type FilaActividad = {
     codigo_puesto: string;
@@ -97,6 +97,7 @@ const FRECUENCIAS_ALIAS: Record<string, FrecuenciaTipo> = {
     laborables: "laborables", "dias laborables": "laborables", "lunes a viernes": "laborables", weekdays: "laborables",
     mensual: "mensual", "cada mes": "mensual", monthly: "mensual",
     anual: "anual", "cada ano": "anual", yearly: "anual",
+    "cuando aplica": "cuando aplica", "cuando_aplica": "cuando aplica", "cuando-aplica": "cuando aplica", "a demanda": "cuando aplica", "on-demand": "cuando aplica", "on demand": "cuando aplica",
 };
 export function parseFrecuencia(value: unknown): FrecuenciaTipo | null {
     return FRECUENCIAS_ALIAS[clave(String(value ?? "")).replace(/ñ/g, "n")] ?? null;
@@ -192,6 +193,11 @@ export function construirFrecuencia(f: Pick<FilaActividad, "frecuencia" | "fecha
             }
             break;
         }
+        case "cuando aplica":
+            // Sin repetición ni esperado (#229): siempre disponible dentro de su vigencia; el día de la semana de la fecha de inicio no interviene.
+            config.type = ON_DEMAND_TYPE;
+            title = ON_DEMAND_TITLE;
+            break;
         case "anual":
             config.type = "yearly";
             config.day = d;

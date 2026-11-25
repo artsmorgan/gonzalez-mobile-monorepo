@@ -3,6 +3,7 @@ import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "./callDynamicPrisma";
 import { prisma } from "./prismaClient";
 import { actividadAplicaAlTurno, loadTiposTurnoByActividad } from "./actividadTipoTurno";
+import { esCuandoAplica, vigenteCuandoAplica } from "./frecuenciaCuandoAplica";
 
 export async function getActivities(req: NextRequest, id: number) {
     try {
@@ -74,7 +75,12 @@ export async function getActivities(req: NextRequest, id: number) {
                 continue;
             }
 
-            is_today = validateDates(fechaInicio, fechaMarca, actividad.frecuencia, fechaFin);
+            // «Cuando aplica» (#229): no se repite ni tiene esperado. Dentro de su vigencia se muestra siempre en el turno, con UNA fila abierta
+            // (sin marcar) a la vez: así se puede marcar cada vez que hace falta, sin arrastrar pendientes de turnos anteriores.
+            const cuandoAplica = esCuandoAplica(actividad.frecuencia);
+            is_today = cuandoAplica
+                ? vigenteCuandoAplica(fechaInicio, fechaMarca, fechaFin)
+                : validateDates(fechaInicio, fechaMarca, actividad.frecuencia, fechaFin);
 
             let pendiente = false;
             let registro: any = null;
@@ -86,11 +92,13 @@ export async function getActivities(req: NextRequest, id: number) {
                         action: "GET",
                         table: "e_actividades_puesto_plaza",
                         operation: "findFirst",
-                        where: {
-                            actividad_puesto_id: actividadPuesto.id,
-                            plaza_id: marcaDia.plaza_id,
-                            created_at: { gte: shiftStart.toISOString(), lte: now.toISOString() },
-                        },
+                        where: cuandoAplica
+                            ? { actividad_puesto_id: actividadPuesto.id, plaza_id: marcaDia.plaza_id, marcada: false }
+                            : {
+                                actividad_puesto_id: actividadPuesto.id,
+                                plaza_id: marcaDia.plaza_id,
+                                created_at: { gte: shiftStart.toISOString(), lte: now.toISOString() },
+                            },
                         orderBy: { id: "desc" },
                     }
                 });
@@ -112,6 +120,9 @@ export async function getActivities(req: NextRequest, id: number) {
                         },
                     });
                 }
+            } else if (cuandoAplica) {
+                // Fuera de su vigencia no se muestra ni queda como pendiente.
+                continue;
             } else {
                 registro = await callDynamicPrisma({
                     req,
@@ -471,6 +482,11 @@ function isEventDate(start: Date, current: Date, config: any, fechaFinActividad?
 
         case 'custom':
             result = isCustomMatch(start, current, config);
+            break;
+
+        case 'on-demand':
+            // Nunca "toca" por fecha: getActivities la trata aparte (esCuandoAplica) y la deja siempre disponible.
+            result = false;
             break;
 
         default:

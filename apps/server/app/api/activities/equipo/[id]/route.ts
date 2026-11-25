@@ -6,7 +6,7 @@ import { prisma } from "../../../../../utils/prismaClient";
 import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
 import { createReport, updateReport, resolveMarcaModeloSerieFromArticuloEstructura } from "../../../../../utils/createReporteArticuloMantenimiento";
 import { sendNotificationByRole } from "../../../../../utils/sendNotification";
-import { reportError } from "../../../../../utils/reportError";
+import { reportError } from "../../../../../utils/reportError"; import { horaDePared } from "../../../../../utils/horaAccion";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -99,7 +99,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         }
 
         articles[articleIndex] = selected;
-        const nowIso = new Date(hora_accion || toZonedTime(new Date(), "America/Costa_Rica")).toISOString();
+        const nowIso = horaDePared(hora_accion ? new Date(hora_accion) : null).toISOString();
         await callDynamicPrisma({
             req,
             data: {
