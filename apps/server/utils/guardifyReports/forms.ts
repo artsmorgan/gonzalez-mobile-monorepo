@@ -37,14 +37,36 @@ export type FormRecord = {
         fecha: string;
         contenido: Record<string, unknown>;
     };
+    /** Archivos adjuntos del registro (opcional). El contenido se baja aparte: `GET …/{modulo}/forms/{id}/attachments/{adjunto.id}`. */
+    adjuntos?: FormAttachment[];
     /** Ubicación por ids para aplicar el alcance; no sale en la respuesta. */
     hier: Hierarchy;
 };
 
+/** Un adjunto como lo lista el registro: `tipo` es el MIME (null si no se reconoce) y `bytes` el tamaño si se conoce. */
+export type FormAttachment = { id: string; nombre: string; tipo?: string | null; bytes?: number | null };
+
+/**
+ * Baja un archivo del almacenamiento de la app por su ruta relativa (p. ej. `permit-request/12/archivo.pdf`). La ruta de Next lo arma con
+ * `fetchDynamicFile`; en las pruebas se inyecta. `null` = el archivo no existe.
+ */
+export type AttachmentFetcher = (relPath: string) => Promise<{ bytes: Uint8Array; contentType?: string | null } | null>;
+
+/** Contenido de un adjunto con la ubicación de su registro (para aplicar el alcance). */
+export type LoadedAttachment = { bytes: Uint8Array; contentType: string; nombre: string; hier: Hierarchy };
+
 export type GuardifyFormModule = {
     /** Trae los registros con sus datos completos. `firmas` = incluir las imágenes de las firmas. */
     loadRecords: (db: ReportDataAccess, ids: number[], opts: { firmas: boolean }) => Promise<FormRecord[]>;
+    /**
+     * Opcional: un adjunto de un registro. Debe devolver `null` si el registro no existe (o no está activo) o si el adjunto no es de ESE
+     * registro. `fetchFile` baja el archivo del almacenamiento de la app (lo pone la ruta).
+     */
+    loadAttachment?: (db: ReportDataAccess, recordId: number, attachmentId: string, fetchFile?: AttachmentFetcher) => Promise<LoadedAttachment | null>;
 };
+
+/** Tope del tamaño de un adjunto que se entrega a Guardify (25 MB). */
+export const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
 
 /** Máximo de registros por llamada (cada uno puede traer firmas en imagen). */
 export const FORMS_PER_CALL = 50;
@@ -123,5 +145,61 @@ export async function handleGuardifyForms(req: Request, modulo: string, kind: "i
         if (e instanceof ReportUnavailableError) return json({ error: "report_unavailable", message: e.message }, 501);
         console.error(JSON.stringify({ level: "error", msg: "guardify_form_failed", modulo, kind, error: String(e).slice(0, 300) }));
         return json({ error: "internal", message: "No se pudo armar el formulario.", detail: String(e).slice(0, 300) }, 500);
+    }
+}
+
+export type AttachmentDeps = FormsDeps & { fetchFile?: AttachmentFetcher };
+
+/** `filename*` de RFC 5987/6266 (UTF-8, codificado). */
+export function contentDispositionAttachment(nombre: string): string {
+    const enc = encodeURIComponent(nombre.replace(/[\r\n"]/g, " ").trim() || "archivo").replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+    return `attachment; filename*=UTF-8''${enc}`;
+}
+
+/**
+ *   GET …/{modulo}/forms/{id}/attachments/{attachmentId}?scope   → el archivo (binario)
+ *
+ * Misma llave que el resto. Con `scope`, el registro debe caer dentro del alcance (si no, 404, igual que si no existiera). Solo los módulos
+ * cuyo formulario declara `loadAttachment`; lo demás → 404 `attachment_not_found`. Más de 25 MB → 413.
+ */
+export async function handleGuardifyAttachment(req: Request, modulo: string, recordId: string, attachmentId: string, deps: AttachmentDeps): Promise<Response> {
+    const started = Date.now();
+    const auth = verifyGuardifyApiKey(req.headers, deps.env);
+    if (!auth.ok) return json({ error: auth.error, message: auth.message }, auth.status);
+    const mod = deps.registry[modulo];
+    if (!mod) return json({ error: "report_not_found", message: `No existe el reporte «${modulo}».` }, 404);
+    const notFound = () => json({ error: "attachment_not_found", message: "No existe el adjunto." }, 404);
+    const log = (status: number, extra: Record<string, unknown> = {}) =>
+        console.log(JSON.stringify({ level: "info", msg: "guardify_form_attachment", modulo, status, ms: Date.now() - started, user: auth.user, ...extra }));
+    try {
+        const sp = new URL(req.url).searchParams;
+        const scopeRaw = sp.get("scope");
+        const scope = scopeRaw === null ? null : (await import("./scope")).parseScope(scopeRaw);
+        if (scope !== null && !mod.supportsScope) throw new ScopeUnsupportedError();
+        const id = /^\d{1,10}$/.test(recordId) ? Number(recordId) : 0;
+        const aid = String(attachmentId ?? "").trim();
+        if (!mod.form?.loadAttachment || !id || !/^[A-Za-z0-9_-]{1,64}$/.test(aid)) { log(404); return notFound(); }
+        const file = await mod.form.loadAttachment(lenientDb(deps.getDb()), id, aid, deps.fetchFile);
+        // Fuera del alcance responde igual que si no existiera: no se confirma que el registro exista.
+        if (!file || (scope && !matchesScope(file.hier, scope))) { log(404, { id, adjunto: aid }); return notFound(); }
+        if (file.bytes.byteLength > ATTACHMENT_MAX_BYTES) {
+            log(413, { id, adjunto: aid, bytes: file.bytes.byteLength });
+            return json({ error: "attachment_too_large", message: "El adjunto supera el máximo de 25 MB." }, 413);
+        }
+        log(200, { id, adjunto: aid, bytes: file.bytes.byteLength });
+        return new Response(file.bytes as any, {
+            status: 200,
+            headers: {
+                "content-type": file.contentType || "application/octet-stream",
+                "content-disposition": contentDispositionAttachment(file.nombre),
+                "content-length": String(file.bytes.byteLength),
+                "cache-control": "no-store",
+            },
+        });
+    } catch (e) {
+        if (e instanceof ParamError) return json({ error: "bad_request", message: e.message }, 400);
+        if (e instanceof ScopeUnsupportedError) return json({ error: "scope_unsupported", message: e.message }, 403);
+        console.error(JSON.stringify({ level: "error", msg: "guardify_form_attachment_failed", modulo, error: String(e).slice(0, 300) }));
+        return json({ error: "internal", message: "No se pudo entregar el adjunto.", detail: String(e).slice(0, 300) }, 500);
     }
 }

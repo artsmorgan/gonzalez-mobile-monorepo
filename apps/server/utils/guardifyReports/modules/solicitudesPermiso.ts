@@ -4,7 +4,7 @@ import type { OutRow } from "../listing";
 import { addDays } from "../params";
 import { matchesScope, type ScopeItem } from "../scope";
 import type { GuardifyReportModule } from "../types";
-import { solicitudesPermisoForm } from "./solicitudesPermisoForm";
+import { cargarArchivos, solicitudesPermisoForm, tipoTurnoLabel } from "./solicitudesPermisoForm";
 
 const txt = (v: unknown, max = 500): string | null => {
     const s = String(v ?? "").trim();
@@ -18,17 +18,6 @@ const nombre = (v: unknown, id: unknown): string | null => {
     return s;
 };
 
-/** «Diurno», «Nocturno», «Mixto» (u otro texto tal cual, con la primera letra en mayúscula). */
-const tipoTurnoLabel = (v: unknown): string | null => {
-    const s = txt(v, 60);
-    if (!s) return null;
-    const k = s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-    if (k.includes("nocturn")) return "Nocturno";
-    if (k.includes("mixt")) return "Mixto";
-    if (k.includes("diurn")) return "Diurno";
-    return s.charAt(0).toUpperCase() + s.slice(1);
-};
-
 /** Estado con la primera letra en mayúscula («Pendiente», «Aprobado», «Rechazado»); la base lo guarda en minúsculas. */
 const estadoLabel = (v: unknown): string | null => {
     const s = txt(v, 30);
@@ -36,8 +25,8 @@ const estadoLabel = (v: unknown): string | null => {
 };
 
 /**
- * Solicitudes de permiso (`c_solicitud_permiso`). Se omiten todas las firmas (`firma_*`, base64) y los archivos
- * adjuntos; los turnos salen como conteo. `empleado_cedula` y `division_contrato` los agrega `load` (la consulta original no los trae).
+ * Solicitudes de permiso (`c_solicitud_permiso`). Se omiten todas las firmas (`firma_*`, base64); de los archivos adjuntos solo salen
+ * los nombres (`adjuntos`, separados por «; », los carga `enrichSolicitudes`); los turnos salen como conteo. `empleado_cedula` y `division_contrato` los agrega `load` (la consulta original no los trae).
  *
  * Para los filtros: `empleado` sale como «código - nombre», `estado` con mayúscula inicial, `division` es la del contrato (con la de la
  * cabecera como respaldo), `ejecutivo_cuenta` el propio de la solicitud, `tipo_turno` los tipos de turno distintos de la solicitud
@@ -66,6 +55,7 @@ export function mapSolicitudPermisoRow(r: any): OutRow {
         turnos,
         motivo: txt(r.motivo_txt ?? r.motivo),
         observaciones: txt(r.observaciones_txt ?? r.observaciones),
+        adjuntos: txt((Array.isArray(r.adjuntos_list) ? r.adjuntos_list : []).join("; "), 2000),
         creado_por: nombre(r.creado_por_nombre, r.created_by),
         // La tabla no guarda modificación (sin `updated_at` ni `updated_by`): se entrega vacío (brecha de auditoría).
         modificado: (r as any).updated_at ? fmtDt((r as any).updated_at) : (null),
@@ -80,15 +70,25 @@ export function filterSolicitudesByScope(rows: any[], scope: ScopeItem[] | null)
     return rows.filter((r) => matchesScope({ empresa: r.empresa_id, cliente: r.cliente_id, division: r.division_id, contrato: r.contrato_id, corpo: r.corpo_id, puesto: r.puesto_id }, scope));
 }
 
-/** Agrega, en lote (una consulta por dato, no por fila), la cédula del empleado (la consulta original no la trae) y la división del contrato. */
+/**
+ * Agrega, en lote (una consulta por dato, no por fila), la cédula del empleado (la consulta original no la trae), la división del contrato
+ * y los nombres de los archivos adjuntos (`c_archivos_solicitud_permiso`, el nombre original o, si viene vacío, el guardado).
+ */
 export async function enrichSolicitudes(db: any, rows: any[]): Promise<any[]> {
     const empIds = [...new Set(rows.map((r) => Number(r.empleado_id)).filter((n) => n > 0))];
-    const [emps, divisiones] = await Promise.all([
+    const [emps, divisiones, archivos] = await Promise.all([
         empIds.length ? db.c_empleado.findMany({ where: { id: { in: empIds } }, select: { id: true, cedula: true } }) : [],
         divisionPorContrato(db, rows.map((r) => r.contrato_id)),
+        cargarArchivos(db, rows.map((r) => r.id)),
     ]);
     const cedulaById = new Map<number, unknown>(emps.map((e: any) => [Number(e.id), e.cedula]));
-    return rows.map((r) => ({ ...r, empleado_cedula: cedulaById.get(Number(r.empleado_id)), division_contrato: divisiones.get(Number(r.contrato_id)) }));
+    const nombreArchivo = (a: any): string | null => txt(a?.original_name, 300) ?? txt(a?.name, 300);
+    return rows.map((r) => ({
+        ...r,
+        empleado_cedula: cedulaById.get(Number(r.empleado_id)),
+        division_contrato: divisiones.get(Number(r.contrato_id)),
+        adjuntos_list: (archivos.get(Number(r.id)) ?? []).map(nombreArchivo).filter(Boolean),
+    }));
 }
 
 /**

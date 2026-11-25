@@ -83,6 +83,14 @@ describe("solicitudes_permiso: mapeo", () => {
         assert.equal(o.modificado_por, null);
         assert.deepEqual([o.empresa, o.cliente, o.contrato, o.sucursal, o.puesto], ["E1 - Empresa Uno", "Cliente Cinco", "CT-2 - Contrato Dos", "S3 - Sucursal Tres", "P7 - Recepción"]);
     });
+    it("adjuntos: los nombres separados por «; »; sin archivos null", () => {
+        assert.equal(mapSolicitudPermisoRow({ ...raw, adjuntos_list: ["Dictamen.pdf", "foto.jpg"] }).adjuntos, "Dictamen.pdf; foto.jpg");
+        assert.equal(mapSolicitudPermisoRow({ ...raw, adjuntos_list: [] }).adjuntos, null);
+        assert.equal(mapSolicitudPermisoRow(raw).adjuntos, null);
+        assert.ok(!solicitudesPermiso.searchKeys.includes("adjuntos"));
+        assert.ok(!solicitudesPermiso.filterKeys.includes("adjuntos"));
+        assert.ok(!solicitudesPermiso.sortKeys.includes("adjuntos"));
+    });
     it("no expone firmas", () => {
         const o = mapSolicitudPermisoRow(raw);
         assert.ok(!JSON.stringify(o).includes("iVBOR"));
@@ -103,18 +111,25 @@ describe("solicitudes_permiso: mapeo", () => {
 });
 
 describe("solicitudes_permiso: enriquecimiento por lote", () => {
-    it("trae la cédula y la división del contrato en lote (no por fila) y las mapea", async () => {
+    it("trae la cédula, la división del contrato y los adjuntos en lote (no por fila) y los mapea", async () => {
         let calls = 0;
         const table = (rows: any[]) => ({ findMany: async (a: any) => { calls++; return rows.filter((r) => a.where.id.in.includes(r.id)); } });
         const db: any = {
             c_empleado: table([{ id: 33, cedula: "3-0456-0789" }]),
             e_estructura_contrato: table([{ id: 2, division_id: 20 }]),
             n_division: table([{ id: 20, nombre: "Seguridad" }]),
+            c_archivos_solicitud_permiso: { findMany: async (a: any) => {
+                calls++;
+                return [{ id: 1, solicitud_id: 12, name: "x-dictamen.pdf", original_name: "Dictamen.pdf" }, { id: 2, solicitud_id: 12, name: "x-foto.jpg", original_name: "" }, { id: 3, solicitud_id: 99, name: "z.pdf", original_name: "Otra.pdf" }]
+                    .filter((r) => a.where.solicitud_id.in.includes(r.solicitud_id));
+            } },
         };
         const { empleado_cedula: _c, ...base } = raw;
         const rows = [base, { ...base, id: 13 }, { ...base, id: 14, empleado_id: 0, contrato_id: 0 }];
         const out = (await enrichSolicitudes(db, rows)).map(mapSolicitudPermisoRow);
-        assert.equal(calls, 3); // empleados, contrato y división: una consulta cada uno
+        assert.equal(calls, 4); // empleados, contrato, división y archivos: una consulta cada uno
+        assert.equal(out[0].adjuntos, "Dictamen.pdf; x-foto.jpg");
+        assert.equal(out[1].adjuntos, null);
         assert.equal(out[0].cedula, "3-0456-0789");
         assert.equal(out[1].division, "Seguridad");
         assert.equal(out[2].cedula, null);
