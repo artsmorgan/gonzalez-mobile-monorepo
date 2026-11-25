@@ -89,6 +89,66 @@ de las filas** (`^[a-z][a-z0-9_]*$`): `f.<columna>` o `f.<columna>.<operador>`. 
 Lo que **no** se expone a propósito: el token de refresco (`ingresos_usuario`), la firma del empleado
 (`tiempo_almuerzo`) y el dispositivo y las coordenadas (`login_marca`).
 
+### `solicitudes_permiso` (`c_solicitud_permiso`)
+
+Alcance por la estructura de la cabecera. Además de las columnas estándar (id, creado, creado_por, modificado,
+modificado_por, empresa, cliente, division, contrato, sucursal, puesto) trae: empleado («código - nombre»), cedula,
+codigo, ejecutivo_cuenta, tipo_salario, estado, fecha_inicio, fecha_fin, dias, turnos (conteo), motivo, observaciones,
+**adjuntos** y tipo_turno.
+
+- `adjuntos`: nombres de los archivos de `c_archivos_solicitud_permiso` (el nombre original o, si viene vacío, el
+  guardado) separados por «; »; `null` si la solicitud no tiene archivos. Se carga en lote (`solicitud_id in […]`, una
+  consulta por cada 1000 solicitudes del periodo, no una por fila). No es columna de búsqueda, filtro declarado ni orden por defecto.
+- Las firmas (`firma_*`) no salen nunca.
+
+## Formularios por registro
+
+```
+GET /api/guardify/reports/{modulo}/forms/ids?from&to&<filtros>&scope   → { ids, total }
+GET /api/guardify/reports/{modulo}/forms?ids=1,2,3&firmas=1&scope       → { records }   (hasta 50)
+GET /api/guardify/reports/{modulo}/forms/{id}/attachments/{attachmentId}?scope → el archivo (binario)
+```
+
+Cada registro: `{ id, variante, creado, estructura, valores, listas, firmas, firmasPresentes, evidencia?, adjuntos? }`
+(Guardify lo dibuja con su propia definición del formulario). `adjuntos` es opcional:
+`[{ id: string, nombre: string, tipo?: string | null, bytes?: number | null }]` (`tipo` = MIME, `null` si no se reconoce).
+
+### Solicitudes de permiso (`solicitudes_permiso`)
+
+`valores` (además de las claves de siempre, que se conservan por compatibilidad: `fecha`, `nombre_colaborador`,
+`codigo_colaborador`, `permiso_con_goce`, `permiso_sin_goce`, `motivo`, `cantidad_dias`, `fechas_permiso`,
+`observaciones`):
+
+| Clave | Valor |
+|---|---|
+| `cedula_colaborador` | Cédula del empleado (`c_empleado.cedula`) o `null`. |
+| `tipo_permiso` | `"Con goce de salario"` / `"Sin goce de salario"` según `tipo`; `null` si no se reconoce. |
+| `fecha_creacion` | `created_at` como `YYYY-MM-DDTHH:mm:ss`. |
+| `fecha_desde` / `fecha_hasta` | `fecha_inicio` / `fecha_fin` como `YYYY-MM-DD`. |
+| `dias_permiso` | Días calendario entre desde y hasta, ambos inclusive (la misma regla que la columna `dias` de la lista); `null` si falta alguna fecha. |
+| `cantidad_turnos` | Cuántos turnos tiene la solicitud (igual que `cantidad_dias`, que el papel llama «cantidad de días»). |
+
+`listas.turnos`: una fila por turno del JSON `turnos`:
+`{ fecha: "YYYY-MM-DD" | null, horario: "HH:mm – HH:mm" | null, tipo: "Diurno" | "Nocturno" | "Mixto" | texto | null, reemplazo: "código - nombre" | null }`.
+Los reemplazos se buscan en lote en `c_empleado` (en la misma consulta que los empleados de las solicitudes).
+
+`adjuntos`: uno por fila de `c_archivos_solicitud_permiso` de la solicitud: `id` (el id de la fila, como texto),
+`nombre` (`original_name`, o `name` si viene vacío), `tipo` (MIME por la extensión: jpg/jpeg, png, webp, gif, pdf, mp3,
+m4a, mp4; otro → `null`) y `bytes: null` (la tabla no guarda el tamaño).
+
+### Descarga de un adjunto
+
+`GET /api/guardify/reports/{modulo}/forms/{id}/attachments/{attachmentId}` con la misma llave.
+
+- Solo para los reportes cuyo formulario sabe leer adjuntos (hoy `solicitudes_permiso`). Reporte sin adjuntos, registro
+  inexistente o inactivo, o un adjunto que no es de ese registro → `404 { "error": "attachment_not_found" }`.
+- `scope` (mismo formato que en los demás): si el registro cae fuera del alcance responde el mismo 404 (no se confirma
+  que exista). Un reporte sin alcance responde `403 scope_unsupported` si llega `scope`.
+- `200`: el binario, con `content-type` del archivo, `content-disposition: attachment; filename*=UTF-8''<nombre>` y
+  `cache-control: no-store`. Más de 25 MB → `413 { "error": "attachment_too_large" }`.
+- El archivo se lee del almacenamiento de la app igual que `api/permit-request/[id]/get-file/[file]`
+  (`permit-request/<id>/<name>`), con `MOBILE_ACCESS_TOKEN` y sin sesión de usuario (la autorización es la llave).
+
 ## Rol base de las personas (para Guardify)
 
 `GET /api/guardify/people/roles?cedulas=<c1>,<c2>,…` (hasta 200, misma llave que los reportes) → `{ people: [{ cedula, found, superAdmin, base, byDivision: [{ divisionId, division, role }] }] }`.
