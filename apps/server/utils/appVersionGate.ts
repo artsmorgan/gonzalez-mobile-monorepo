@@ -52,22 +52,10 @@ export function evaluateAppVersion(input: VersionGateInput): VersionGateResult {
     if (!required) return { blocked: false }; // sin versión exigida no hay nada que comparar
     if (isVersionGateExempt(input.pathname, input.method)) return { blocked: false };
     const current = normalizeAppVersion(input.headerVersion) || normalizeAppVersion(input.queryVersion);
-    let currentFormated = formatVersion(current);
-    let requiredFormated = formatVersion(required);
-    if (currentFormated >= requiredFormated) return { blocked: false };
+    if (current === required) return { blocked: false };
     return {
         blocked: true,
         status: 426,
         body: { status: false, update_required: true, required_version: required, current_version: current || null, message: versionRequiredMessage(required) },
     };
 }
-
-function formatVersion(version) {
-    return Number(
-      version
-        .split('.')
-        .map(part => part.padStart(2, '0'))
-        .join('')
-        .padStart(6, '0')
-    );
-  }
