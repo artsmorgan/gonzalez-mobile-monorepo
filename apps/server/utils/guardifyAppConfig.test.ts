@@ -40,4 +40,17 @@ describe("app.config.js · Guardify sin valores por defecto", () => {
         assert.deepEqual(on, ["guardify-pruebas"]);
         assert.ok(eas["guardify-pruebas"]!.env!.EXPO_PUBLIC_GUARDIFY_URL, "el perfil de pruebas trae su URL");
     });
+    it("production-sin-guardify: servidor de producción, Guardify apagado y sin URL ni código de Guardify", () => {
+        const eas = JSON.parse(readFileSync(path.join(mobile, "eas.json"), "utf8")).build as Record<string, { extends?: string; env?: Record<string, string> }>;
+        const p = eas["production-sin-guardify"]!;
+        assert.equal(p.extends, "production-prod");
+        assert.equal(p.env!.APP_VARIANT, "prod");
+        assert.equal(p.env!.EXPO_PUBLIC_GUARDIFY_ENABLED, "false", "explícito: con vacío se leería GUARDIFY_ENABLED del .env");
+        assert.equal(p.env!.EXPO_PUBLIC_API_SERVER, "https://gonzalez-mobile-server-production.up.railway.app");
+        assert.equal(p.env!.EXPO_PUBLIC_ALLOWED_SERVER_HOSTS, "gonzalez-mobile-server-production.up.railway.app");
+        for (const k of Object.keys(p.env!)) assert.equal(/GUARDIFY_(URL|COMPANY_CODE|APP_KEY)/.test(k), false, k);
+        const e = extraWith({ EXPO_PUBLIC_GUARDIFY_ENABLED: "false" });
+        assert.equal(e.GUARDIFY_ENABLED, "false");
+        assert.equal(e.GUARDIFY_URL, "");
+    });
 });
