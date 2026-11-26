@@ -1,5 +1,5 @@
+import { apiServer } from '../utils/apiServer';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import Constants from 'expo-constants';
 import { useFonts } from 'expo-font';
 import * as Linking from 'expo-linking';
 import { Stack, useRouter } from 'expo-router';
@@ -25,26 +25,25 @@ export default function RootLayout() {
       const initialUrl = await Linking.getInitialURL();
       if (initialUrl) {
         if (initialUrl.includes('/recover-password/')) {
-          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+          const apiUrl = apiServer();
           let id = initialUrl.split('/recover-password/')[1];
           let response = await fetch(apiUrl + '/api/password/check-recovery-password-token/' + id, {
             method: 'GET',
             headers: {
               'Content-Type': 'application/json',
-              'ngrok-skip-browser-warning': '69420'
             },
           });
           let responseData = await response.json();
           if (responseData.status) {
-            // Redirect to password recovery screen with user data
+            // Redirect to password recovery screen with employee data
             router.replace({
               pathname: '/recover-password',
               params: {
-                userId: id,
-                userName: responseData.user.name,
-                userEmail: responseData.user.email,
-                userUsername: responseData.user.username,
-                userTelefono: responseData.user.telefono
+                employeeId: id,
+                employeeName: responseData.empleado.nombre,
+                employeeEmail: responseData.empleado.Email,
+                employeeCedula: responseData.empleado.cedula,
+                employeeTelefono: responseData.empleado.telefono
               }
             });
           }
@@ -73,6 +72,8 @@ export default function RootLayout() {
           <Stack.Screen name="rules" options={{ headerShown: false }} />
           <Stack.Screen name="permissions" options={{ headerShown: false }} />
           <Stack.Screen name="role-permissions" options={{ headerShown: false }} />
+          <Stack.Screen name="lunch-time" options={{ headerShown: false }} />
+          <Stack.Screen name="digital-signature" options={{ headerShown: false }} />
           <Stack.Screen name="+not-found" />
         </Stack>
         <StatusBar style="auto" />

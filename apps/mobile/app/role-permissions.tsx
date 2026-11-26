@@ -1,3 +1,4 @@
+import { apiServer } from '../utils/apiServer';
 import React, { useEffect, useState, useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, FlatList, TextInput } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
@@ -6,7 +7,7 @@ import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import { useAuth } from '@/contexts/AuthContext';
-import Constants from 'expo-constants';
+import authedFetch from '@/hooks/authedFetch';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -21,7 +22,7 @@ interface Module {
 }
 
 export default function RolePermissionsScreen() {
-  const { accessToken, refreshAccessToken } = useAuth();
+  const { accessToken, refreshAccessToken, logout } = useAuth();
   const params = useLocalSearchParams();
   const [modules, setModules] = useState<Module[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,24 +51,34 @@ export default function RolePermissionsScreen() {
     Alert.alert('Confirmacion', `¿Estás seguro de que deseas ${action_text} el permiso "${action}" para el rol "${roleName}" en "${moduleName}"?`, [
         { text: 'Cancelar', style: 'cancel' },
         { text: 'Confirmar', style: 'destructive', onPress: async () => {
-            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+            const apiUrl = apiServer();
             if (!apiUrl) {
                 Alert.alert('Error', 'URL del servidor no configurada');
                 return;
             }
-            const response = await fetch(`${apiUrl}/api/reglas/roles`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'ngrok-skip-browser-warning': '69420'
+
+            const response = await authedFetch({
+                url: `${apiUrl}/api/reglas/roles`,
+                init: {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        action: action,
+                        isActive: isActive,
+                        roleName: moduleName,
+                        moduleName: roleName
+                    })
                 },
-                body: JSON.stringify({
-                    action: action,
-                    isActive: isActive,
-                    roleName: moduleName,
-                    moduleName: roleName
-                })
+                refreshAccessToken,
+                logout,
             });
+
+            if (!response) {
+                Alert.alert('Sesión expirada', 'Por favor inicie sesión nuevamente.');
+                return;
+            }
 
             if (!response.ok) {
                 Alert.alert('Error', `Error del servidor: ${response.status}`);
@@ -91,37 +102,25 @@ export default function RolePermissionsScreen() {
       setLoading(true);
       setError(null);
 
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         throw new Error('Server URL not configured');
       }
 
-      let token = accessToken;
-      
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          throw new Error('No valid authentication token');
-        }
-        token = accessToken;
-      }
-
-      const response = await fetch(`${apiUrl}/api/roles/reglas?roleName=${roleName}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420'
+      const response = await authedFetch({
+        url: `${apiUrl}/api/roles/reglas?roleName=${roleName}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
+        refreshAccessToken,
+        logout,
       });
 
-      if (response.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          return fetchRolePermissions();
-        } else {
-          throw new Error('Session expired. Please login again.');
-        }
+      if (!response) {
+        return;
       }
 
       if (!response.ok) {
@@ -171,13 +170,10 @@ const getActionIcon = (action: string, isActive: boolean) => {
   };
 
   // Handle profile navigation from slide menu
-  const handleProfilePress = () => {
-    router.push('/(tabs)');
-  };
 
   // Handle home navigation from slide menu
   const handleHomePress = () => {
-    router.push('/(tabs)');
+    router.navigate('/(tabs)');
   };
 
   // Handle closing slide menu
@@ -247,7 +243,6 @@ const getActionIcon = (action: string, isActive: boolean) => {
         <SlideMenu 
           isVisible={isMenuVisible} 
           onClose={handleMenuClose}
-          onProfilePress={handleProfilePress}
           onHomePress={handleHomePress}
           currentRoute="role-permissions"
         />
@@ -272,7 +267,6 @@ const getActionIcon = (action: string, isActive: boolean) => {
         <SlideMenu 
           isVisible={isMenuVisible} 
           onClose={handleMenuClose}
-          onProfilePress={handleProfilePress}
           onHomePress={handleHomePress}
           currentRoute="role-permissions"
         />
@@ -330,7 +324,6 @@ const getActionIcon = (action: string, isActive: boolean) => {
       <SlideMenu 
         isVisible={isMenuVisible} 
         onClose={handleMenuClose}
-        onProfilePress={handleProfilePress}
         onHomePress={handleHomePress}
         currentRoute="role-permissions"
       />

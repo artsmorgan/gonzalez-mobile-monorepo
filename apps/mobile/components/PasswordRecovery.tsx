@@ -1,6 +1,7 @@
+import { apiServer } from '../utils/apiServer';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
-import Constants from 'expo-constants';
+import AppFooter from '@/components/AppFooter';
 import { router } from 'expo-router';
 import React, { useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
@@ -12,7 +13,7 @@ interface PasswordRecoveryProps {
     token: string;
     name: string;
     email: string;
-    username: string;
+    cedula: string;
     telefono: string;
   };
 }
@@ -100,7 +101,7 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
     setIsSubmitting(true);
     
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const apiUrl = apiServer();
       if (!apiUrl) {
         Alert.alert('Error', 'URL del servidor no configurada');
         return;
@@ -110,7 +111,6 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420'
         },
         body: JSON.stringify({
           password: password
@@ -182,8 +182,8 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
               {userInfo.name}
             </ThemedText>
             <ThemedText style={styles.userInfoText}>
-              <ThemedText style={styles.userInfoLabel}>Usuario: </ThemedText>
-              {userInfo.username}
+              <ThemedText style={styles.userInfoLabel}>Cédula: </ThemedText>
+              {userInfo.cedula}
             </ThemedText>
             <ThemedText style={styles.userInfoText}>
               <ThemedText style={styles.userInfoLabel}>Email: </ThemedText>
@@ -205,7 +205,7 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
             <ThemedText style={styles.recommendationItem}>• Sin info nuestra <ThemedText style={styles.exampleText}>minadre miperro minacimiento</ThemedText></ThemedText>
             <ThemedText style={styles.recommendationItem}>• Combina mayúsculas y minúsculas <ThemedText style={styles.exampleText}>aDRnTi</ThemedText></ThemedText>
             <ThemedText style={styles.recommendationItem}>• Combina números y letras <ThemedText style={styles.exampleText}>a1DR4nT76i</ThemedText></ThemedText>
-            <ThemedText style={styles.recommendationItem}>• Con caracteres especiales <ThemedText style={styles.exampleText}>aa18DR"4nT7:6i</ThemedText></ThemedText>
+            <ThemedText style={styles.recommendationItem}>• Con caracteres especiales <ThemedText style={styles.exampleText}>aa18DR{'"'}4nT7:6i</ThemedText></ThemedText>
           </View>
         </ThemedView>
 
@@ -285,6 +285,7 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
         </TouchableOpacity>
         </ThemedView>
       </ScrollView>
+      <AppFooter />
     </ThemedView>
   );
 }
@@ -327,15 +328,18 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 12,
     textAlign: 'center',
+    color: '#007AFF',
   },
   userInfoText: {
     fontSize: 14,
     marginBottom: 6,
     lineHeight: 20,
+    color: '#6c757d', // gray
   },
   userInfoLabel: {
     fontWeight: '600',
     fontSize: 14,
+    color: '#333333', // dark gray
   },
   inputContainer: {
     width: '100%',

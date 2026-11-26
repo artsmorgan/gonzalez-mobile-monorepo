@@ -1,0 +1,17 @@
+id: F-001
+module_id: digital-signature
+severity: medium
+status: fixed
+file: apps/mobile/screens/DigitalSignatureScreen.tsx
+lines: "327-335"
+category: offline
+title: Firma manual offline no persiste en employee_data
+description: |
+  Offline guarda en manual_signature_cache y muta employee en memoria pero no AsyncStorage employee_data.
+reproduction: |
+  1. Sin red, guardar firma.
+  2. Reiniciar app.
+  3. Firma ausente en UI.
+impact: Pérdida aparente de firma tras reinicio.
+suggested_fix: |
+  Persistir firmaManual en employee_data offline además de manual_signature_cache.

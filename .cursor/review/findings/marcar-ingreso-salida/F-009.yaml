@@ -1,0 +1,19 @@
+id: F-009
+module_id: marcar-ingreso-salida
+severity: medium
+status: fixed
+file: apps/mobile/hooks/resolveDeviceCoordinates.ts
+lines: "127-168"
+category: validation
+title: Fallback getLastKnownPosition sin filtro de accuracy ni antigüedad
+description: |
+  watchPositionAsync exige accuracy < 50m. Tras timeout, getLastKnownPositionAsync acepta
+  cualquier coordenada válida sin comprobar accuracy ni edad. Común en Android cuando
+  accuracy es null durante el watch.
+reproduction: |
+  1. Android en interiores; watch de alta precisión timeout 10s.
+  2. lastKnown de hace horas es devuelto.
+  3. Usuario pasa o falla validación 50m con coords obsoletas.
+impact: Marcas fuera de radio aceptadas o rechazos incorrectos en entrada.
+suggested_fix: |
+  Rechazar lastKnown si accuracy ausente o > 50m; exigir edad máxima (ej. 2–5 min).

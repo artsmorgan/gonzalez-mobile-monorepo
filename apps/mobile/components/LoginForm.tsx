@@ -10,26 +10,29 @@ interface LoginFormProps {
 }
 
 export default function LoginForm({ onForgotPassword, onLoginSuccess }: LoginFormProps) {
-  const [username, setUsername] = useState('');
+  const [cedula, setCedula] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const { login } = useAuth();
 
   const handleLogin = async () => {
-    if (!username.trim() || !password.trim()) {
-      Alert.alert('Error', 'Por favor ingrese su nombre de usuario y contraseña');
+    if (!cedula.trim() || !password.trim()) {
+      Alert.alert('Error', 'Por favor ingrese su cédula y contraseña');
       return;
     }
 
     setIsLoading(true);
     try {
-      const result = await login(username.trim(), password);
+      const result = await login(cedula.trim(), password);
       
       if (result.success) {
         // Login successful, the AuthContext will handle the state update
         onLoginSuccess?.();
       } else {
         Alert.alert('Error de autenticación', result.error || 'Credenciales incorrectas');
+        if (result.passwordExpired) {
+          onForgotPassword?.();
+        }
       }
     } catch (error) {
       Alert.alert('Error', 'Ocurrió un error inesperado');
@@ -46,14 +49,15 @@ export default function LoginForm({ onForgotPassword, onLoginSuccess }: LoginFor
         </ThemedText>
         
         <ThemedView style={styles.inputContainer}>
-          <ThemedText style={styles.label}>Nombre de usuario</ThemedText>
+          <ThemedText style={styles.label}>Cédula</ThemedText>
           <TextInput
             style={styles.input}
-            value={username}
-            onChangeText={setUsername}
-            placeholder="Ingrese su nombre de usuario"
+            value={cedula}
+            onChangeText={setCedula}
+            placeholder="Ingrese su cédula"
             autoCapitalize="none"
             autoCorrect={false}
+            keyboardType="numeric"
           />
         </ThemedView>
 

@@ -1,0 +1,18 @@
+id: F-004
+module_id: marcar-ingreso-salida
+severity: high
+status: fixed
+file: apps/server/app/api/attendance/[id]/route.ts
+lines: "55-62"
+category: api
+title: Auto-cierre de turno anterior ignorado al marcar entrada
+description: |
+  Si existe marca previa con entrada sin salida, se llama marcar_salida en el turno anterior
+  pero el response nunca se evalúa; el flujo de entrada continúa incondicionalmente.
+reproduction: |
+  1. Empleado tiene marca previa con entrada y sin salida.
+  2. Marca entrada en nueva marca; marcar_salida del turno anterior falla (token Planillas, actividades, etc.).
+  3. Nueva entrada se registra igual → dos turnos abiertos en Planillas/DB.
+impact: Datos inconsistentes en Planillas; turnos solapados difíciles de corregir.
+suggested_fix: |
+  Verificar response.status del auto-cierre; abortar entrada o retornar error si falla.

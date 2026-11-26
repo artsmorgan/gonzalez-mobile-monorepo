@@ -1,0 +1,19 @@
+id: F-001
+module_id: documentos-entregados
+severity: critical
+status: fixed
+file: apps/mobile/screens/MarcarIngresoSalidaScreen.tsx
+lines: "1280-1288,1467-1502"
+category: offline
+title: Marcar entrada borra documentos_entregados_actions y cache
+description: |
+  El módulo usa storageKeys documentos_entregados_actions y documentos_entregados_cache.
+  cleanAsyncStorage en hydrateAfterEntrada no las preserva; elimina cola y cache al marcar entrada online
+  con documentos offline pendientes (create/update/delete).
+reproduction: |
+  1. Crear documento entregado offline (documentos_entregados_actions + cache).
+  2. Marcar entrada online antes de checkDocumentosEntregadosActionsCache.
+  3. Cola y cache borrados.
+impact: Pérdida irreversible de registros offline de documentos entregados.
+suggested_fix: |
+  Preservar documentos_entregados_actions y documentos_entregados_cache en excepciones de cleanAsyncStorage.

@@ -1,0 +1,15 @@
+id: F-003
+module_id: traslado-plazas
+severity: low
+status: fixed
+file: apps/mobile/screens/TrasladoPlazasScreen.tsx
+lines: "735"
+category: ui
+title: UI solo expone subida tipo document
+description: |
+  handleAddFile soporta image/audio/video pero botón solo document.
+reproduction: |
+  1. Abrir detalle acción.
+impact: Tipos soportados no accesibles.
+suggested_fix: |
+  Exponer botones por tipo o unificar picker.

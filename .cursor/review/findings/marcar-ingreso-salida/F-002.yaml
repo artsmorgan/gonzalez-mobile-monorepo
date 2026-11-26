@@ -1,0 +1,20 @@
+id: F-002
+module_id: marcar-ingreso-salida
+severity: high
+status: fixed
+file: apps/server/app/api/attendance/[id]/route.ts
+lines: "226-277"
+category: offline
+title: Sync atascada tras salida parcial (Planillas OK, post-step falla)
+description: |
+  marcar_salida POSTea a Planillas primero; si check_unmarked_activities falla después retorna
+  { status: false }. checkAttendanceActionsCache solo desencola cuando data.status === true.
+  Reintentos pueden chocar con salida ya registrada (F-003).
+reproduction: |
+  1. Cola offline de salida; sync cuando hay red.
+  2. Planillas registra salida; check_unmarked_activities falla (error API actividades).
+  3. Acción permanece en attendance_actions; cada retry devuelve status false.
+impact: Cola bloqueada permanentemente; usuario ve sync perpetua sin completar.
+suggested_fix: |
+  Tratar fallos post-Planillas como éxito cuando Planillas ya confirmó salida,
+  o desencolar en idempotencia "Ya has marcado la salida".

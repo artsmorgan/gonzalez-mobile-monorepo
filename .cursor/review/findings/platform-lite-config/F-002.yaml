@@ -1,0 +1,14 @@
+id: F-002
+module_id: platform-lite-config
+severity: medium
+status: fixed
+file: apps/mobile/app.config.js
+lines: "39-42"
+category: ios
+title: bundleIdentifier iOS no distingue variante Lite
+description: |
+  ios.bundleIdentifier es siempre com.abrjpo98.MonitoreApp sin sufijo .lite.
+  Android sí diferencia .lite vs .full.
+reproduction: Comparar android.package vs ios.bundleIdentifier con APP_VARIANT=lite.
+impact: Si se publica iOS Lite en futuro, colisión con full; inconsistencia cross-platform (bajo impacto si soft-release es solo Android Lite).
+suggested_fix: Alinear bundleIdentifier lite si iOS entra en scope; documentar Android-only para test-soft-001.

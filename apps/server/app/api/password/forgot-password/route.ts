@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
 import { transporter } from '../../../../transporter';
 import { toZonedTime } from 'date-fns-tz';
-
-const prisma = new PrismaClient();
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../utils/prismaClient";
+import axios from 'axios';
 
 export async function POST(request: NextRequest) {
     try {
@@ -18,11 +18,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Buscar el empleado por cédula
-        const empleado = await prisma.c_empleado.findFirst({
-            where: {
-                cedula: cedula
-            }
-        });
+        const empleado = await prisma.c_empleado.findFirst({ where: { cedula: cedula } }); 
 
         // Si no se encuentra el empleado
         if (!empleado) {
@@ -37,57 +33,49 @@ export async function POST(request: NextRequest) {
                 { status: false, message: "Empleado no tiene email configurado" }
             );
         }
-
-        const caracteres = "0123456789";
-        let token = "";
-        let exists = true;
-
-        while (exists) {
-            for (let i = 0; i < 6; i++) {
-                const indice = Math.floor(Math.random() * caracteres.length);
-                token += caracteres[indice];
-            }
-            const exists_token = await prisma.a_recovery_password_token.findFirst({ where: { token: token } });
-            if (!exists_token) {
-                exists = false;
-            }
-            else {
-                token = "";
-            }
+        
+        const planillasUrl = String(process.env.PLANILLAS_URL || "").trim().replace(/\/+$/, "");
+        if (!planillasUrl || !empleado.id) {
+            return NextResponse.json(
+                { status: false, message: "Empleado no tiene id configurado" }
+            );
         }
 
-        // Agregar un registro en la tabla a_recovery_password_token para el empleado
-        await prisma.a_recovery_password_token.create({
-            data: {
-                token: token,
-                empleadoId: empleado.id,
-                expira_en: 900000,
-                creacion: toZonedTime(new Date(), "America/Costa_Rica")
+        console.log('planillasUrl', empleado.Email);
+
+        let planillasResponse;
+        try {
+            planillasResponse = await axios.post(`${planillasUrl}/forgot-password`, {
+                correo_usuario: empleado.Email,
+            });
+        } catch (planillasError) {
+            // Planillas responde con error HTTP (p.ej. 404 EMPLEADO_NOT_FOUND): no debe colapsar,
+            // se debe reenviar el mensaje real al cliente en vez de un error gen\u00e9rico.
+            if (axios.isAxiosError(planillasError) && planillasError.response) {
+                const data = planillasError.response.data;
+                const message =
+                    data?.error?.message ||
+                    data?.message ||
+                    "No se pudo enviar el correo de recuperaci\u00f3n.";
+                return NextResponse.json(
+                    { status: false, message }
+                );
             }
-        });
+            throw planillasError;
+        }
 
-        token = token.split("").join(" ");
+        // Respuesta esperada: {"success":true,"data":{"message":"Se ha enviado un correo con el c\u00f3digo de verificaci\u00f3n.","expires_in":900}}
 
-        await transporter.sendMail({
-            from: `Recuperación de contraseña - González <${process.env.EMAIL_USER}>`,
-            to: empleado.Email,
-            subject: "Recuperación de contraseña",
-            html: `
-              <h1>Recuperación de contraseña</h1>
-              <p>Hola ${empleado.nombre} ${empleado.primer_apellido} ${empleado.segundo_apellido},</p>
-              <p>Para recuperar tu contraseña, añade el siguiente código a la aplicación:</p><br>
-              <p>${token}</p><br>
-              <p>Si no solicitaste esta recuperación, por favor ignora este mensaje.</p>
-              <p>Gracias,</p>
-              <p>Equipo de Gonzalez</p>
-            `
-        });
-
+        if (planillasResponse.status !== 200 || !planillasResponse.data.success) {
+            return NextResponse.json(
+                { status: false, message: planillasResponse.data.message }
+            );
+        }
         // Retornar éxito con el email del empleado
         return NextResponse.json(
             {
                 status: true,
-                message: `Email de recuperación enviado a ${empleado.Email}`
+                message: `Email de recuperación enviado a ${empleado.Email}`,
             }
         );
 
@@ -96,7 +84,5 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
             { status: false, message: "Error interno del servidor" }
         );
-    } finally {
-        await prisma.$disconnect();
     }
 }

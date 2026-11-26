@@ -1,0 +1,20 @@
+id: F-002
+module_id: opening-closing-position
+severity: high
+status: fixed
+file: apps/mobile/screens/MarcarIngresoSalidaScreen.tsx
+lines: "1285-1288"
+category: offline
+title: Marcar entrada borra imágenes locales de apertura/cierre pendientes
+description: |
+  deleteAllFiles() tras marcar entrada elimina archivos en Paths.document. openingClosingPositionFilesSync
+  referencia localFileName en imagenes_meta del payload offline. Sin el archivo, buildOpeningClosingImagenesJsonForUpload
+  no puede armar imagenes en el POST/PUT al reconectar.
+reproduction: |
+  1. Crear apertura/cierre offline con fotos locales.
+  2. Marcar entrada online antes de sync.
+  3. deleteAllFiles borra JPEG locales; cola puede quedar huérfana o ya fue eliminada (F-001).
+  4. Sync posterior envía registro sin imágenes o falla al leer archivos.
+impact: Registros incompletos en servidor; evidencia fotográfica perdida.
+suggested_fix: |
+  No borrar archivos referenciados por evaluations_actions pendientes; sync antes de deleteAllFiles.

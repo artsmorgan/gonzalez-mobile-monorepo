@@ -1,0 +1,15 @@
+id: F-002
+module_id: induction-tour-record
+severity: low
+status: fixed
+file: apps/mobile/screens/InductionTourRecordScreen.tsx
+lines: "475-491"
+category: connectivity
+title: getConnectionStatus expo-network only
+description: |
+  Sin resolveAppConnectivity.
+reproduction: |
+  1. Red limitada.
+impact: Ruta online errónea.
+suggested_fix: |
+  resolveAppConnectivity.

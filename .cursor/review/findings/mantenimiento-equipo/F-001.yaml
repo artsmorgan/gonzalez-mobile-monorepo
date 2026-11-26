@@ -1,0 +1,16 @@
+id: F-001
+module_id: mantenimiento-equipo
+severity: medium
+status: fixed
+file: apps/mobile/screens/MantenimientoEquipoScreen.tsx
+lines: "3162-3190"
+category: offline
+title: Ediciones offline solo-evaluación no se encolan
+description: |
+  isMantenimientoSoloEvaluacionCache: offline update solo en caché local.
+reproduction: |
+  1. Offline editar mantenimiento origen checklist.
+  2. Guardar.
+impact: Cambios nunca llegan al servidor.
+suggested_fix: |
+  Encolar update o documentar limitación en UI.

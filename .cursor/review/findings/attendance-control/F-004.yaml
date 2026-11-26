@@ -1,0 +1,15 @@
+id: F-004
+module_id: attendance-control
+severity: informational
+status: fixed
+file: apps/server/app/api/attendance-control/route.ts
+lines: "245-264"
+category: api
+title: total_empleados_turno del cliente ignorado en POST
+description: |
+  Servidor recalcula desde marcas.
+reproduction: |
+  1. Comparar total enviado vs persistido.
+impact: Campo cliente ignorado (posible intencional).
+suggested_fix: |
+  Documentar o alinear contrato API.
